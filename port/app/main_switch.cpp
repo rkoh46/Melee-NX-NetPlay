@@ -5,6 +5,7 @@
 // phase 3 the Slippi online services. See docs/ARCHITECTURE.md.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <switch.h>
+#include "switch_clocks.h"
 #include "switch_threads.h"
 
 #include "audio.h"
@@ -281,12 +282,37 @@ int main(int argc, char** argv) {
 #endif
   if (applet_mode) host::log("launched in applet mode: hold R while opening a game to get application memory");
 
-  host::log("Melee-NX-NetPlay %s: Switch headless bring-up", MELEE_PORT_VERSION);
+  // Clocks: the simulation is CPU-bound, so ask for Erista's top CPU clock by
+  // default (overclock=0 keeps the system's choice; the MHz keys tune each rail).
+  if (get("overclock", "1") == "1") {
+    SwitchClockRequest clocks = kSwitchClocksErista;
+    clocks.cpu_mhz = static_cast<uint32_t>(std::strtoul(get("clock_cpu_mhz", std::to_string(clocks.cpu_mhz)).c_str(), nullptr, 10));
+    clocks.gpu_mhz = static_cast<uint32_t>(std::strtoul(get("clock_gpu_mhz", std::to_string(clocks.gpu_mhz)).c_str(), nullptr, 10));
+    clocks.mem_mhz = static_cast<uint32_t>(std::strtoul(get("clock_mem_mhz", std::to_string(clocks.mem_mhz)).c_str(), nullptr, 10));
+    if (switch_clocks_init()) {
+      const SwitchClockResult r = switch_clocks_apply(clocks);
+      host::log("clocks: requested cpu %u gpu %u mem %u MHz; now cpu %u gpu %u mem %u MHz (%s%s%s)", clocks.cpu_mhz, clocks.gpu_mhz,
+                clocks.mem_mhz, r.cpu_hz / 1000000u, r.gpu_hz / 1000000u, r.mem_hz / 1000000u, r.cpu_ok ? "cpu ok " : "cpu refused ",
+                r.gpu_ok ? "gpu ok " : "gpu refused ", r.mem_ok ? "mem ok" : "mem refused");
+    } else {
+      host::log("clocks: the clock service is not reachable; running at the system's clocks (sys-clk can set them)");
+    }
+  } else {
+    if (switch_clocks_init()) {
+      const SwitchClockResult r = switch_clocks_read();
+      host::log("clocks: overclock=0; system clocks cpu %u gpu %u mem %u MHz", r.cpu_hz / 1000000u, r.gpu_hz / 1000000u, r.mem_hz / 1000000u);
+    }
+  }
+  #if MELEE_NX_AURORA
+  host::log("Melee-NX-NetPlay %s: Aurora/Vulkan frontend", MELEE_PORT_VERSION);
+#else
+  host::log("Melee-NX-NetPlay %s: headless bring-up", MELEE_PORT_VERSION);
+#endif
   host::log("execution: frames=%u fast=%s fp_profile=%s", o.frames, o.fast ? "true" : "false", ppc::fp_profile_name(ppc::fp_profile()));
   host::log("paths: iso=%s sys=%s profile=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), o.profile_dir.c_str(), o.cache_dir.c_str());
 
   Thread sim;
-  Result rc = threadCreate(&sim, simulation_thread, nullptr, nullptr, kSimulationStack, 0x2C, -2);
+  Result rc = threadCreate(&sim, simulation_thread, nullptr, nullptr, kSimulationStack, 0x28, 1);
   if (R_FAILED(rc)) { std::printf("threadCreate failed: %08X\n", rc); consoleUpdate(nullptr); svcSleepThread(3'000'000'000ULL); consoleExit(nullptr); return 1; }
   threadStart(&sim);
 
@@ -325,5 +351,6 @@ int main(int argc, char** argv) {
   }
   consoleExit(nullptr);
 #endif
+  switch_clocks_exit();   // the system restores its own clock policy for the next title
   return g_exit_code < 0 ? 0 : g_exit_code.load();
 }

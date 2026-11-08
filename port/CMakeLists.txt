@@ -39,7 +39,7 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
   third_party/slippilib/SlippiGame.cpp)
 
 set(PORT_SWITCH_SOURCES
-  "${PROJECT_SOURCE_DIR}/switch/src/switch_threads.c")
+  "${PROJECT_SOURCE_DIR}/switch/src/switch_threads.c" "${PROJECT_SOURCE_DIR}/switch/src/switch_clocks.cpp")
 
 if(MELEE_NX_FRONTEND STREQUAL "headless")
   set(PORT_FRONTEND_SOURCES runtime/host/input_headless.cpp runtime/host/window_headless.cpp runtime/host/audio_headless.cpp)

@@ -35,9 +35,9 @@ backend and startup glue from Melee-NX. See [docs/ARCHITECTURE.md](docs/ARCHITEC
 | Phase | What | State |
 |---|---|---|
 | 1 | Headless simulation on the console: a scripted match, log to SD, measure ms/frame | NRO builds (71 MB); first hardware run pending |
-| 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | NRO links (100 MB) against a locally built Mesa/NVK; first hardware run pending; overlay text (menu, HUD, sign-in) not started |
-| 3 | Slippi online: ENet over libnx sockets, curl for login and reports, sign-in screen, online delay setting | netplay, matchmaking, login, reports and Shift-JIS text compile and link on libnx; identity comes from a copied `user.json` until the sign-in screen exists |
-| 4 | Overclock profile, rollback cost tuning, release notes | not started |
+| 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | NRO links (100 MB) against a locally built Mesa/NVK; in-game menu and HUD drawn through Aurora's ImGui pass; first hardware run pending |
+| 3 | Slippi online: ENet over libnx sockets, curl for login and reports, sign-in screen, online delay setting | built: netplay, matchmaking, login, reports, Shift-JIS names, a sign-in screen with the console keyboard, online delay in the menu; untested on hardware |
+| 4 | Overclock profile, rollback cost tuning, release notes | clock request through clkrst (CPU 1785 / GPU 921 / memory 1600 MHz, `overclock=` and per-rail keys); tuning waits for measurements |
 
 ## Layout
 
