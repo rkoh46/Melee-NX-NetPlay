@@ -82,7 +82,7 @@ main() {
 
   step "5/6  Translating your disc and compiling the game (the long step: 10-20 minutes)"
   note "disc: $iso"
-  bash builder/generate-game.sh "$iso" </dev/null 2>&1 | grep -E "^generated|^Generated|error|Error" | sed 's/^/  /'
+  bash builder/generate-game.sh "$iso" </dev/null 2>&1 | grep -E "^generated |^Generated |rror:|usage:" | sed 's/^/  /'
   ok "translated into C++ in build/game (private to this folder)"
   note "compiling with $JOBS jobs; a progress counter follows"
   MELEE_NX_FRONTEND=aurora MELEE_BUILD_JOBS="$JOBS" bash builder/docker.sh game all </dev/null 2>&1 |
