@@ -89,6 +89,8 @@ target_link_options(melee_nx_netplay PRIVATE
   ${MELEE_LIBGCC_DIR}/crti.o ${MELEE_LIBGCC_DIR}/crtbegin.o
   -Wl,-T,${DEVKITPRO}/libnx/switch.ld -Wl,-pie -Wl,--no-dynamic-linker -Wl,-z,text -Wl,-z,now
   -Wl,--build-id=sha1 -Wl,--require-defined=main -nodefaultlibs -Wl,--gc-sections
+  # As in Melee-NX: the Mesa archives and newlib overlap on a few libc symbols.
+  -Wl,--allow-multiple-definition
   -Wl,--wrap=pthread_create -Wl,--wrap=pthread_detach -Wl,--wrap=pthread_join
   -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit)
 set_target_properties(melee_nx_netplay PROPERTIES OUTPUT_NAME melee-nx-netplay)

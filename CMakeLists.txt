@@ -45,8 +45,10 @@ if(MELEE_NX_FRONTEND STREQUAL "aurora")
   include("${PROJECT_SOURCE_DIR}/switch/cmake/Graphics.cmake")
   string(APPEND MELEE_NX_PORTLIBS " ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat")
 endif()
+# libnx precedes libc so its socket-aware fcntl (O_NONBLOCK on sockets, which ENet
+# and curl need) is the one pulled in, not newlib's syscall stub.
 set(CMAKE_CXX_STANDARD_LIBRARIES
-  "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NX_PORTLIBS} -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
+  "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind ${MELEE_NX_PORTLIBS} -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
   CACHE STRING "" FORCE)
 
 # ---- Shared compile options: exact GameCube float semantics in the recompiled code ----
