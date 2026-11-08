@@ -1,0 +1,38 @@
+{
+  "upstream": {
+    "url": "https://github.com/Hero88go/melee-unlocked.git",
+    "commit": "b8360b15f6a55bcb6433e6e386bebd0e6b39428d"
+  },
+  "decomp": {
+    "url": "https://github.com/doldecomp/melee.git",
+    "commit": "05a1394faea2aac458e4bdd030621d8a5631ae62",
+    "files_sha256": {
+      "src/sysdolphin/baselib/fobj.c": "fa24a983f583ce31e0f8c809fe9084d4df7c5c4eb57be2d8a044537f790f32e9",
+      "src/sysdolphin/baselib/fobj.h": "5bfa2bfe5dca75ceb0c44fc4f6269b585152495a6e9dea7ce884efed7aa07bc2",
+      "src/sysdolphin/baselib/spline.c": "736ab29868437a263bcdbdaefdf973c75e9fa4ff3d86a3baf548f3396d415c50",
+      "config/GALE01/symbols.txt": "da1b3ec532839274187abcde1b24193df292821d14526c902b5e31a0470cd85e"
+    }
+  },
+  "dol": {
+    "game": "Melee NTSC 1.02 (GALE01)",
+    "sha1": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+  },
+  "slippi": {
+    "sys_dir": "port/slippi_sys",
+    "files_sha256": {
+      "codehandler.bin": "4fff42b192e95b353da28f6c3f0afa002bfbd2caf7c4bfb1187304e2406ccb0c",
+      "bootloader.gct": "6beeb0d74f58eb7825ed9ceb60e3037f9a55f6265efc3a2085f3073ffe6b3680",
+      "GameSettings/GALE01r2.ini": "b30b294df5c0d92deb3129afdfbc894a48aabeb1bce0cf92cce8c4e5408a2587"
+    },
+    "gct_base": "0x8065CC80",
+    "gct_base_evidence": "Upstream README.md profile; observed at runtime in a 600-retrace strict offline arm64 run of artifact 219e75d858125b254734a3a52603921e13bb8a03f3732d0e5333c4df234823eb. New artifacts require their own runtime verification.",
+    "gct_base_validation": {
+      "artifact_sha256": "219e75d858125b254734a3a52603921e13bb8a03f3732d0e5333c4df234823eb",
+      "input_manifest_sha256": "05653ab98be786a5e0281c13f17aca44f471e3e6aa8c67e6dfdb0674a1ad9229",
+      "log_sha256": "d2df6832f14a4011fc7e14a488760596dccd3fe049d615aef1d51bd69e01c5b2",
+      "retraces": 600,
+      "missing_aot_targets": 0,
+      "interpreted_instructions": 0
+    }
+  }
+}

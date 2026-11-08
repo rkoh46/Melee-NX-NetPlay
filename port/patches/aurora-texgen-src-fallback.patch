@@ -1,0 +1,23 @@
+diff --git a/lib/gx/shader.cpp b/lib/gx/shader.cpp
+index 92f358b..805d143 100644
+--- a/lib/gx/shader.cpp
++++ b/lib/gx/shader.cpp
+@@ -1242,8 +1242,16 @@ std::string build_shader_source(const ShaderConfig& config) noexcept {
+       vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, nbt_slice_local(NbtSlice::B));
+     } else if (tcg.src == GX_TG_TANGENT) {
+       vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, nbt_slice_local(NbtSlice::T));
+-    } else
+-      UNLIKELY FATAL("unhandled tcg src {}", underlying(tcg.src));
++    } else {
++      // A texgen sampled before the game configured its source (or with a source
++      // row outside the table). Use the position instead of aborting the process.
++      static bool reported = false;
++      if (!reported) {
++        reported = true;
++        Log.warn("texgen {} sampled with unhandled source {}; using position", i, underlying(tcg.src));
++      }
++      vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_POS));
++    }
+     if (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) {
+       if (info.indexAttr.test(GX_VA_TEX0MTXIDX + i)) {
+         vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[in_texmtxidx{0} / 3u];", i);

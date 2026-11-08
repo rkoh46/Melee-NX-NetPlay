@@ -1,0 +1,25 @@
+# Boot -> 1-P Mode -> Regular Match -> Classic -> CSS: move hand to Fox and pick -> Start.
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
+950 A
+960
+1020 A
+1030
+1090 A
+1100
+1200 sx=53 sy=118
+1230
+1250 A
+1260
+1330 START
+1340
+1420 START
+1430
+1520 START
+1530

@@ -1,0 +1,20 @@
+# Slippi boots into Online Play (logged in): Unranked -> online CSS -> pick a character -> Start (search) -> match.
+300 A
+310
+600 sx=61 sy=127
+617
+640 A
+650
+700 START
+710
+1500 sx=80
+1560 X
+1565
+1600 sx=-80
+1660 A
+1665
+1700
+2400 sx=80
+2460 X
+2465
+2500

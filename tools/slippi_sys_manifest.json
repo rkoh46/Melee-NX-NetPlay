@@ -1,0 +1,25 @@
+{
+  "source": "Hero88go/melee-unlocked b8360b15f6a55bcb6433e6e386bebd0e6b39428d, port/slippi_sys as carried by Dashdance",
+  "files_sha256": {
+    "GameFiles/GALE01/GameSetup.dat": "2c7842f8864c962ea0e8b9e629552b36e2669b739c86d17ba5dae53d75ed9acc",
+    "GameFiles/GALE01/GameSetup_gui.dat": "aa083e7ec6a7ad96c32efb474b6915242aeb0627c2fa6369b205783b844d701e",
+    "GameFiles/GALE01/MnExtAll.dat.diff": "b6df247ddf12d0118d4b1deaf1d3cf8878ebb4d60b29fda7ad6a324246b05e22",
+    "GameFiles/GALE01/MnExtAll.usd.diff": "c729c61a65d92aeaf4ab15ca7ec5a40ead336055b0defce9c74503e2651c9b18",
+    "GameFiles/GALE01/MnMaAll.dat.diff": "4f38bfa9716064fd59315c26210ec6383b62ee0d4445beb9b6cca1f09134ea75",
+    "GameFiles/GALE01/MnMaAll.usd.diff": "e0e261203e013f7e51c29f808165ca36dca10296c3e613b1b225e0a6d4978263",
+    "GameFiles/GALE01/MnSlMap.dat.diff": "43860c806406b85e05d312401548ef7b0da15e62d44bbd279ff2885e4ea3ec27",
+    "GameFiles/GALE01/MnSlMap.usd.diff": "dcf99eeaab8f981a2aad25e341eda79bc9b417dd098fc39ff20cb328fbc1510d",
+    "GameFiles/GALE01/MxDb.dat": "58e96852c9b6a1ec1fe53b5de6c307465a72684094d6dbcd16dd89f6a29b76c5",
+    "GameFiles/GALE01/MxScn.dat": "7012066e3e039b8f022582d59657d8206eebf13e4c39f4a56fe3b313cc9942bb",
+    "GameFiles/GALE01/SdMenu.dat.diff": "b284732a79b787129704e81c110d9ac11210bc3e8f579e27e8e38525b656fe50",
+    "GameFiles/GALE01/SdMenu.usd.diff": "00a92643e41af867dd22ba159f7ec022e6aa3b7288b537b2ba00cf162f5579cb",
+    "GameFiles/GALE01/SdSlChr.dat.diff": "0194bcbb4fd26df4e499edd52ea7a64743a493515b07d6114cf378c8720a9405",
+    "GameFiles/GALE01/SdSlChr.usd.diff": "fde2f393c405244f9100a0522a769d4fcce9e892dd9b87b0e0c38670ef132f38",
+    "GameFiles/GALE01/SlippiCSS.dat": "f864eed3f494f1a1710760973f25a7f5be4bb3dc4fc4734c2a721ca62f4916f3",
+    "GameFiles/GALE01/slpCSS.dat": "3b1a3f254b37cf5ce4f56b38d237d9809d0b11e72d05320f0e56fa3abd7a1692",
+    "GameSettings/GALE01r2.ini": "b30b294df5c0d92deb3129afdfbc894a48aabeb1bce0cf92cce8c4e5408a2587",
+    "README.md": "2bbcd95841a409c0fb78bb2a080acba9d0d76f504886a0ccf88fd8ebf1a741aa",
+    "bootloader.gct": "6beeb0d74f58eb7825ed9ceb60e3037f9a55f6265efc3a2085f3073ffe6b3680",
+    "codehandler.bin": "4fff42b192e95b353da28f6c3f0afa002bfbd2caf7c4bfb1187304e2406ccb0c"
+  }
+}

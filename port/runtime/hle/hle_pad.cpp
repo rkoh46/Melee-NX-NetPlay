@@ -1,0 +1,121 @@
+// PAD HLE: controller state from the host input layer.
+// SPDX-License-Identifier: GPL-2.0-or-later
+#include "hle.h"
+#include "pad_rumble.h"
+#include "slippi_online.h"
+#include <cstring>
+#include <cstdlib>
+
+static uint32_t s_spec = 5;
+
+HLE(PADInit) { RET(1); }
+HLE(PADReset) { RET(1); }
+// The game asks for the controller's neutral to be re-read. Doing nothing left a stick that
+// deflected when the adapter first reported with a wrong neutral for the whole session.
+HLE(PADRecalibrate) {
+  const int port = ARG0 == 0xFFFFFFFFu ? -1 : (int)ARG0;
+  host::gcadapter_recalibrate(port);
+  RET(1);
+}
+// PADControlMotor(chan, command): 0 stop, 1 rumble, 2 stop hard. Online, the game's ports are the
+// match's slots, not the sockets on the adapter: only the local slot's motor command means anything
+// here, and it goes to whatever controller is feeding the local input. Everything else is the
+// opponent's rumble, which is theirs to feel, not ours.
+static void deliver_rumble(int game_port, bool on) {
+  if (slippi::online::is_online_match()) {
+    if (game_port == (int)slippi::online::local_player_slot()) host::input_rumble_local(on);
+    return;
+  }
+  host::input_rumble(game_port, on);
+}
+HLE(PADControlMotor) {
+  const auto decision = pad::decide_rumble(
+      ARG0, ARG1, host::rd8(0x80479D30), host::rd8(0x80479D33), c.r[13],
+      host::ram, ppc::RAM_SIZE);
+  if (decision.deliver) deliver_rumble((int)decision.physical_port, decision.on);
+}
+HLE(PADControlAllMotors) { for (int i = 0; i < 4; ++i) { const auto decision = pad::decide_rumble(i, host::rd32(ARG0 + 4 * i) == 1 ? 1u : 0u, host::rd8(0x80479D30), host::rd8(0x80479D33), c.r[13], host::ram, ppc::RAM_SIZE); if (decision.deliver) deliver_rumble(i, decision.on); } }
+HLE(PADSetSpec) { s_spec = ARG0; }
+HLE(PADGetSpec) { RET(s_spec); }
+HLE(PADGetType) { if (ARG1) host::wr32(ARG1, 0x08000000); RET(1); }
+HLE(PADSync) { RET(1); }
+HLE(PADSetAnalogMode) {}
+HLE(PADSetSamplingRate) {}
+
+// u32 PADRead(PADStatus* status[4]) -> bitmask of channels with fresh data
+HLE(PADRead) {
+  host::pump_completions();
+  // MELEE_FORCE_CPU=1..9: measurement aid. On the VS stage select (mode 0x02, state 0x01) turn the first two players
+  // into CPUs of that level, so a scripted run plays a real fight without anyone at the controls. The stage select
+  // works on its own copy of the match setup and copies it back when it exits (gmVsMelee_ExitSss: *vs = sss->vs), so
+  // the copy is what gets patched: gmVsMelee_SssData at 0x80480668, VsModeData at +8, players at +0x68 of that,
+  // 0x24 each, slot_type at +1 (Gm_PKind: 1 = CPU), cpu_level at +0xF (mn/types.h).
+  static const uint8_t force_cpu = [] { const char* v = std::getenv("MELEE_FORCE_CPU"); const int n = v ? std::atoi(v) : 0; return (uint8_t)(n >= 1 && n <= 9 ? n : 0); }();
+  if (force_cpu && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01) {
+    for (uint32_t i = 0; i < 2; ++i) {
+      const uint32_t player = 0x80480668 + 0x8 + 0x68 + i * 0x24;
+      host::wr8(player + 0x1, 1);
+      host::wr8(player + 0xF, force_cpu);
+    }
+  }
+#if defined(MELEE_PORT_OFFLINE)
+  // MELEE_FORCE_SCENE=0xMMSS: automation hook. When the guest reaches the
+  // main-menu scene (0x01), rewrite the state-machine bytes to jump straight
+  // to the requested scene — the same trick as a "boot to CSS" Gecko code —
+  // so offline acceptance runs do not depend on navigating the Slippi
+  // log-in menu. Scene-gated script blocks handle everything after.
+  static const uint16_t force_scene = [] {
+    if (const char* v = std::getenv("MELEE_FORCE_SCENE")) {
+      return static_cast<uint16_t>(std::strtoul(v, nullptr, 16));
+    }
+    return static_cast<uint16_t>(0);
+  }();
+  if (force_scene && host::rd8(0x80479D30) == 0x01) {
+    // routingInfo layout (gm_1A3F.c): +0 curr_mode = GameModeKind
+    // (GM_VS=0x02...), +3 curr_state_id (VS: CSS=0, SSS=1). The env value is
+    // 0xMMSS, so mode takes the high byte and state the low byte.
+    host::wr8(0x80479D30, static_cast<uint8_t>(force_scene >> 8));
+    host::wr8(0x80479D33, static_cast<uint8_t>(force_scene & 0xFF));
+    if (static_cast<bool>(std::getenv("MELEE_PAD_TRACE"))) {
+      host::log("[padtrace] forced scene to 0x%04X", force_scene);
+    }
+  }
+#endif
+  static int reported = 0;
+  if (host::options.trace_calls && reported++ < 10) host::log("[pad] PADRead(%08X)", ARG0);
+#if defined(MELEE_PORT_OFFLINE) || defined(TARGET_PC)
+  static unsigned pad_trace_count = 0;
+  static const bool pad_trace = std::getenv("MELEE_PAD_TRACE") != nullptr;
+  if (pad_trace && ++pad_trace_count % 120 == 0) {
+    host::PadState probe[4];
+    host::input_poll(probe);
+    uint64_t cmap_button = host::rd32(0x80479C30);
+    cmap_button |= (uint64_t)host::rd32(0x80479C34) << 32;
+    uint64_t cmap_trigger = host::rd32(0x80479C38);
+    cmap_trigger |= (uint64_t)host::rd32(0x80479C3C) << 32;
+    host::log("[padtrace] call=%u scene=%02x/%02x p1: err=%d btn=%04x sx=%d sy=%d cmap btn=%04llx trig=%04llx",
+              pad_trace_count, host::rd8(0x80479D30), host::rd8(0x80479D33),
+              probe[0].err, probe[0].button, probe[0].stick_x, probe[0].stick_y,
+              (unsigned long long)(cmap_button & 0xFFFF), (unsigned long long)(cmap_trigger & 0xFFFF));
+  }
+#endif
+  host::PadState pads[4];
+  host::input_poll(pads);
+  uint32_t base = ARG0, mask = 0;
+  for (int i = 0; i < 4; ++i) {
+    uint32_t p = base + i * 12;
+    host::wr16(p + 0, pads[i].button);
+    host::wr8(p + 2, (uint8_t)pads[i].stick_x);
+    host::wr8(p + 3, (uint8_t)pads[i].stick_y);
+    host::wr8(p + 4, (uint8_t)pads[i].sub_x);
+    host::wr8(p + 5, (uint8_t)pads[i].sub_y);
+    host::wr8(p + 6, pads[i].trig_l);
+    host::wr8(p + 7, pads[i].trig_r);
+    host::wr8(p + 8, pads[i].analog_a);
+    host::wr8(p + 9, pads[i].analog_b);
+    host::wr8(p + 10, (uint8_t)pads[i].err);
+    host::wr8(p + 11, 0);
+    if (pads[i].err == 0) mask |= 0x80000000u >> i;
+  }
+  RET(mask);
+}

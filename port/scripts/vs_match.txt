@@ -1,0 +1,33 @@
+# Slippi boot -> VS Mode -> Melee -> two human ports pick characters -> stage select -> match.
+300 B
+310
+380 B
+390
+460 sy=-127
+466
+500 A
+510
+580 A
+590
+700 p=2
+1000 sx=61 sy=127
+1000 p=2 sy=127
+1017
+1017 p=2
+1040 A
+1040 p=2 A
+1050
+1050 p=2
+1100 START
+1110
+1300 sy=100
+1305
+1330 A
+1340
+1900 sx=80
+1960 X
+1965
+2000 sx=-80
+2060 A
+2065
+2100

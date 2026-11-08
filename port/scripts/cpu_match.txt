@@ -1,0 +1,51 @@
+# CPU against CPU on a real stage, for frame-time and latency measurements in an actual fight.
+#
+# Run signed in (no --offline: the Slippi main menu only takes input once it has a logged-in identity) with
+# MELEE_FORCE_CPU=9, which turns both players into level 9 CPUs on the stage select (hle_pad.cpp). Add
+# MELEE_METAL_LATENCY=1 for GPU time and frame-to-panel latency. The match starts near retrace 1700. Example:
+#   MELEE_FORCE_CPU=9 MELEE_METAL_LATENCY=1 build/mac/port/melee_port_mac --iso <disc> --fullscreen --scale 2 \
+#     --script port/scripts/cpu_match.txt --frames 9600 --profile-dir <tmp> --card-dir <tmp> --replay-dir <tmp> --log-file run.log
+# Use a fresh --card-dir: the boot block answers the "create game data" prompt.
+#
+# Boot scene: answer the memory-card prompt (A = Yes, creates game data).
+@scene 0x28 0x00
+440 A
+470
+540 A
+570
+640 A
+670
+
+# Slippi main menu (Online Play log-in): back out twice, down to VS Mode,
+# enter, and choose Melee to reach the offline CSS.
+@scene 0x01 0x00
+60 B
+70
+160 B
+170
+260 sy=-127
+266
+320 A
+330
+420 A
+430
+
+# VS character select: nudge each hand up and press A (picks a character for each port), then START.
+@scene 0x02 0x00
+150 sy=90 sx=20
+150 p=2 sy=90 sx=20
+154
+154 p=2
+170 A
+170 p=2 A
+176
+176 p=2
+320 START
+330
+
+# Stage select: up-left for 0.3 s lands on Random (docs/PERFORMANCE.md), then A.
+@scene 0x02 0x01
+60 sx=-90 sy=90
+78
+100 A
+110

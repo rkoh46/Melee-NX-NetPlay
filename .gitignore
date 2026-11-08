@@ -1,0 +1,53 @@
+# User-supplied game data
+/iso/
+*.iso
+*.gcm
+*.ciso
+*.rvz
+*.dol
+*.szs
+*.arc
+*.thp
+*.gci
+
+# Dependencies and build outputs
+/ref/
+/build/
+/dist/
+*.nro
+*.nso
+*.elf
+*.nacp
+*.map
+*.pfs0
+*.npdm
+
+# Captures, caches, and exported SDK images
+/newest_build_artifacts/
+*.log
+*.db
+*.zip
+*.7z
+*.tar
+scratch_*
+/scratchpad/
+/Logs/
+/scratch/
+
+# Python and editors
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.vscode/
+.idea/
+
+# Local notes stay private.
+/memory/
+.claude/
+/AGENTS.md
+/CLAUDE.md
+/PROGRESS.md

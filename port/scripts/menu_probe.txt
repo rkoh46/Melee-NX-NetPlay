@@ -1,0 +1,12 @@
+# Slippi boots into Online Play: back out twice, down to VS Mode, Melee -> CSS.
+300 B
+310
+380 B
+390
+460 sy=-127
+466
+500 A
+510
+580 A
+590
+700 p=2

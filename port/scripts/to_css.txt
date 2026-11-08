@@ -1,0 +1,15 @@
+# Boot -> main menu -> VS Mode -> Melee -> character select screen.
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
+950 sy=-127
+956
+980 A
+990
+1060 A
+1070

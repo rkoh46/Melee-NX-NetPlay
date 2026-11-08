@@ -1,0 +1,22 @@
+# Slippi boot -> VS Mode -> Melee -> CSS with two ports; P1 to Fox, P2 to Ness, then Start.
+300 B
+310
+380 B
+390
+460 sy=-127
+466
+500 A
+510
+580 A
+590
+700 p=2
+1000 sx=61 sy=127
+1000 p=2 sy=127
+1017
+1017 p=2
+1040 A
+1040 p=2 A
+1050
+1050 p=2
+1100 START
+1110

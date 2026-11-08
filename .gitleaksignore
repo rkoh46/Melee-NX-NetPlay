@@ -1,0 +1,3 @@
+# Slippi Launcher's public Firebase Web API key, as shipped in Dashdance (public repository) and the
+# Slippi Launcher itself; Firebase web keys identify the project and are not secrets.
+port/runtime/hle/slippi_login.cpp:gcp-api-key:15

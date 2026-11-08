@@ -1,0 +1,9 @@
+# Boot: dismiss "no memory card" (A), skip the intro movie and title (START), reach the main menu.
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
