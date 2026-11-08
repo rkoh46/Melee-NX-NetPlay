@@ -21,13 +21,27 @@ the decomp's C source instead, which has no binary to patch. This project theref
 game and netcode from Dashdance and the Switch toolchain, Dawn/Vulkan/NVK renderer path, SDL
 backend and startup glue from Melee-NX. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Install
+
+One command on a Mac or Linux PC with Docker builds the homebrew from your own disc (about 20 minutes,
+most of it compiling the game) and tells you where to put the result:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rkoh46/Melee-NX-NetPlay/main/install.sh | bash -s -- /path/to/GALE01.iso
+```
+
+It downloads a prebuilt, game-free SDK (the Switch GPU driver, Dawn, SDL3 and Aurora, 55 MB, from this
+repository's releases), builds the compiler image, translates your disc and compiles it. The finished
+folder goes to `sdmc:/switch/melee-nx-netplay/` on the SD card with your disc beside it as `GALE01.iso`.
+No built NRO is published: it would contain the game.
+
 ## What you need
 
 - A Switch running [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere). Launch the NRO with
   full application memory (hold **R** while opening a game); the recompiled game is large.
 - Your own NTSC-U 1.02 disc image (GALE01; the build verifies its `main.dol` SHA-1).
-- A build host with Git, Docker, Bash and Python 3.11+. The first graphics build takes hours and
-  tens of gigabytes; see [BUILDING.md](BUILDING.md).
+- A build host with Git, Docker, Bash and Python 3.11+ for the installer. Building the SDK itself
+  from source (Mesa, Dawn, SDL) is hours and tens of gigabytes; see [BUILDING.md](BUILDING.md).
 - For online play: a Slippi account (connect code and play key), signed in on the console.
 
 ## Roadmap
@@ -48,7 +62,8 @@ backend and startup glue from Melee-NX. See [docs/ARCHITECTURE.md](docs/ARCHITEC
 | `port/app/main_switch.cpp` | The libnx entry point |
 | `port/slippi_sys/` | Slippi's Sys folder (code list, code handler, GameFiles), packed into the NRO's RomFS |
 | `switch/` | Toolchain file, Docker recipes, the Dawn/SDL/Aurora Switch patches, Clang/libnx thread glue |
-| `builder/` | `generate-game.sh` (host: disc → generated sources), `docker.sh`, `build-game.sh`, `build-graphics.sh`, `fetch-deps.sh` |
+| `install.sh` | The one-command installer (clone, SDK download, compiler image, translate, compile, SD folder) |
+| `builder/` | `generate-game.sh` (host: disc → generated sources), `docker.sh`, `build-game.sh`, `build-graphics.sh`, `fetch-deps.sh`, `package-sdk.sh` |
 | `tools/` | `bootstrap_port.py`, `extract_dol.py`, pins and manifests |
 | `docs/` | Architecture notes |
 

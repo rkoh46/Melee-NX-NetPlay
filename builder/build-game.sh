@@ -23,21 +23,29 @@ do_configure() {
   require_file "$repo/ref/melee/src/sysdolphin/baselib/fobj.c" "run builder/fetch-deps.sh"
   local extra=()
   if [[ "$frontend" == aurora ]]; then
-    sdl_variant="${MELEE_SDL_VARIANT:-dusklight}"
-    case "$sdl_variant" in
-      dusklight) sdl_source="$repo/ref/SDL-dusklight"; sdl_build="$repo/build/sdl-switch-dusklight" ;;
-      legacy)    sdl_source="$repo/ref/SDL";           sdl_build="$repo/build/sdl-switch" ;;
-      *) echo "MELEE_SDL_VARIANT must be dusklight or legacy" >&2; exit 64 ;;
-    esac
-    require_file "$repo/build/dawn-switch/src/dawn/native/libwebgpu_dawn.a" "run builder/docker.sh graphics all"
-    require_file "$sdl_build/libSDL3.a" "run builder/docker.sh graphics all"
-    extra=(-DMELEE_DAWN_SOURCE="$repo/ref/dawn" -DMELEE_DAWN_BUILD="$repo/build/dawn-switch"
-           -DMELEE_SDL_SOURCE="$sdl_source" -DMELEE_SDL_BUILD="$sdl_build")
-    if [[ -f "${MESA_NVK_ROOT:-/mesa-nvk}/src/nouveau/vulkan/rust_switch_stubs.c" ]]; then
-      extra+=(-DMESA_NVK_ROOT="${MESA_NVK_ROOT:-/mesa-nvk}")
+    sdk="${MELEE_NX_SDK_DIR:-}"
+    [[ -z "$sdk" && -f "$repo/build/sdk/SDK_MANIFEST.json" ]] && sdk="$repo/build/sdk"
+    if [[ -n "$sdk" ]]; then
+      require_file "$sdk/SDK_MANIFEST.json" "unpack the melee-nx-netplay-sdk archive there"
+      require_file "$sdk/mesa/src/nouveau/vulkan/rust_switch_stubs.c" "incomplete SDK"
+      extra=(-DMELEE_NX_SDK_DIR="$sdk")
     else
-      echo "No Mesa/NVK tree: compiling without it (MELEE_NX_ALLOW_NO_MESA); the link step needs the archives." >&2
-      extra+=(-DMESA_NVK_ROOT= -DMELEE_NX_ALLOW_NO_MESA=ON)
+      sdl_variant="${MELEE_SDL_VARIANT:-dusklight}"
+      case "$sdl_variant" in
+        dusklight) sdl_source="$repo/ref/SDL-dusklight"; sdl_build="$repo/build/sdl-switch-dusklight" ;;
+        legacy)    sdl_source="$repo/ref/SDL";           sdl_build="$repo/build/sdl-switch" ;;
+        *) echo "MELEE_SDL_VARIANT must be dusklight or legacy" >&2; exit 64 ;;
+      esac
+      require_file "$repo/build/dawn-switch/src/dawn/native/libwebgpu_dawn.a" "run builder/docker.sh graphics all"
+      require_file "$sdl_build/libSDL3.a" "run builder/docker.sh graphics all"
+      extra=(-DMELEE_DAWN_SOURCE="$repo/ref/dawn" -DMELEE_DAWN_BUILD="$repo/build/dawn-switch"
+             -DMELEE_SDL_SOURCE="$sdl_source" -DMELEE_SDL_BUILD="$sdl_build")
+      if [[ -f "${MESA_NVK_ROOT:-/mesa-nvk}/src/nouveau/vulkan/rust_switch_stubs.c" ]]; then
+        extra+=(-DMESA_NVK_ROOT="${MESA_NVK_ROOT:-/mesa-nvk}")
+      else
+        echo "No Mesa/NVK tree: compiling without it (MELEE_NX_ALLOW_NO_MESA); the link step needs the archives." >&2
+        extra+=(-DMESA_NVK_ROOT= -DMELEE_NX_ALLOW_NO_MESA=ON)
+      fi
     fi
   fi
   cmake -S "$repo" -B "$build_dir" -G Ninja \

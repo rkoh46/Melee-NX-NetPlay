@@ -3,6 +3,18 @@
 Everything cross-compiles inside Docker; the host needs Git, Docker, Bash and Python 3.11+. The
 generated game is private to your build folder (`build/`, ignored) and is never committed.
 
+## The short way: install.sh
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rkoh46/Melee-NX-NetPlay/main/install.sh | bash -s -- /path/to/GALE01.iso
+```
+
+Steps 1-3 below, plus the prebuilt SDK from the `sdk-*` release instead of section 4's hours of Mesa,
+Dawn and SDL builds, ending with the SD-card folder in `dist/sd/switch/melee-nx-netplay/`. The SDK is
+made with `MESA_NVK_ROOT=... bash builder/package-sdk.sh <version>` after section 4 and contains no
+game content. A checkout with `build/sdk/` unpacked uses it automatically (`MELEE_NX_SDK_DIR`
+overrides the location). The rest of this page is the long way.
+
 ## 1. Sources and the generated game
 
 ```bash

@@ -3,11 +3,28 @@
 include_guard(GLOBAL)
 
 get_filename_component(_repo "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
-set(MELEE_DAWN_SOURCE "${_repo}/ref/dawn"            CACHE PATH "Patched Dawn source")
-set(MELEE_DAWN_BUILD  "${_repo}/build/dawn-switch"   CACHE PATH "Switch Dawn build")
-set(MELEE_SDL_SOURCE  "${_repo}/ref/SDL"             CACHE PATH "Patched SDL3 source")
-set(MELEE_SDL_BUILD   "${_repo}/build/sdl-switch"    CACHE PATH "Switch SDL3 build")
-set(MELEE_AURORA_SOURCE "${_repo}/ref/melee-pc/extern/aurora" CACHE PATH "Aurora source (from melee-pc)")
+# A prebuilt SDK (builder/package-sdk.sh, downloaded by install.sh) supplies every
+# graphics dependency at once; otherwise the reference trees and local builds do.
+set(MELEE_NX_SDK_DIR "" CACHE PATH "Unpacked melee-nx-netplay-sdk (Mesa/NVK, Dawn, SDL3, Aurora)")
+if(MELEE_NX_SDK_DIR)
+  set(_dawn_src "${MELEE_NX_SDK_DIR}/dawn/src")
+  set(_dawn_build "${MELEE_NX_SDK_DIR}/dawn/build")
+  set(_sdl_src "${MELEE_NX_SDK_DIR}/sdl/src")
+  set(_sdl_build "${MELEE_NX_SDK_DIR}/sdl/build")
+  set(_aurora_src "${MELEE_NX_SDK_DIR}/aurora")
+  set(MESA_NVK_ROOT "${MELEE_NX_SDK_DIR}/mesa" CACHE PATH "" FORCE)
+else()
+  set(_dawn_src "${_repo}/ref/dawn")
+  set(_dawn_build "${_repo}/build/dawn-switch")
+  set(_sdl_src "${_repo}/ref/SDL")
+  set(_sdl_build "${_repo}/build/sdl-switch")
+  set(_aurora_src "${_repo}/ref/melee-pc/extern/aurora")
+endif()
+set(MELEE_DAWN_SOURCE "${_dawn_src}"     CACHE PATH "Patched Dawn source")
+set(MELEE_DAWN_BUILD  "${_dawn_build}"   CACHE PATH "Switch Dawn build")
+set(MELEE_SDL_SOURCE  "${_sdl_src}"      CACHE PATH "Patched SDL3 source")
+set(MELEE_SDL_BUILD   "${_sdl_build}"    CACHE PATH "Switch SDL3 build")
+set(MELEE_AURORA_SOURCE "${_aurora_src}" CACHE PATH "Aurora source (Switch-patched)")
 
 foreach(_archive IN ITEMS
     "${MELEE_DAWN_BUILD}/src/dawn/native/libwebgpu_dawn.a"
