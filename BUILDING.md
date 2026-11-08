@@ -95,3 +95,4 @@ L+R+Start held half a second. Without a saved identity the renderer shows the Sl
 | `Slippi Sys file inventory differs` | `port/slippi_sys` was changed; restore it (`tools/slippi_sys_manifest.json` lists it) |
 | Launched in applet mode warning on the console | Hold R while opening a game so the homebrew gets application memory |
 | `Mesa/NVK is missing` | Only the aurora frontend needs it; set `MESA_NVK_ROOT` or use an SDK image |
+| The console shows "The software was closed because an error occurred" | Read `Logs/latest.log` (flushed every line) for the last thing the port did, then the newest file in `sdmc:/atmosphere/crash_reports/`: its PC and the module offsets resolve against `build/switch-<frontend>/port/melee-nx-netplay.elf` with `aarch64-none-elf-addr2line -e <elf> -f -C <offset>` inside the toolchain container (`bash builder/docker.sh shell`) |
