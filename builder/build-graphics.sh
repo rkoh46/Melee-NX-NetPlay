@@ -118,7 +118,7 @@ case "$stage" in
   prepare) prepare ;;
   dawn)    build_dawn ;;
   sdl)     build_sdl ;;
-  aurora)  echo "Aurora is built as part of build-melee.sh (add_subdirectory)." ;;
+  aurora)  echo "Aurora is built with the game (build-game.sh, add_subdirectory)." ;;
   all)     prepare; build_dawn; build_sdl ;;
 esac
 echo "build-graphics.sh [$stage] done (SDL variant: $sdl_variant)."

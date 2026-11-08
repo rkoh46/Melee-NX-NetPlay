@@ -45,7 +45,14 @@ if(MELEE_NX_FRONTEND STREQUAL "headless")
   set(PORT_FRONTEND_SOURCES runtime/host/input_headless.cpp runtime/host/window_headless.cpp runtime/host/audio_headless.cpp)
   set(PORT_ONLINE 0)
 else()
-  message(FATAL_ERROR "MELEE_NX_FRONTEND=${MELEE_NX_FRONTEND} is not wired yet; see docs/ARCHITECTURE.md for the plan")
+  # Aurora owns the SDL3 window (libnx NWindow) and the Dawn/Vulkan device; the
+  # decoded GX frames reach it through gx_aurora. Pads come from Aurora PAD over
+  # SDL3 gamepads (Joy-Con, Pro Controller, the official GameCube adapter).
+  set(PORT_FRONTEND_SOURCES
+    runtime/host/input_sdl.cpp runtime/host/gc_adapter_none.cpp runtime/host/audio_sdl.cpp
+    runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/switch_frontend_aurora.cpp
+    runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp)
+  set(PORT_ONLINE 0)   # phase 3 turns this on
 endif()
 
 add_library(runtime_switch STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} ${PORT_FRONTEND_SOURCES} ${PORT_SWITCH_SOURCES})
@@ -81,6 +88,16 @@ target_link_options(melee_nx_netplay PRIVATE
   -Wl,--wrap=pthread_create -Wl,--wrap=pthread_detach -Wl,--wrap=pthread_join
   -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit)
 set_target_properties(melee_nx_netplay PROPERTIES OUTPUT_NAME melee-nx-netplay)
+if(MELEE_NX_FRONTEND STREQUAL "aurora")
+  target_compile_definitions(runtime_switch PUBLIC MELEE_NX_AURORA=1)
+  # gx_aurora.cpp writes Aurora's FIFO directly (lib/gx/fifo.hpp).
+  target_include_directories(runtime_switch PRIVATE "${MELEE_AURORA_SOURCE}/lib")
+  target_link_libraries(runtime_switch PUBLIC aurora::core aurora::gx aurora::vi aurora::os aurora::mtx aurora::pad
+    absl::flat_hash_map absl::btree SDL3::SDL3-static)
+  if(MELEE_NVK_STUBS_SOURCE)
+    target_sources(melee_nx_netplay PRIVATE "${MELEE_NVK_STUBS_SOURCE}")   # Rust/newlib ABI bridge for the NVK archives
+  endif()
+endif()
 
 # RomFS carries Slippi's Sys folder (code list, code handler, GameFiles), read at
 # romfs:/Sys. Nothing from the disc is in it.

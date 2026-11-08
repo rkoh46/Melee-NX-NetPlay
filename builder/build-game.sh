@@ -31,9 +31,14 @@ do_configure() {
     esac
     require_file "$repo/build/dawn-switch/src/dawn/native/libwebgpu_dawn.a" "run builder/docker.sh graphics all"
     require_file "$sdl_build/libSDL3.a" "run builder/docker.sh graphics all"
-    : "${MESA_NVK_ROOT:=/mesa-nvk}"
     extra=(-DMELEE_DAWN_SOURCE="$repo/ref/dawn" -DMELEE_DAWN_BUILD="$repo/build/dawn-switch"
-           -DMELEE_SDL_SOURCE="$sdl_source" -DMELEE_SDL_BUILD="$sdl_build" -DMESA_NVK_ROOT="$MESA_NVK_ROOT")
+           -DMELEE_SDL_SOURCE="$sdl_source" -DMELEE_SDL_BUILD="$sdl_build")
+    if [[ -f "${MESA_NVK_ROOT:-/mesa-nvk}/src/nouveau/vulkan/rust_switch_stubs.c" ]]; then
+      extra+=(-DMESA_NVK_ROOT="${MESA_NVK_ROOT:-/mesa-nvk}")
+    else
+      echo "No Mesa/NVK tree: compiling without it (MELEE_NX_ALLOW_NO_MESA); the link step needs the archives." >&2
+      extra+=(-DMESA_NVK_ROOT= -DMELEE_NX_ALLOW_NO_MESA=ON)
+    fi
   fi
   cmake -S "$repo" -B "$build_dir" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$repo/switch/cmake/SwitchGCC.cmake" \

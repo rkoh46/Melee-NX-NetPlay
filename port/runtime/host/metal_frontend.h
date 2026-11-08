@@ -104,5 +104,7 @@ struct AuroraMetalConfig {
 // CAMetalLayer plus the selected Metal backend, then constructs AuroraBackend.
 // All lifecycle and frame methods must be used on the creating thread.
 std::unique_ptr<MetalFrontend> create_aurora_metal_frontend(const AuroraMetalConfig& config);
+// Switch: Aurora over libnx's NWindow with the Vulkan (Mesa NVK) backend; same contract.
+std::unique_ptr<MetalFrontend> create_aurora_switch_frontend(const AuroraMetalConfig& config);
 
 } // namespace host

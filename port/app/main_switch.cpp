@@ -16,6 +16,11 @@
 #include "numeric.h"
 #include "slippi_online.h"
 #include "window.h"
+#if MELEE_NX_AURORA
+#include "gx_aurora_bridge.h"
+#include "metal_frontend.h"
+#include "metal_window.h"
+#endif
 
 #include <atomic>
 #include <cstdio>
@@ -24,6 +29,7 @@
 #include <exception>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <string>
 #include <sys/stat.h>
 
@@ -42,6 +48,7 @@ constexpr size_t kSimulationStack = 32u << 20;
 
 std::atomic<int> g_exit_code{-1};
 std::string g_result = "running";
+int g_volume = 100;
 
 std::map<std::string, std::string> read_ini(const std::string& path) {
   std::map<std::string, std::string> out;
@@ -63,6 +70,10 @@ void ensure_dir(const std::string& path) { mkdir(path.c_str(), 0777); }
 void simulation_thread(void*) {
   switch_sync_clang_tls();
   int code = 0;
+#if MELEE_NX_AURORA
+  std::unique_ptr<host::MetalFrontend> frontend;
+  bool attached = false;
+#endif
   {
     host::ScopedFatalBoundary fatal_boundary;
     ppc::ScopedGuestFpEnvironment fp_environment(0);
@@ -71,9 +82,25 @@ void simulation_thread(void*) {
         host::log("cannot open disc image %s", host::options.iso.c_str());
         g_result = "disc_open_failed"; code = 1;
       } else {
+#if MELEE_NX_AURORA
+        host::AuroraMetalConfig aurora;
+        aurora.app_name = "Melee-NX-NetPlay";
+        aurora.user_path = host::options.profile_dir;
+        aurora.cache_path = host::options.cache_dir;
+        aurora.resources_path = host::options.cache_dir;   // Aurora writes nothing here; romfs is read-only
+        aurora.window_width = 1280; aurora.window_height = 720;
+        frontend = host::create_aurora_switch_frontend(aurora);
+        host::metal_window_attach(*frontend);
+        attached = true;
+        host::g_has_window = true;
+        gx::init(frontend.get());
+        const bool audio_ok = host::audio_open(g_volume, nullptr, true);
+#else
         gx::init(nullptr);
-        if (!host::audio_open(0, host::options.audio_dump.c_str(), false)) {
-          host::log("cannot open the AI DMA sink"); g_result = "audio_open_failed"; code = 1;
+        const bool audio_ok = host::audio_open(0, host::options.audio_dump.c_str(), false);
+#endif
+        if (!audio_ok) {
+          host::log("cannot open the audio output"); g_result = "audio_open_failed"; code = 1;
         } else {
           ppc::init_dispatch();
           host::boot_setup();
@@ -83,6 +110,10 @@ void simulation_thread(void*) {
           g_result = "guest_returned"; code = 4;
         }
       }
+#if MELEE_NX_AURORA
+    } catch (const gx::aurora_bridge::CoverageError& e) {
+      host::log("unsupported render state: %s", e.what()); g_result = std::string("render: ") + e.what(); code = 5;
+#endif
     } catch (const host::HostFatal& e) {
       host::log("fatal: %s", e.what()); g_result = std::string("fatal: ") + e.what(); code = 3;
     } catch (const ExitRequested& stop) {
@@ -95,9 +126,24 @@ void simulation_thread(void*) {
       g_result = "unknown host exception"; code = 3;
     }
   }
+  gx::init(nullptr);
+#if MELEE_NX_AURORA
+  host::g_has_window = false;
+  if (attached) host::metal_window_detach(*frontend);
+#endif
   slippi::shutdown();
   hle::dvd_shutdown();
   host::audio_close();
+#if MELEE_NX_AURORA
+  if (frontend) {
+    const auto stats = frontend->stats();
+    host::log("aurora: presented=%llu draws=%llu xfb=%llu unsupported(render=%llu order=%llu)",
+              (unsigned long long)stats.presented_frames, (unsigned long long)stats.decoded_draws,
+              (unsigned long long)stats.presented_xfb, (unsigned long long)stats.unsupported.render_state,
+              (unsigned long long)stats.unsupported.frame_order);
+    frontend->shutdown();
+  }
+#endif
   ppc::log_aot_diagnostics();
   host::log("switch result: exit=%d retraces=%u requested=%u", code, host::retrace_count(), host::options.frames);
   host::close_log_file();
@@ -118,10 +164,14 @@ extern "C" void userAppExit() {
 int main(int argc, char** argv) {
   (void)argc; (void)argv;
   switch_set_exit_hook([] { host::close_log_file(); });
+#if !MELEE_NX_AURORA
+  // The text console and libnx pad are the headless build's only UI. With the
+  // renderer, Aurora's SDL window owns the display and the controllers.
   consoleInit(nullptr);
   padConfigureInput(1, HidNpadStyleSet_NpadStandard);
   PadState pad;
   padInitializeDefault(&pad);
+#endif
 
   const std::string base = kBaseDir;
   ensure_dir(base);
@@ -148,18 +198,22 @@ int main(int argc, char** argv) {
   o.fast = get("fast", "0") == "1";
   o.offline = true;
   o.volume = 0;
+  g_volume = static_cast<int>(std::strtol(get("volume", "100").c_str(), nullptr, 10));
   slippi::online::config().offline = true;
   slippi::online::config().user_dir = o.profile_dir;
   const std::string script = get("script", "");
   if (!script.empty() && !host::input_load_script(script.c_str()))
     std::printf("cannot load input script %s\n", script.c_str());
 
+  const bool applet_mode = appletGetAppletType() != AppletType_Application && appletGetAppletType() != AppletType_SystemApplication;
+#if !MELEE_NX_AURORA
   std::printf("Melee-NX-NetPlay %s\n", MELEE_PORT_VERSION);
   std::printf("disc %s\nlog  %s\n", o.iso.c_str(), o.log_file.c_str());
-  if (appletGetAppletType() != AppletType_Application && appletGetAppletType() != AppletType_SystemApplication)
-    std::printf("\nLaunched in applet mode: hold R while opening a game to get the full memory.\n");
+  if (applet_mode) std::printf("\nLaunched in applet mode: hold R while opening a game to get the full memory.\n");
   std::printf("frames=%u fast=%d script=%s\n\n", o.frames, o.fast ? 1 : 0, script.empty() ? "(neutral pad)" : script.c_str());
   consoleUpdate(nullptr);
+#endif
+  if (applet_mode) host::log("launched in applet mode: hold R while opening a game to get application memory");
 
   host::log("Melee-NX-NetPlay %s: Switch headless bring-up", MELEE_PORT_VERSION);
   host::log("execution: frames=%u fast=%s fp_profile=%s", o.frames, o.fast ? "true" : "false", ppc::fp_profile_name(ppc::fp_profile()));
@@ -172,6 +226,7 @@ int main(int argc, char** argv) {
 
   uint32_t last_retraces = 0;
   while (appletMainLoop()) {
+#if !MELEE_NX_AURORA
     padUpdate(&pad);
     if (padGetButtonsDown(&pad) & HidNpadButton_Plus) { host::log("plus pressed: stopping"); break; }
     const uint32_t retraces = host::retrace_count();
@@ -179,8 +234,11 @@ int main(int argc, char** argv) {
       std::printf("\rframe %u", retraces);
       last_retraces = retraces;
     }
-    if (g_exit_code >= 0) break;
     consoleUpdate(nullptr);
+#else
+    (void)last_retraces;
+#endif
+    if (g_exit_code >= 0) break;
     svcSleepThread(16'000'000ULL);
   }
   if (g_exit_code < 0) {
@@ -190,6 +248,7 @@ int main(int argc, char** argv) {
     threadWaitForExit(&sim);
     threadClose(&sim);
   }
+#if !MELEE_NX_AURORA
   std::printf("\n%s (exit %d). Press + to leave.\n", g_result.c_str(), g_exit_code.load());
   consoleUpdate(nullptr);
   while (appletMainLoop()) {
@@ -199,5 +258,6 @@ int main(int argc, char** argv) {
     svcSleepThread(50'000'000ULL);
   }
   consoleExit(nullptr);
+#endif
   return g_exit_code < 0 ? 0 : g_exit_code.load();
 }

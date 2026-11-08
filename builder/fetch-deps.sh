@@ -70,9 +70,13 @@ fetch_dawn() {
   skip_if_present ref/dawn && return 0
   echo "==> ref/dawn ($DAWN_REV)"
   git clone "$DAWN_URL" ref/dawn
+  # The pinned commit is not on the default branch; fetch it by hash.
+  git -C ref/dawn fetch origin "$DAWN_REV"
   git -C ref/dawn checkout --detach "$DAWN_REV"
-  # Only abseil is needed; the full submodule set is enormous and unused here.
-  git -C ref/dawn submodule update --init --recursive third_party/abseil-cpp
+  # The standalone CMake build needs these; the full submodule set is enormous and unused here.
+  git -C ref/dawn submodule update --init --recursive third_party/abseil-cpp third_party/jinja2 \
+    third_party/markupsafe third_party/spirv-headers/src third_party/spirv-tools/src \
+    third_party/vulkan-headers/src third_party/vulkan-utility-libraries/src
 }
 
 fetch_sdl_legacy() {

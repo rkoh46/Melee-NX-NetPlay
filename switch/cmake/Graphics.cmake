@@ -1,4 +1,5 @@
-# Import Dawn and SDL, then build Aurora and the Switch platform adapters.
+# Import Dawn and SDL, then build Aurora (from melee-pc's vendored, Switch-patched tree) and the Mesa/NVK link group.
+# From Melee-NX; DVD/CARD/THP/RmlUi are off here because the recompiled runtime provides them.
 include_guard(GLOBAL)
 
 get_filename_component(_repo "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
@@ -37,26 +38,18 @@ set_target_properties(SDL3::SDL3-static PROPERTIES
   IMPORTED_LOCATION "${MELEE_SDL_BUILD}/libSDL3.a"
   INTERFACE_INCLUDE_DIRECTORIES "${MELEE_SDL_SOURCE}/include")
 
-# C GameCube disc adapter, exposed through Aurora's nod provider.
-add_library(nod_shim STATIC
-  "${CMAKE_CURRENT_LIST_DIR}/../src/nod/gc_disc.c"
-  "${CMAKE_CURRENT_LIST_DIR}/../src/nod/nod_shim.c")
-target_include_directories(nod_shim PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../src/nod")
-add_library(nod::nod ALIAS nod_shim)
-set(nod_FOUND TRUE)
-
 set(Dawn_FOUND TRUE)
 set(SDL3_FOUND TRUE)
 set(AURORA_DAWN_PROVIDER system CACHE STRING "" FORCE)
 set(AURORA_SDL3_PROVIDER system CACHE STRING "" FORCE)
 set(AURORA_SDL3_LINKAGE  static CACHE STRING "" FORCE)
-set(AURORA_NOD_PROVIDER  system CACHE STRING "" FORCE)
 
-# melee-pc uses DVD, CARD, THP, and RmlUi — keep them all on.
-set(AURORA_ENABLE_DVD   ON  CACHE BOOL "" FORCE)
-set(AURORA_ENABLE_CARD  ON  CACHE BOOL "" FORCE)
-set(AURORA_ENABLE_THP   ON  CACHE BOOL "" FORCE)
-set(AURORA_ENABLE_RMLUI ON  CACHE BOOL "" FORCE)
+# The recompiled runtime reads the disc, memory cards and THP itself (Dashdance's
+# HLE); Aurora supplies the GX renderer, VI, PAD and OS time only.
+set(AURORA_ENABLE_DVD   OFF CACHE BOOL "" FORCE)
+set(AURORA_ENABLE_CARD  OFF CACHE BOOL "" FORCE)
+set(AURORA_ENABLE_THP   OFF CACHE BOOL "" FORCE)
+set(AURORA_ENABLE_RMLUI OFF CACHE BOOL "" FORCE)
 set(AURORA_ENABLE_GX    ON  CACHE BOOL "" FORCE)
 set(AURORA_PLATFORM_SWITCH ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF)
@@ -65,7 +58,9 @@ set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)
 add_subdirectory("${MELEE_AURORA_SOURCE}" aurora)
 
 # Expose the shared Switch integration headers to Aurora.
-target_include_directories(aurora_dvd PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
+if(TARGET aurora_dvd)
+  target_include_directories(aurora_dvd PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
+endif()
 target_include_directories(aurora_gx PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
 target_include_directories(aurora_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
 
@@ -128,19 +123,26 @@ endif()
 # Mesa Vulkan archives and the Rust/newlib ABI bridge.
 set(MESA_NVK_ROOT "" CACHE PATH
   "Mesa/NVK Switch cross-build root (has builddir-switch/**/*.a and src/nouveau/vulkan/rust_switch_stubs.c) -- see docs/DEPS.md")
+option(MELEE_NX_ALLOW_NO_MESA "Configure the aurora frontend without a Mesa/NVK tree (compiles everything; the final link needs the archives)" OFF)
 if(MESA_NVK_ROOT STREQUAL "")
-  message(FATAL_ERROR "MESA_NVK_ROOT not set. See docs/DEPS.md for how to obtain a built Mesa/NVK Switch tree.")
+  if(NOT MELEE_NX_ALLOW_NO_MESA)
+    message(FATAL_ERROR "MESA_NVK_ROOT not set. See BUILDING.md for how to obtain a built Mesa/NVK Switch tree.")
+  endif()
+  message(WARNING "No Mesa/NVK tree: the aurora frontend will compile but not link")
+  set(MELEE_NVK_ARCHIVES "")
+  set(MELEE_NVK_STUBS_SOURCE "")
+else()
+  set(_nvk_build "${MESA_NVK_ROOT}/builddir-switch")
+  set(_nvk_stubs "${MESA_NVK_ROOT}/src/nouveau/vulkan/rust_switch_stubs.c")
+  if(NOT EXISTS "${_nvk_stubs}")
+    message(FATAL_ERROR "Missing ${_nvk_stubs} -- MESA_NVK_ROOT does not look like a Mesa checkout with the Switch/NVK overlay applied.")
+  endif()
+  file(GLOB_RECURSE _nvk_archives CONFIGURE_DEPENDS "${_nvk_build}/*.a")
+  list(FILTER _nvk_archives EXCLUDE REGEX "/libsanity_check_for_rust\\.a$")
+  if(NOT _nvk_archives)
+    message(FATAL_ERROR "No .a archives found under ${_nvk_build} -- run mesa-switch's build-switch.sh first (see BUILDING.md).")
+  endif()
+  list(SORT _nvk_archives)
+  list(JOIN _nvk_archives " " MELEE_NVK_ARCHIVES)
+  set(MELEE_NVK_STUBS_SOURCE "${_nvk_stubs}")
 endif()
-set(_nvk_build "${MESA_NVK_ROOT}/builddir-switch")
-set(_nvk_stubs "${MESA_NVK_ROOT}/src/nouveau/vulkan/rust_switch_stubs.c")
-if(NOT EXISTS "${_nvk_stubs}")
-  message(FATAL_ERROR "Missing ${_nvk_stubs} -- MESA_NVK_ROOT does not look like a Mesa checkout with the Switch/NVK overlay applied.")
-endif()
-file(GLOB_RECURSE _nvk_archives CONFIGURE_DEPENDS "${_nvk_build}/*.a")
-list(FILTER _nvk_archives EXCLUDE REGEX "/libsanity_check_for_rust\\.a$")
-if(NOT _nvk_archives)
-  message(FATAL_ERROR "No .a archives found under ${_nvk_build} -- run switch/overlays/mesa-switch/build-switch.sh (see docs/DEPS.md) first.")
-endif()
-list(SORT _nvk_archives)
-list(JOIN _nvk_archives " " MELEE_NVK_ARCHIVES)
-set(MELEE_NVK_STUBS_SOURCE "${_nvk_stubs}")

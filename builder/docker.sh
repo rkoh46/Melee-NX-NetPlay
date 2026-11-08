@@ -138,7 +138,7 @@ case "$stage" in
   sdk-image) build_sdk_image ;;
   graphics) run_in_container optional bash builder/build-graphics.sh "${2:-all}" ;;
   game)
-    needs=optional; [[ "$frontend" == aurora ]] && needs=required
+    needs=optional   # build-game.sh compiles the aurora frontend without Mesa and says so; the link needs it
     run_in_container "$needs" bash builder/build-game.sh "${2:-all}" ;;
   shell) run_in_container optional bash ;;
 esac
