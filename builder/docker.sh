@@ -2,7 +2,8 @@
 # Container entry point. See BUILDING.md and switch/docker/README.md.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/.." && pwd)"
+# Physical path: the checkout may be reached through a symlink, and Docker mounts need the real one.
+repo="$(cd "$here/.." && pwd -P)"
 
 image="${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}"
 sdk_image="${MELEE_DOCKER_SDK_IMAGE:-melee-nx-netplay-sdk:latest}"
@@ -99,11 +100,20 @@ run_in_container() {
   local needs_mesa="$1"
   shift
   local mounts=() tty=()
+  set +u
   if [[ -n "${MESA_NVK_ROOT:-}" ]]; then
     local mesa
     mesa="$(resolve_mesa)"
     mounts=(-v "$mesa:/mesa-nvk:ro")
   fi
+  # Reference trees may be symlinks to checkouts elsewhere on the host (a shared
+  # Dashdance or Melee-NX clone); mount each target at its own path, read-only.
+  local link target
+  for link in "$repo"/ref/*; do
+    [[ -L "$link" ]] || continue
+    target="$(cd "$link" 2>/dev/null && pwd -P)" || continue
+    mounts+=(-v "$target:$target:ro")
+  done
   ensure_image
   [[ -t 1 ]] && tty=(-t)
   # Git Bash must leave the container-side paths in -v and -w intact.

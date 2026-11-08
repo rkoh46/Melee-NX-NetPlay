@@ -74,6 +74,7 @@ no Mesa checkout, as in Melee-NX.
 
 | Symptom | Check |
 |---|---|
+| `bash: builder/build-game.sh: No such file or directory` from the container | Docker cannot see the checkout: with Colima, only the volumes in `~/.colima/default/colima.yaml` `mounts:` are shared. Add your home folder there (and restart Colima) or keep the checkout on a shared volume. |
 | `Generated game missing` | Run `builder/generate-game.sh` on the host first |
 | `--dol must be the verified vanilla Melee NTSC 1.02 image` | Wrong disc or region; the SHA-1 is in `tools/port_source_pins.json` |
 | `Slippi Sys file inventory differs` | `port/slippi_sys` was changed; restore it (`tools/slippi_sys_manifest.json` lists it) |

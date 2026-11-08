@@ -50,6 +50,8 @@ endif()
 add_library(runtime_switch STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} ${PORT_FRONTEND_SOURCES} ${PORT_SWITCH_SOURCES})
 target_include_directories(runtime_switch PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
   "${PORT_GEN}" "${PROJECT_SOURCE_DIR}/native" "${PROJECT_SOURCE_DIR}/switch/src" third_party)
+# devkitPro portlibs (curl, mbedTLS, zlib) and libnx headers.
+target_include_directories(runtime_switch SYSTEM PUBLIC "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
 target_compile_definitions(runtime_switch PUBLIC NOMINMAX
   MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
   MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
@@ -82,11 +84,10 @@ set_target_properties(melee_nx_netplay PROPERTIES OUTPUT_NAME melee-nx-netplay)
 # RomFS carries Slippi's Sys folder (code list, code handler, GameFiles), read at
 # romfs:/Sys. Nothing from the disc is in it.
 set(PORT_ROMFS "${PROJECT_BINARY_DIR}/romfs")
-add_custom_command(OUTPUT "${PORT_ROMFS}/Sys/README.md"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "${PORT_ROMFS}/Sys"
-  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys/README.md" VERBATIM)
-add_custom_target(port_romfs DEPENDS "${PORT_ROMFS}/Sys/README.md")
-add_dependencies(melee_nx_netplay port_romfs)
+file(MAKE_DIRECTORY "${PORT_ROMFS}/Sys")
+file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys/" DESTINATION "${PORT_ROMFS}/Sys")
+file(GLOB_RECURSE PORT_SYS_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys/*")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PORT_SYS_FILES})
 
 nx_generate_nacp(melee-nx-netplay.nacp NAME "Melee-NX-NetPlay" AUTHOR "rkoh" VERSION "${MELEE_PORT_VERSION}")
 nx_create_nro(melee_nx_netplay NACP melee-nx-netplay.nacp ICON "${PROJECT_SOURCE_DIR}/switch/icon.jpg" ROMFS "${PORT_ROMFS}")
