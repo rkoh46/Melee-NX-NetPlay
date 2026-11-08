@@ -87,6 +87,27 @@ default 2), `offline=1` to skip the sign-in and keep the services off, `volume=`
 `clock_cpu_mhz=` `clock_gpu_mhz=` `clock_mem_mhz=`; 0: the system's clocks). The in-game menu is
 L+R+Start held half a second. Without a saved identity the renderer shows the Slippi sign-in screen first.
 
+## Running on the Switch from this computer
+
+The Switch and this computer on the same Wi-Fi is the whole requirement. On the Switch (Atmosphère) open
+the Homebrew Menu by holding R while launching a game, press Y so the netloader waits, then:
+
+```bash
+tools/nx-run.sh <switch-ip> aurora        # or headless
+```
+
+sends the NRO and streams its output here (every log line: clocks, frame timing, Slippi connection, the
+reason for a crash), also saved under `build/nxlink-logs/`. The first run builds `tools/bin/nxlink`
+(devkitPro's netloader client, one C file) natively. Settings, the disc and `Logs/` still live in
+`sdmc:/switch/melee-nx-netplay/`; with sys-ftpd-light (or the ftpd homebrew) on the Switch, that folder
+is reachable without taking the card out:
+
+```bash
+tools/nx-files.sh <switch-ip> iso /path/to/GALE01.iso   # once; ~1.4 GB over Wi-Fi
+tools/nx-files.sh <switch-ip> push aurora               # NRO + launcher.ini onto the card
+tools/nx-files.sh <switch-ip> pull                      # Logs/, crash and fatal reports -> build/switch-pull/
+```
+
 ## Settings
 
 | Variable | Default | Purpose |
