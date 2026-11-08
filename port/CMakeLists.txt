@@ -94,6 +94,10 @@ if(MELEE_NX_FRONTEND STREQUAL "aurora")
   target_include_directories(runtime_switch PRIVATE "${MELEE_AURORA_SOURCE}/lib")
   target_link_libraries(runtime_switch PUBLIC aurora::core aurora::gx aurora::vi aurora::os aurora::mtx aurora::pad
     absl::flat_hash_map absl::btree SDL3::SDL3-static)
+  # Symbols Aurora's patched objects and ImGui call back into: executable objects
+  # are always visible to the linker, unlike archive members behind them.
+  target_sources(melee_nx_netplay PRIVATE "${PROJECT_SOURCE_DIR}/switch/src/perf_switch.cpp"
+    "${PROJECT_SOURCE_DIR}/switch/src/switch_compat.cpp" "${PROJECT_SOURCE_DIR}/switch/src/libc_switch.c")
   if(MELEE_NVK_STUBS_SOURCE)
     target_sources(melee_nx_netplay PRIVATE "${MELEE_NVK_STUBS_SOURCE}")   # Rust/newlib ABI bridge for the NVK archives
   endif()
