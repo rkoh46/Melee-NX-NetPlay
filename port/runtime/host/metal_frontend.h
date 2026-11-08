@@ -5,6 +5,7 @@
 #include "gx_core.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -106,5 +107,7 @@ struct AuroraMetalConfig {
 std::unique_ptr<MetalFrontend> create_aurora_metal_frontend(const AuroraMetalConfig& config);
 // Switch: Aurora over libnx's NWindow with the Vulkan (Mesa NVK) backend; same contract.
 std::unique_ptr<MetalFrontend> create_aurora_switch_frontend(const AuroraMetalConfig& config);
+// Overlay callback run inside each presented frame of the Switch frontend (ImGui drawing).
+void switch_frontend_set_overlay(std::function<void()> draw);
 
 } // namespace host

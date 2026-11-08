@@ -67,6 +67,7 @@ struct AuroraBackend::Impl {
     std::shared_ptr<const TextureSnapshot> source;
   };
   std::map<TextureKey, TextureObject> textures;
+  std::function<void()> overlay;
 
   explicit Impl(AuroraOptions o) : options(o) {
     require_owner();
@@ -172,6 +173,7 @@ struct AuroraBackend::Impl {
         // clear using the copy-time values just loaded. Never clear before blit.
       }
     }
+    if (overlay) overlay();
     aurora_end_frame(); // Drains FIFO; uploaded texture source bytes are now safe.
     copy_history = std::move(next_history);
     last_sequence = input.sequence;
@@ -206,4 +208,5 @@ void AuroraBackend::reset_epoch(uint64_t epoch) {
   impl_->initial_clear();
 }
 AuroraStats AuroraBackend::stats() const { impl_->require_owner(); return impl_->counters; }
+void AuroraBackend::set_overlay(std::function<void()> draw) { impl_->require_owner(); impl_->overlay = std::move(draw); }
 } // namespace gx

@@ -51,6 +51,7 @@ else()
   set(PORT_FRONTEND_SOURCES
     runtime/host/input_sdl.cpp runtime/host/gc_adapter_none.cpp runtime/host/audio_sdl.cpp
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/switch_frontend_aurora.cpp
+    runtime/host/game_menu.cpp runtime/host/input_config.cpp runtime/host/overlay_imgui.cpp runtime/host/switch_signin.cpp
     runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp)
   option(MELEE_NX_ONLINE "Build the Slippi online services (ENet netplay, matchmaking, login, reports) into the renderer frontend" ON)
   set(PORT_ONLINE ${MELEE_NX_ONLINE})

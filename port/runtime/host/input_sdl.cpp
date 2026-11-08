@@ -3,6 +3,7 @@
 // A loaded input script replaces every physical device, as on the other hosts.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
+#include "game_menu.h"
 #include "input_script.h"
 #include "window.h"
 
@@ -130,6 +131,8 @@ bool pad_file(PadState out[4]) {
 
 void input_poll(PadState out[4]) {
   for (int i = 0; i < 4; ++i) { out[i] = {}; out[i].err = -1; }
+  // The in-game menu sees every input source and neutralises the pads while open.
+  struct MenuPass { PadState* pads; ~MenuPass() { menu_frame(pads); } } menu_pass{out};
   if (pad_file(out)) return;
   if (g_scripted) {
     auto pads = g_script.sample(retrace_count(), g_match_start.load(),

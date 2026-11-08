@@ -115,10 +115,17 @@ private:
 };
 }  // namespace
 
+namespace { gx::AuroraBackend* g_switch_backend = nullptr; }
+
 std::unique_ptr<MetalFrontend> create_aurora_switch_frontend(const AuroraMetalConfig& config) {
   auto native_host = std::make_unique<AuroraSwitchNativeHost>(config);
   auto renderer = std::make_unique<gx::AuroraBackend>(gx::AuroraOptions{
       .logical_width = 640, .logical_height = 480, .reset_clear_color = 0, .reset_clear_z = 0xffffff});
+  g_switch_backend = renderer.get();
   return std::make_unique<MetalFrontend>(std::move(native_host), std::move(renderer));
+}
+
+void switch_frontend_set_overlay(std::function<void()> draw) {
+  if (g_switch_backend) g_switch_backend->set_overlay(std::move(draw));
 }
 }  // namespace host

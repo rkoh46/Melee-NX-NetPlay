@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "gx_core.h"
+#include <functional>
 #include <memory>
 
 namespace gx {
@@ -31,6 +32,10 @@ public:
   // the explicit initial clear. Epoch must increase; frame sequences may restart.
   void reset_epoch(uint64_t epoch);
   AuroraStats stats() const;
+  // Runs on the owning thread inside every presented frame, after the game's
+  // draws and before Aurora ends the frame: the place for ImGui overlay drawing
+  // (menu, HUD, sign-in), which Aurora composites over the presented image.
+  void set_overlay(std::function<void()> draw);
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -17,9 +17,13 @@
 #include "slippi_online.h"
 #include "window.h"
 #if MELEE_NX_AURORA
+#include "game_menu.h"
 #include "gx_aurora_bridge.h"
 #include "metal_frontend.h"
 #include "metal_window.h"
+#include "overlay_imgui.h"
+#include "slippi_login.h"
+#include "switch_signin.h"
 #endif
 
 #include <atomic>
@@ -49,6 +53,15 @@ constexpr size_t kSimulationStack = 32u << 20;
 std::atomic<int> g_exit_code{-1};
 std::string g_result = "running";
 int g_volume = 100;
+bool g_hud = false;
+std::string g_base;
+std::map<std::string, std::string> g_ini;
+
+void write_ini(const std::string& path, const std::map<std::string, std::string>& values) {
+  std::ofstream out(path, std::ios::trunc);
+  out << "# Melee-NX-NetPlay settings. Edit while the app is closed; the in-game menu (L+R+Start) saves here too.\n";
+  for (const auto& [key, value] : values) out << key << '=' << value << '\n';
+}
 
 std::map<std::string, std::string> read_ini(const std::string& path) {
   std::map<std::string, std::string> out;
@@ -74,6 +87,7 @@ void simulation_thread(void*) {
   std::unique_ptr<host::MetalFrontend> frontend;
   bool attached = false;
 #endif
+  bool quit_before_boot = false;
   {
     host::ScopedFatalBoundary fatal_boundary;
     ppc::ScopedGuestFpEnvironment fp_environment(0);
@@ -93,13 +107,51 @@ void simulation_thread(void*) {
         host::metal_window_attach(*frontend);
         attached = true;
         host::g_has_window = true;
+        auto& online = slippi::online::config();
+        if (!online.offline) {
+          // Signed in already (user.json from a previous sign-in or copied from the
+          // Slippi Launcher)? Then straight to the game; otherwise the sign-in screen.
+          slippi::login::Account account;
+          if (!slippi::login::read_user_file(online.user_dir, account) || !account.valid()) {
+            std::string name, connect;
+            switch (host::switch_signin_run(*frontend, online.user_dir, name, connect)) {
+              case host::SignInResult::SignedIn: break;
+              case host::SignInResult::PlayOffline: online.offline = true; host::options.offline = true; host::log("slippi: playing offline"); break;
+              case host::SignInResult::Quit: g_result = "requested_exit"; code = 0; quit_before_boot = true; break;
+            }
+          } else {
+            host::log("slippi: signed in as %s (%s)", account.display_name.c_str(), account.connect_code.c_str());
+          }
+        }
+        {
+          host::RuntimeSettings rs;
+          rs.volume = g_volume; rs.hud = g_hud; rs.online_delay = online.delay; rs.vsync = true;
+          host::menu_init(rs, [](const host::RuntimeSettings& st, host::MenuChange what) {
+            switch (what) {
+              case host::MenuChange::Volume: host::audio_set_volume(st.volume); g_ini["volume"] = std::to_string(st.volume); break;
+              case host::MenuChange::Hud: g_ini["hud"] = st.hud ? "1" : "0"; break;
+              case host::MenuChange::OnlineDelay:
+                slippi::online::config().delay = st.online_delay;
+                g_ini["online_delay"] = std::to_string(st.online_delay);
+                host::log("slippi: online input delay now %d frame%s, from the next match", st.online_delay, st.online_delay == 1 ? "" : "s");
+                break;
+              default: break;   // graphics, touch and fullscreen rows have no effect on the console yet
+            }
+            write_ini(g_base + "/launcher.ini", g_ini);
+          });
+        }
+        host::switch_frontend_set_overlay([] {
+          host::OverlayFrame overlay;
+          if (host::game_overlay(overlay)) host::overlay_imgui_draw(overlay);
+        });
         gx::init(frontend.get());
-        const bool audio_ok = host::audio_open(g_volume, nullptr, true);
+        const bool audio_ok = quit_before_boot || host::audio_open(g_volume, nullptr, true);
 #else
         gx::init(nullptr);
         const bool audio_ok = host::audio_open(0, host::options.audio_dump.c_str(), false);
 #endif
-        if (!audio_ok) {
+        if (quit_before_boot) {
+        } else if (!audio_ok) {
           host::log("cannot open the audio output"); g_result = "audio_open_failed"; code = 1;
         } else {
           ppc::init_dispatch();
@@ -182,7 +234,9 @@ int main(int argc, char** argv) {
   ensure_dir(base + "/Replays");
   ensure_dir(base + "/Cache");
   ensure_dir(base + "/Logs");
-  const auto ini = read_ini(base + "/launcher.ini");
+  g_base = base;
+  g_ini = read_ini(base + "/launcher.ini");
+  const auto& ini = g_ini;
   auto get = [&](const char* key, const std::string& fallback) {
     auto it = ini.find(key); return it == ini.end() || it->second.empty() ? fallback : it->second;
   };
@@ -199,6 +253,7 @@ int main(int argc, char** argv) {
   o.fast = get("fast", "0") == "1";
   o.volume = 0;
   g_volume = static_cast<int>(std::strtol(get("volume", "100").c_str(), nullptr, 10));
+  g_hud = get("hud", "0") == "1";
   // Slippi identity: user.json (connect code, play key) in User/Slippi, the Slippi
   // Launcher's own layout, until the console has a sign-in screen. The online
   // input delay is a player setting (1..9, Slippi's default 2), never hardcoded.
