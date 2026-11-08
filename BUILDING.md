@@ -60,6 +60,12 @@ MELEE_NX_FRONTEND=aurora bash builder/docker.sh game all
 `builder/docker.sh sdk-image` packages the toolchain with the Mesa archives so later machines need
 no Mesa checkout, as in Melee-NX.
 
+The renderer build includes the Slippi online services (`MELEE_NX_ONLINE`, on by default). Until the
+console has a sign-in screen, copy your Slippi identity from the Slippi Launcher
+(`.../Slippi Launcher/netplay/User/Slippi/user.json`: connect code and play key) to
+`sdmc:/switch/melee-nx-netplay/User/Slippi/user.json`. `launcher.ini` keys: `online_delay=` (1..9,
+default 2), `offline=1` to keep the services off, `volume=` (0..100).
+
 ## Settings
 
 | Variable | Default | Purpose |

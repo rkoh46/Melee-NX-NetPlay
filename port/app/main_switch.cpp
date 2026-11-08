@@ -178,6 +178,7 @@ int main(int argc, char** argv) {
   ensure_dir(base + "/User");
   ensure_dir(base + "/User/GC");
   ensure_dir(base + "/User/GC/CardA");
+  ensure_dir(base + "/User/Slippi");
   ensure_dir(base + "/Replays");
   ensure_dir(base + "/Cache");
   ensure_dir(base + "/Logs");
@@ -196,11 +197,21 @@ int main(int argc, char** argv) {
   o.log_file = base + "/Logs/latest.log";
   o.frames = static_cast<uint32_t>(std::strtoul(get("frames", "0").c_str(), nullptr, 10));
   o.fast = get("fast", "0") == "1";
-  o.offline = true;
   o.volume = 0;
   g_volume = static_cast<int>(std::strtol(get("volume", "100").c_str(), nullptr, 10));
-  slippi::online::config().offline = true;
-  slippi::online::config().user_dir = o.profile_dir;
+  // Slippi identity: user.json (connect code, play key) in User/Slippi, the Slippi
+  // Launcher's own layout, until the console has a sign-in screen. The online
+  // input delay is a player setting (1..9, Slippi's default 2), never hardcoded.
+  auto& online = slippi::online::config();
+  online.user_dir = base + "/User/Slippi";
+  int delay = static_cast<int>(std::strtol(get("online_delay", "2").c_str(), nullptr, 10));
+  online.delay = delay < 1 ? 1 : delay > 9 ? 9 : delay;
+#if MELEE_NX_AURORA && !defined(MELEE_PORT_OFFLINE)
+  o.offline = get("offline", "0") == "1";
+#else
+  o.offline = true;
+#endif
+  online.offline = o.offline;
   const std::string script = get("script", "");
   if (!script.empty() && !host::input_load_script(script.c_str()))
     std::printf("cannot load input script %s\n", script.c_str());

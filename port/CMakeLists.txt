@@ -52,7 +52,11 @@ else()
     runtime/host/input_sdl.cpp runtime/host/gc_adapter_none.cpp runtime/host/audio_sdl.cpp
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/switch_frontend_aurora.cpp
     runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp)
-  set(PORT_ONLINE 0)   # phase 3 turns this on
+  option(MELEE_NX_ONLINE "Build the Slippi online services (ENet netplay, matchmaking, login, reports) into the renderer frontend" ON)
+  set(PORT_ONLINE ${MELEE_NX_ONLINE})
+  if(PORT_ONLINE)
+    list(APPEND PORT_FRONTEND_SOURCES runtime/hle/slippi_text.cpp)
+  endif()
 endif()
 
 add_library(runtime_switch STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} ${PORT_FRONTEND_SOURCES} ${PORT_SWITCH_SOURCES})
