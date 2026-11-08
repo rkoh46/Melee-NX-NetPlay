@@ -21,6 +21,8 @@ target_include_directories(port_enet PUBLIC third_party/enet/include)
 # exist; the GNU *_r resolver variants do not.
 target_compile_definitions(port_enet PRIVATE HAS_FCNTL=1 HAS_POLL=1 HAS_INET_PTON=1 HAS_INET_NTOP=1
   HAS_SOCKLEN_T=1 HAS_MSGHDR_FLAGS=1)
+# libnx declares htons/htonl in <arpa/inet.h>, which ENet's unix.h does not include.
+target_compile_options(port_enet PRIVATE -include arpa/inet.h)
 
 # ---- Portable runtime: CPU context, HLE of the GameCube SDK, Slippi, GX decoding ----
 set(PORT_PORTABLE_RUNTIME_SOURCES
@@ -32,7 +34,6 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
   runtime/hle/slippi_playback.cpp runtime/hle/slippi_report.cpp runtime/hle/slippi_login.cpp
   runtime/hle/slippi_http_curl.cpp runtime/hle/discord_rpc_none.cpp
   runtime/host/host.cpp runtime/host/host_log.cpp runtime/host/vcdiff.cpp runtime/host/input_script.cpp
-  runtime/host/gc_adapter_none.cpp
   runtime/gx/gx_core.cpp runtime/gx/gx_texture.cpp runtime/gx/gx_shader.cpp
   runtime/gx/authored_pose.cpp runtime/gx/render_observer.cpp runtime/gx/subframe.cpp
   third_party/slippilib/SlippiGame.cpp)

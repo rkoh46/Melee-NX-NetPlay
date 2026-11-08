@@ -106,10 +106,14 @@ void simulation_thread(void*) {
 }  // namespace
 
 extern "C" void userAppInit() {
+  romfsInit();                 // Slippi's Sys folder ships in the NRO as romfs:/Sys
   socketInitializeDefault();
-  nxlinkStdio();
+  nxlinkStdio();               // stdout to nxlink when a host is listening; harmless otherwise
 }
-extern "C" void userAppExit() { socketExit(); }
+extern "C" void userAppExit() {
+  socketExit();
+  romfsExit();
+}
 
 int main(int argc, char** argv) {
   (void)argc; (void)argv;
