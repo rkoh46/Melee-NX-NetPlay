@@ -38,7 +38,7 @@ application memory (hold R while opening a game). The console shows the frame co
 Optional keys in `launcher.ini` next to the NRO: `frames=` (stop after N), `fast=1` (no pacing),
 `script=` (an input script from `port/scripts/`, for a scripted match), `iso=`.
 
-## 4. Renderer build (phase 2, when it lands)
+## 4. Renderer build (phase 2)
 
 The Vulkan path needs Mesa's NVK built for the Switch. Nothing prebuilt exists; build it once from
 the pinned fork (Docker, about an hour, pinned commit in `builder/fetch-deps.sh`):
@@ -49,6 +49,10 @@ cd ref/mesa-switch && bash build-switch.sh && cd ../..
 export MESA_NVK_ROOT="$PWD/ref/mesa-switch"
 ```
 
+The "LLVM gold plugin has failed to create LTO module" lines at the end are `ar` noting the LLVM
+bitcode Rust embeds in its objects; the archives are complete. With Colima, keep `ref/mesa-switch`
+on a shared volume (the fetcher clones it inside the checkout, which is fine when the checkout is).
+
 Then the graphics dependencies and the game:
 
 ```bash
@@ -56,6 +60,8 @@ bash builder/fetch-deps.sh                  # melee-pc (for Aurora), Dawn, SDL
 bash builder/docker.sh graphics all         # patches, Dawn, SDL (1-3 hours)
 MELEE_NX_FRONTEND=aurora bash builder/docker.sh game all
 ```
+
+Output: `build/switch-aurora/port/melee-nx-netplay.nro` (about 100 MB).
 
 `builder/docker.sh sdk-image` packages the toolchain with the Mesa archives so later machines need
 no Mesa checkout, as in Melee-NX.
