@@ -34,8 +34,8 @@ backend and startup glue from Melee-NX. See [docs/ARCHITECTURE.md](docs/ARCHITEC
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Headless simulation on the console: a scripted match, log to SD, measure ms/frame | builds in progress |
-| 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | not started |
+| 1 | Headless simulation on the console: a scripted match, log to SD, measure ms/frame | NRO builds (71 MB); first hardware run pending |
+| 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | frontend, Aurora, Dawn and SDL compile for the Switch; the link waits on a Mesa/NVK build; overlay text not started |
 | 3 | Slippi online: ENet over libnx sockets, curl for login and reports, sign-in screen, online delay setting | not started |
 | 4 | Overclock profile, rollback cost tuning, release notes | not started |
 
