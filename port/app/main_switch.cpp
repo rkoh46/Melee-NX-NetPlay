@@ -371,7 +371,9 @@ int main(int argc, char** argv) {
     std::printf("cannot load input script %s\n", script.c_str());
   // Measurement aids read by hle_pad.cpp at the first pad poll: force_css=1 opens the character select
   // with P2 Fox and P3 Marth as CPUs (a script then needs only START); force_cpu=1..9 is their level.
-  if (get("force_css", "0") == "1") setenv("MELEE_FORCE_CSS", "1", 1);
+  if (const std::string v = get("force_css", "0"); v == "1" || v == "4") setenv("MELEE_FORCE_CSS", v.c_str(), 1);
+  if (get("force_teams", "0") == "1") setenv("MELEE_FORCE_TEAMS", "1", 1);
+  if (const std::string v = get("force_stage", ""); !v.empty()) setenv("MELEE_FORCE_STAGE", v.c_str(), 1);
   if (const std::string level = get("force_cpu", ""); !level.empty()) setenv("MELEE_FORCE_CPU", level.c_str(), 1);
   // hle_verify=1: hooked matrix routines also run the original code in the interpreter and log differences.
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);

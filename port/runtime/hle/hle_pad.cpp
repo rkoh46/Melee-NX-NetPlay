@@ -57,19 +57,37 @@ HLE(PADRead) {
   // gmMainLib_804D3EE0->modes.vs_melee at +0x590; players at +0x68 of the VsModeData, 0x24 each: ckind +0,
   // slot_type +1 (Gm_PKind 1 = CPU, 3 = none), cpu_level +0xF). The screen then opens ready to fight and a
   // script needs only START; toggling the tags with timed presses depended on the saved state and lost runs.
-  static const bool force_css = [] { const char* v = std::getenv("MELEE_FORCE_CSS"); return v && std::atoi(v) == 1; }();
+  // force_css=4: four CPUs (Fox, Marth, Falco, Peach). force_teams=1 (MELEE_FORCE_TEAMS): a team battle,
+  // P1/P2 red against P3/P4 blue (rules.is_teams at +0x08 of the match rules; the character select keeps
+  // each door's team in its own state, mnCharSel_803F0DFC.doors[i].team at +0x0A of 0x24-byte doors, and
+  // copies it into the players every frame, so the doors are set while the select is up).
+  static const int force_css = [] { const char* v = std::getenv("MELEE_FORCE_CSS"); const int n = v ? std::atoi(v) : 0; return n == 1 || n == 4 ? n : 0; }();
+  static const bool force_teams = [] { const char* v = std::getenv("MELEE_FORCE_TEAMS"); return v && v[0] == '1'; }();
   if (force_css && host::rd8(0x80479D30) == 0x01) {
     if (const uint32_t save = host::rd32(0x804D3EE0); save >= 0x80000000u && save < 0x81800000u) {
-      static const uint8_t kinds[4] = {0x1A, 0x02, 0x09, 0x1A};   // CKIND_PLAYABLE_COUNT (none), Fox, Marth, none
+      static const uint8_t two[4] = {0x1A, 0x02, 0x09, 0x1A};    // CKIND_PLAYABLE_COUNT (none), Fox, Marth, none
+      static const uint8_t four[4] = {0x02, 0x09, 0x14, 0x0C};   // Fox, Marth, Falco, Peach (Sheik has no icon: the select closes her slot)
+      const uint8_t* kinds = force_css == 4 ? four : two;
       for (uint32_t i = 0; i < 4; ++i) {
         const uint32_t player = save + 0x590 + 0x68 + i * 0x24;
-        const bool cpu = i == 1 || i == 2;
+        const bool cpu = force_css == 4 || i == 1 || i == 2;
         host::wr8(player + 0x0, kinds[i]);
         host::wr8(player + 0x1, cpu ? 1 : 3);
+        host::wr8(player + 0x9, i < 2 ? 0 : 1);   // team: red, red, blue, blue (used only in a team battle)
         host::wr8(player + 0xF, force_cpu ? force_cpu : 9);
       }
+      host::wr8(save + 0x590 + 0x8 + 0x8, force_teams ? 1 : 0);   // rules.is_teams
     }
   }
+  if (force_teams && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x00)
+    for (uint32_t i = 0; i < 4; ++i) host::wr8(0x803F0DFC + i * 0x24 + 0x0A, i < 2 ? 0 : 1);
+  // force_stage=N (MELEE_FORCE_STAGE): the stage of the match, Slippi's stage ids (2 Fountain of Dreams ..
+  // 31 Battlefield, 32 Final Destination). Written into the stage select's copy of the match setup
+  // (gmVsMelee_SssData + 8 VsModeData, + 8 StartMeleeData, rules.stkind at +0x0E) for as long as the
+  // select is up; its exit copies the setup back (gmVsMelee_ExitSss: *vs = sss->vs).
+  static const uint16_t force_stage = [] { const char* v = std::getenv("MELEE_FORCE_STAGE"); const int n = v ? std::atoi(v) : 0; return (uint16_t)(n > 0 && n < 64 ? n : 0); }();
+  if (force_stage && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01)
+    host::wr16(0x80480668 + 0x8 + 0x8 + 0x0E, force_stage);
   if (force_cpu && !force_css && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01) {
     for (uint32_t i = 0; i < 2; ++i) {
       const uint32_t player = 0x80480668 + 0x8 + 0x68 + i * 0x24;
