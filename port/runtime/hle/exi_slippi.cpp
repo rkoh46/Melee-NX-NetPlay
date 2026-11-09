@@ -4,6 +4,9 @@
 #include "slippi_playback.h"
 #include "slippi_online.h"
 #include "slippi_game_file.h"
+#if defined(__SWITCH__)
+#include "log_switch.h"
+#endif
 #include "gecko_data.h"
 #include "discord_rpc.h"
 #include "host.h"
@@ -125,9 +128,28 @@ std::vector<uint8_t> generate_metadata() {
   return m;
 }
 
+// Replay bytes leave the simulation thread through the console's writer thread: an SD card
+// fsFileWrite from here cost the frame milliseconds whenever the stdio buffer filled.
+void replay_write(const void* data, size_t size) {
+#if defined(__SWITCH__)
+  melee_nx_file_write(g_file, data, size);
+#else
+  std::fwrite(data, 1, size, g_file);
+#endif
+}
+void replay_drain() {
+#if defined(__SWITCH__)
+  melee_nx_log_flush();
+#endif
+}
+
 void close_file() {
   if (!g_file) return;
+#if defined(__SWITCH__)
+  melee_nx_file_close(g_file); g_file = nullptr;   // drains the queued bytes first
+#else
   std::fclose(g_file); g_file = nullptr;
+#endif
   ++g_replays_written;
   host::log("slippi: replay written: %s (%u raw bytes, last frame %d)", g_replay_path.c_str(), g_written, g_last_frame);
 }
@@ -143,7 +165,7 @@ void create_file() {
   g_file = std::fopen(g_replay_path.c_str(), "wb");
   if (!g_file) { host::log("slippi: cannot create %s", g_replay_path.c_str()); return; }
   const uint8_t header[] = {'{', 'U', 3, 'r', 'a', 'w', '[', '$', 'U', '#', 'l', 0, 0, 0, 0};
-  std::fwrite(header, 1, sizeof header, g_file);
+  replay_write(header, sizeof header);
   g_written = 0;
   g_char_usage.clear();
   g_last_frame = -123;
@@ -156,13 +178,14 @@ void write_to_file(const uint8_t* payload, uint32_t length, const char* option) 
     g_last_frame = (int32_t)be32(payload + 1);
     g_char_usage[payload[5]][payload[7]] += 1;
   }
-  std::fwrite(payload, 1, length, g_file);
+  replay_write(payload, length);
   g_written += length;
   if (std::strcmp(option, "close") == 0) {
     std::vector<uint8_t> closing = generate_metadata();
     closing.push_back('}');
-    std::fwrite(closing.data(), 1, closing.size(), g_file);
+    replay_write(closing.data(), closing.size());
     uint8_t size_bytes[4] = {(uint8_t)(g_written >> 24), (uint8_t)(g_written >> 16), (uint8_t)(g_written >> 8), (uint8_t)g_written};
+    replay_drain();   // the header patch below seeks: everything queued must be on disk first
     std::fseek(g_file, 11, SEEK_SET);
     std::fwrite(size_bytes, 1, 4, g_file);
     close_file();

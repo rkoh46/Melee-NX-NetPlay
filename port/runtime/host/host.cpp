@@ -517,7 +517,7 @@ double frame_time() { return g_frame_time; }
 static double g_sim_costs[SIM_COST_COUNT];
 static double g_sim_costs_window[SIM_COST_COUNT];   // accumulated over the 60-frame log interval
 static double g_sim_ms_window = 0, g_sim_ms_worst = 0;
-static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe", "render", "texture", "pump", "gpuwait", "drawable", "savestate"};
+static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe", "record", "render", "texture", "pump", "gpuwait", "drawable", "savestate"};
 static double g_sim_frame_start = 0.0, g_last_sim_ms = 0.0;
 static std::atomic<std::thread::id> g_sim_thread;    // set by the first retrace; other threads (the renderer) report separately
 static double g_render_costs_window[SIM_COST_COUNT];

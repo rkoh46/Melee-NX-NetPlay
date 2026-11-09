@@ -41,7 +41,11 @@ void keep_pending(const char* data, size_t size) {
 }
 void close_log_file() {
   std::lock_guard<std::mutex> lock(log_mutex);
+#if defined(__SWITCH__)
+  if (log_file) { melee_nx_file_close(log_file); log_file = nullptr; }   // drains the writer thread's queue first
+#else
   if (log_file) { std::fflush(log_file); std::fclose(log_file); log_file = nullptr; }
+#endif
   log_closed = true;
 }
 void set_fatal_observer(FatalObserver observer) {
@@ -73,10 +77,7 @@ void log(const char* fmt, ...) {
   size_t len = std::min<size_t>((size_t)n, sizeof line - 2); line[len++] = '\n';
   melee_nx_log_write(line, len);
   if (log_file) {
-    std::fwrite(line, 1, len, log_file);
-    static auto next_flush = std::chrono::steady_clock::now();
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= next_flush) { std::fflush(log_file); next_flush = now + std::chrono::milliseconds(250); }
+    melee_nx_file_write(log_file, line, len);   // the writer thread owns the SD card: fsFileWrite was 5% of the simulation thread
   } else if (!log_tried) {
     keep_pending(line, len);
   }
@@ -98,7 +99,7 @@ void log_guest_text(const char* data, size_t size) {
   if (log_closed) return;
 #if defined(__SWITCH__)
   melee_nx_log_write(data, size);
-  if (log_file) std::fwrite(data, 1, size, log_file);   // flushed with the next log line
+  if (log_file) melee_nx_file_write(log_file, data, size);
   else keep_pending(data, size);
   return;
 #endif
@@ -112,7 +113,12 @@ void log_guest_text(const char* data, size_t size) {
   {
     std::lock_guard<std::mutex> lock(log_mutex);
     std::fprintf(stderr, "\nFATAL: %s\n", reason);
-    if (!log_closed && log_file) { std::fprintf(log_file, "\nFATAL: %s\n", reason); std::fflush(log_file); }
+    if (!log_closed && log_file) {
+#if defined(__SWITCH__)
+      melee_nx_log_flush();   // queued lines first, so the report reads in order
+#endif
+      std::fprintf(log_file, "\nFATAL: %s\n", reason); std::fflush(log_file);
+    }
     std::fflush(stderr); std::fflush(stdout);
 #if defined(__SWITCH__)
     melee_nx_log_flush();

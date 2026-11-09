@@ -78,8 +78,9 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   const std::string where = "draw " + std::to_string(index);
   const auto check = [&](bool ok, const char* reason) { if (!ok) fail(frame, where, reason); };
   const auto soft = [&](bool ok, const char* reason) { if (!ok) warn(frame, where, reason); };
-  check(d.vertex_count > 0 && d.vertex_count <= 65535 && d.first_vertex <= frame.vertices.size() &&
-        d.vertex_count <= frame.vertices.size() - d.first_vertex, "invalid vertex range");
+  check(d.vertex_count > 0 && d.vertex_count <= 65535 &&
+        (d.raw_size || (d.first_vertex <= frame.vertices.size() && d.vertex_count <= frame.vertices.size() - d.first_vertex)),
+        "invalid vertex range");
   check(d.primitive == 0x80 || d.primitive == 0x90 || d.primitive == 0x98 || d.primitive == 0xa0,
         "only quads and triangle primitives are supported by the locked baseline");
   check(d.vertex_count >= (d.primitive == 0x80 ? 4u : 3u) &&
@@ -89,7 +90,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
                                  (0xffu << 15) | VB_UNCAPTURED_NBT;
   check((d.components & ~supported) == 0, "unknown/lost vertex components are unsupported");
   constexpr uint32_t any_normal = VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT;
-  soft(!(d.components & (VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT)),
+  soft(d.raw_size || !(d.components & (VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT)),
        "NBT binormal/tangent are not captured; the normal alone is used (emboss texgens will be flat)");
   const auto texgens = d.xf_regs[0x3f];
   // Emboss texgens and binormal/tangent sources need nine-component normals in
@@ -155,6 +156,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
           "indirect stage source was not captured");
 
   out.state.clear(); out.vertices.clear();   // the caller's Draw keeps its buffers between frames
+  out.arrays.fill(nullptr);
   out.primitive = uint8_t(d.primitive); out.vertex_count = uint16_t(d.vertex_count);
   std::copy(std::begin(d.textures), std::end(d.textures), out.textures.begin());
   auto& state = out.state;
@@ -260,12 +262,39 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
       block_changed(d.xf_regs + 0x50, prev ? prev->xf_regs + 0x50 : nullptr, 8 * 4))
     xf_words(state, 0x1050, post, 8);
 
+  if (indices_changed) { cp(state, 0x30, d.matrix_index_a); cp(state, 0x40, d.matrix_index_b); }
+  if (d.raw_size) {
+    // Raw capture: the game's own vertex descriptor, format registers and vertex bytes go to Aurora's
+    // command processor unchanged; each indexed array is the snapshotted slice the indices (rebased
+    // at capture) address. No decode on the simulation thread, no re-encode here.
+    check(d.raw_offset <= frame.raw_vertices.size() && d.raw_size <= frame.raw_vertices.size() - d.raw_offset, "invalid raw vertex range");
+    if (!prev || prev->vcd_lo != d.vcd_lo || prev->vcd_hi != d.vcd_hi) { cp(state, 0x50, d.vcd_lo); cp(state, 0x60, d.vcd_hi); }
+    const unsigned fmt = d.vtxfmt & 7;
+    if (!prev || prev->vtxfmt != d.vtxfmt || prev->vat[0] != d.vat[0] || prev->vat[1] != d.vat[1] || prev->vat[2] != d.vat[2]) {
+      cp(state, uint8_t(0x70 + fmt), d.vat[0]); cp(state, uint8_t(0x80 + fmt), d.vat[1]); cp(state, uint8_t(0x90 + fmt), d.vat[2]);
+    }
+    for (unsigned i = 0; i < 12; ++i) {
+      const auto& a = d.arrays[i];
+      out.arrays[i] = a.data;
+      if (!a.data) { check(!a.stride || a.data, "indexed vertex array outside RAM"); continue; }
+      check(a.data->size() >= a.bytes, "vertex array slice was not captured");
+      // GX_AURORA_LOAD_ARRAYBASE | attribute: host pointer (u64), size (u32), little-endian flag (u8).
+      state.push_back(0x50); u16(state, uint16_t(0x0010 | i));
+      const uint64_t ptr = reinterpret_cast<uintptr_t>(a.data->data());
+      u32(state, uint32_t(ptr >> 32)); u32(state, uint32_t(ptr));
+      u32(state, uint32_t(a.data->size())); state.push_back(0);
+      cp(state, uint8_t(0xB0 + i), a.stride);
+    }
+    out.primitive = uint8_t(d.primitive | fmt);
+    out.vertices.assign(frame.raw_vertices.begin() + d.raw_offset, frame.raw_vertices.begin() + d.raw_offset + d.raw_size);
+    out.vertex_stride = d.raw_size / d.vertex_count;
+    return;
+  }
   uint32_t vcd_lo = (d.components & 0x1ff) | (1u << 9), vcd_hi = 0;
   if (d.components & any_normal) vcd_lo |= 1u << 11;   // normal only, even for NBT sources
   if (d.components & VB_HAS_COL0) vcd_lo |= 1u << 13;
   if (d.components & VB_HAS_COL1) vcd_lo |= 1u << 15;
   for (unsigned i = 0; i < 8; ++i) if (d.components & (VB_HAS_UV0 << i)) vcd_hi |= 1u << (i * 2);
-  if (indices_changed) { cp(state, 0x30, d.matrix_index_a); cp(state, 0x40, d.matrix_index_b); }
   if (!prev || prev->components != d.components) { cp(state, 0x50, vcd_lo); cp(state, 0x60, vcd_hi); }
   // F32 XYZ/normal (NBT when synthesized), RGBA8 colors, F32 ST. All fractions are zero.
   const uint32_t vat_a = 1 | (4u << 1) | (nbt ? 1u << 9 : 0) | (4u << 10) | (1u << 13) | (5u << 14) |

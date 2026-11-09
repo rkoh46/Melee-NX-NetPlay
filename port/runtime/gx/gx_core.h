@@ -59,6 +59,15 @@ struct TextureRef {
   bool used = false;
 };
 
+// One indexed vertex array of a raw-captured draw: the referenced slice of guest memory (indices
+// first_index..first_index+count-1, rebased to 0 in the raw stream) with its stride.
+struct VertexArrayRef {
+  // Bytes from the array base up to the highest element any draw of the frame addressed (one copy
+  // per array per frame, extended when a later draw reaches further); indices stay as the game wrote them.
+  std::shared_ptr<const std::vector<uint8_t>> data;
+  uint32_t stride = 0, first_index = 0, count = 0, bytes = 0;
+};
+
 struct AuthoredPose;
 struct DrawCall {
   // ~5 KB of register and matrix snapshots, recorded ~1400 times per simulation frame. Zeroing all
@@ -70,6 +79,12 @@ struct DrawCall {
   uint32_t primitive;              // GX primitive opcode & 0xF8
   uint32_t first_vertex, vertex_count;
   uint32_t components;
+  // Raw capture (Frame::raw_vertices): the draw's vertex bytes exactly as the game wrote them, with
+  // indices rebased per array, plus the CP vertex descriptor and format registers that decode them.
+  // A renderer that consumes the hardware vertex format (Aurora) uses these instead of `vertices`.
+  uint32_t vtxfmt = 0, raw_offset = 0, raw_size = 0;
+  uint32_t vcd_lo = 0, vcd_hi = 0, vat[3] = {0, 0, 0};
+  VertexArrayRef arrays[12];       // pos, nrm, col0, col1, tex0..tex7 (unused when not indexed)
   // Register snapshots used by shader generation and pipeline state.
   BPMemory bp;
   // XF subset needed by the vertex shader (matrices are copied in full: simplest and rollback-safe).
@@ -158,6 +173,7 @@ struct FrameCommand {
 
 struct Frame {
   VertexVector vertices;
+  std::vector<uint8_t> raw_vertices;   // raw-captured vertex streams (DrawCall::raw_offset/raw_size)
   std::vector<DrawCall> draws;
   std::vector<EfbCopy> copies;
   std::vector<FrameCommand> commands;
@@ -176,7 +192,7 @@ struct Frame {
   // and the renderer decides when to present by comparing sequences. Leaving a stale one on a
   // buffer that is about to be refilled is only harmless while every producer remembers to assign
   // one before pushing.
-  void clear() { vertices.clear(); draws.clear(); copies.clear(); commands.clear(); sequence = 0; time = 0.0; discontinuous = false; }
+  void clear() { vertices.clear(); raw_vertices.clear(); draws.clear(); copies.clear(); commands.clear(); sequence = 0; time = 0.0; discontinuous = false; }
 };
 
 // Whether a frame certainly shows a running match. Anything else counts as a menu: the character and
@@ -217,6 +233,9 @@ struct Backend {
   virtual void set_present_deadline(double) {}
   virtual double presentation_wait_seconds() const { return 0; }
   virtual void submit_frame(const Frame& frame) = 0;   // called at XFB copy
+  // True for a renderer that consumes the hardware vertex format: the capture then records each
+  // draw's raw vertex bytes and indexed-array slices (DrawCall::raw_*) instead of decoding vertices.
+  virtual bool wants_raw_vertices() const { return false; }
   // Queueing backends take the frame's buffers and hand back recycled ones (no copy, no
   // per-frame reallocation on the simulation thread); `frame` comes back cleared either way.
   virtual void submit_and_recycle(Frame& frame) { submit_frame(frame); frame.clear(); }

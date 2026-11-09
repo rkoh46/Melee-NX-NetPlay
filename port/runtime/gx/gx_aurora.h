@@ -44,6 +44,9 @@ public:
   // so render experiments can be switched during a match without relaunching (see kDebug* in the .cpp).
   // Bit 32 writes a draw dump of the next frame next to the file (draws-now.txt) and clears itself.
   void set_debug_file(std::string path);
+  // Aurora's command processor consumes the GameCube vertex format directly (VCD/VAT registers,
+  // indexed arrays bound by host pointer): the capture hands it the raw streams.
+  bool wants_raw_vertices() const override { return true; }
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

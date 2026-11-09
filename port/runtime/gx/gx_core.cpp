@@ -50,12 +50,22 @@ struct AttrDesc {
   uint32_t array;     // CP array index for indexed
 };
 
+// One indexed attribute's place in the vertex stream, for the raw capture (scan + rebase indices).
+struct IndexedAttr {
+  uint8_t attr;         // 0 pos, 1 nrm, 2 col0, 3 col1, 4..11 tex0..7 (also the CP array index)
+  uint8_t offset;       // byte offset of its first index within the vertex
+  uint8_t index_bytes;  // 1 or 2
+  uint8_t index_count;  // 1, or 3 for NBT with separate indices
+  uint32_t elem_bytes;  // bytes of one array element
+};
 struct VertexDesc {
   bool posmtx;
   bool texmtx[8];
   AttrDesc pos, nrm, col[2], tex[8];
   uint32_t nrm_index3;
   uint32_t size;      // bytes per vertex in the stream
+  uint32_t vcd_lo, vcd_hi, vat[3];   // the CP registers this descriptor was built from
+  IndexedAttr indexed[12]; uint32_t indexed_count;
 };
 
 uint32_t comp_bytes(uint32_t format) { static const uint32_t b[] = {1, 1, 2, 2, 4, 4, 4, 4}; return b[format & 7]; }
@@ -79,19 +89,30 @@ VertexDesc build_desc_uncached(uint32_t fmt) {
   d.tex[5] = {bits(hi, 10, 2), bits(c, 6, 3), bits(c, 5, 1), bits(c, 9, 5), 9};
   d.tex[6] = {bits(hi, 12, 2), bits(c, 15, 3), bits(c, 14, 1), bits(c, 18, 5), 10};
   d.tex[7] = {bits(hi, 14, 2), bits(c, 24, 3), bits(c, 23, 1), bits(c, 27, 5), 11};
+  d.vcd_lo = lo; d.vcd_hi = hi; d.vat[0] = a; d.vat[1] = b; d.vat[2] = c;
+  d.indexed_count = 0;
   uint32_t size = 0;
   if (d.posmtx) size += 1;
   for (int i = 0; i < 8; ++i) if (d.texmtx[i]) size += 1;
-  auto attr = [&](const AttrDesc& x, uint32_t direct) {
-    if (x.type == 1) size += direct; else if (x.type == 2) size += 1; else if (x.type == 3) size += 2;
+  // Walks the attributes in stream order; indexed ones are noted with their offset and element size.
+  auto attr = [&](const AttrDesc& x, uint8_t which, uint32_t direct, uint32_t index_count = 1) {
+    if (x.type == 1) size += direct;
+    else if (x.type == 2 || x.type == 3) {
+      const uint8_t ib = x.type == 2 ? 1 : 2;
+      d.indexed[d.indexed_count++] = {which, uint8_t(size), ib, uint8_t(index_count), direct / index_count};
+      size += ib * index_count;
+    }
   };
-  attr(d.pos, comp_bytes(d.pos.format) * (d.pos.count ? 3 : 2));
-  if (d.nrm.type == 1) size += comp_bytes(d.nrm.format) * (d.nrm.count ? 9 : 3);
-  else if (d.nrm.type == 2) size += (d.nrm.count && d.nrm_index3) ? 3 : 1;
-  else if (d.nrm.type == 3) size += (d.nrm.count && d.nrm_index3) ? 6 : 2;
+  attr(d.pos, 0, comp_bytes(d.pos.format) * (d.pos.count ? 3 : 2));
+  if (d.nrm.type) {
+    const uint32_t nvec = d.nrm.count ? 3 : 1;
+    // One index addresses all three NBT vectors unless the NBT3 flag asks for three indices.
+    const uint32_t nidx = (d.nrm.count && d.nrm_index3) ? 3 : 1;
+    attr(d.nrm, 1, comp_bytes(d.nrm.format) * 3 * nvec, nidx);
+  }
   static const uint32_t csize[] = {2, 3, 4, 2, 3, 4, 4, 4};
-  for (int i = 0; i < 2; ++i) attr(d.col[i], csize[d.col[i].format]);
-  for (int i = 0; i < 8; ++i) attr(d.tex[i], comp_bytes(d.tex[i].format) * (d.tex[i].count ? 2 : 1));
+  for (int i = 0; i < 2; ++i) attr(d.col[i], uint8_t(2 + i), csize[d.col[i].format]);
+  for (int i = 0; i < 8; ++i) attr(d.tex[i], uint8_t(4 + i), comp_bytes(d.tex[i].format) * (d.tex[i].count ? 2 : 1));
   d.size = size;
   return d;
 }
@@ -263,6 +284,56 @@ uint32_t decode_vertices(const VertexDesc& d, const uint8_t* src, uint32_t count
   return components;
 }
 
+// Components mask from the descriptor alone (what decode_vertices reports), for the raw path.
+uint32_t components_of(const VertexDesc& d) {
+  uint32_t components = 0;
+  if (d.posmtx) components |= VB_HAS_POSMTXIDX;
+  for (int i = 0; i < 8; ++i) if (d.texmtx[i]) components |= VB_HAS_TEXMTXIDX0 << i;
+  if (d.nrm.type) { components |= VB_HAS_NRM0; if (d.nrm.count) components |= VB_HAS_NRM1 | VB_HAS_NRM2; }
+  for (int i = 0; i < 2; ++i) if (d.col[i].type) components |= i ? VB_HAS_COL1 : VB_HAS_COL0;
+  for (int i = 0; i < 8; ++i) if (d.tex[i].type) components |= VB_HAS_UV0 << i;
+  return components;
+}
+
+// Raw capture: the draw's vertex bytes are copied as the game wrote them, and each indexed array is
+// captured once per frame from its base up to the highest element any draw addressed (a later draw
+// reaching further extends the copy). Pending until record_draw stores it in the DrawCall. One memcpy
+// per array per frame replaced a hashed, compared snapshot per draw, which cost as much as decoding.
+struct RawPending { uint32_t fmt = 0, offset = 0, size = 0; VertexArrayRef arrays[12]; bool valid = false; };
+RawPending g_raw_pending;
+bool g_raw_vertices = false;   // set by init(): renderers that consume the hardware format ask for it
+std::unordered_map<uint64_t, std::shared_ptr<std::vector<uint8_t>>> g_frame_arrays;   // (base, stride) -> this frame's copy
+
+void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src, uint32_t count) {
+  auto& out = g_frame.raw_vertices;
+  const size_t at = out.size(), bytes = size_t(count) * d.size;
+  out.resize(at + bytes);
+  std::memcpy(out.data() + at, src, bytes);
+  g_raw_pending = RawPending{};
+  g_raw_pending.fmt = fmt; g_raw_pending.offset = uint32_t(at); g_raw_pending.size = uint32_t(bytes); g_raw_pending.valid = true;
+  const uint8_t* verts = out.data() + at;
+  for (uint32_t k = 0; k < d.indexed_count; ++k) {
+    const IndexedAttr& ia = d.indexed[k];
+    uint32_t hi = 0;
+    for (uint32_t v = 0; v < count; ++v) {
+      const uint8_t* p = verts + size_t(v) * d.size + ia.offset;
+      for (uint32_t j = 0; j < ia.index_count; ++j, p += ia.index_bytes) hi = std::max(hi, ia.index_bytes == 1 ? uint32_t(*p) : be16(p));
+    }
+    const uint32_t base = g_cp.array_base(ia.attr) & 0x01FFFFFFu, stride = g_cp.array_stride(ia.attr);
+    const uint32_t need = hi * stride + ia.elem_bytes;
+    auto& ref = g_raw_pending.arrays[ia.attr];
+    if (base >= ppc::RAM_SIZE || need > ppc::RAM_SIZE - base) { ref.stride = stride ? stride : 1; continue; }   // outside RAM: unbound, the bridge skips the draw
+    auto& slot = g_frame_arrays[uint64_t(base) | (uint64_t(stride) << 32)];
+    if (!slot) slot = std::make_shared<std::vector<uint8_t>>();
+    if (slot->size() < need) {
+      const size_t had = slot->size();
+      slot->resize(need);
+      std::memcpy(slot->data() + had, host::ram + base + had, need - had);
+    }
+    ref.data = slot; ref.stride = stride; ref.first_index = 0; ref.count = hi + 1; ref.bytes = need;
+  }
+}
+
 // ---------------- draw snapshot ----------------
 void snapshot_textures(DrawCall& dc) {
   host::SimCostScope cost(host::SIM_SNAPSHOT);
@@ -326,6 +397,16 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
   dc.first_vertex = first;
   dc.vertex_count = count;
   dc.components = components;
+  if (g_raw_pending.valid) {
+    dc.vtxfmt = g_raw_pending.fmt; dc.raw_offset = g_raw_pending.offset; dc.raw_size = g_raw_pending.size;
+    const VertexDesc& desc = build_desc(dc.vtxfmt);
+    dc.vcd_lo = desc.vcd_lo; dc.vcd_hi = desc.vcd_hi; dc.vat[0] = desc.vat[0]; dc.vat[1] = desc.vat[1]; dc.vat[2] = desc.vat[2];
+    for (int i = 0; i < 12; ++i) dc.arrays[i] = std::move(g_raw_pending.arrays[i]);
+    g_raw_pending.valid = false;
+  } else {
+    dc.raw_size = 0;
+    for (int i = 0; i < 12; ++i) dc.arrays[i] = VertexArrayRef{};
+  }
   dc.bp = g_bp;
   std::memcpy(dc.posMatrices, g_xf.posMatrices, sizeof dc.posMatrices);
   std::memcpy(dc.normalMatrices, g_xf.normalMatrices, sizeof dc.normalMatrices);
@@ -441,6 +522,7 @@ void bp_write(uint32_t value) {
         if (g_backend) g_backend->submit_and_recycle(g_frame);   // hands over the buffers, returns recycled ones
         else g_frame.clear();
         g_texture_snapshots.end_frame();
+        g_frame_arrays.clear();   // the frame's draws keep their shared copies alive
         g_dl_calls.clear(); g_immediate_draws.clear(); finish_observed_frame();
       }
       break;
@@ -516,7 +598,9 @@ size_t parse_command(const uint8_t* d, size_t len) {
     if (len < need) return incomplete(need);
     if (count) {
       uint32_t first = (uint32_t)g_frame.vertices.size();
-      uint32_t components = decode_vertices(desc, d + 3, count, fmt);
+      uint32_t components;
+      if (g_raw_vertices) { capture_raw_vertices(desc, fmt, d + 3, count); components = components_of(desc); }
+      else components = decode_vertices(desc, d + 3, count, fmt);
       record_draw(op & 0xF8, first, count, components);
     }
     return need;
@@ -532,6 +616,7 @@ void mark_discontinuity() { g_discontinuity = true; }
 
 void init(Backend* backend) {
   g_backend = backend;
+  g_raw_vertices = backend && backend->wants_raw_vertices();
   std::memset(&g_bp, 0, sizeof g_bp);
   std::memset(&g_cp, 0, sizeof g_cp);
   std::memset(&g_xf, 0, sizeof g_xf);

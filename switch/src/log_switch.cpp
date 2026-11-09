@@ -6,6 +6,9 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
+#include <string>
+#include <utility>
+#include <vector>
 #if defined(__SWITCH__)
 #include <switch.h>
 #endif
@@ -20,6 +23,9 @@ size_t used = 0;
 unsigned pending = 0;
 bool running = false, stopping = false;
 uint64_t requested = 0, completed = 0, dropped = 0;
+struct FileChunk { FILE* file; std::string bytes; };
+std::vector<FileChunk> fileQueue;        // guarded by `mutex`; drained by the writer in order
+std::vector<FILE*> dirtyFiles;           // writer thread only: files with unflushed bytes
 pthread_once_t clockOnce = PTHREAD_ONCE_INIT;
 uint64_t clockStart = 0;
 
@@ -68,7 +74,21 @@ void* writer(void*) {
         const uint64_t request = requested, lost = dropped;
         dropped = 0;
         const bool stop = stopping;
+        std::vector<FileChunk> chunks;
+        chunks.swap(fileQueue);
         pthread_mutex_unlock(&mutex);
+
+        for (const FileChunk& chunk : chunks) {
+            if (!chunk.file) continue;
+            const auto start = now_ns();
+            if (std::fwrite(chunk.bytes.data(), 1, chunk.bytes.size(), chunk.file) != chunk.bytes.size()) ++errors;
+            writeNs += now_ns() - start;
+            bytes += chunk.bytes.size();
+            bool known = false;
+            for (FILE* f : dirtyFiles) known = known || f == chunk.file;
+            if (!known) dirtyFiles.push_back(chunk.file);
+            dirty = true;
+        }
 
         if (length) {
             const auto start = now_ns();
@@ -96,6 +116,8 @@ void* writer(void*) {
             const auto start = now_ns();
             if (fsync(STDOUT_FILENO) != 0)
                 ++errors;
+            for (FILE* f : dirtyFiles) if (std::fflush(f) != 0) ++errors;
+            dirtyFiles.clear();
             syncNs += now_ns() - start;
             lastSync = now_ns();
             dirty = false;
@@ -194,4 +216,28 @@ extern "C" void melee_nx_log_shutdown(void) {
     pthread_mutex_lock(&mutex);
     running = false;
     pthread_mutex_unlock(&mutex);
+}
+
+extern "C" void melee_nx_file_write(void* file, const void* bytes, size_t size) {
+    if (!file || !size) return;
+    if (!running) {   // before the writer exists (or after shutdown): synchronous, as log writes are
+        std::fwrite(bytes, 1, size, static_cast<FILE*>(file));
+        return;
+    }
+    pthread_mutex_lock(&mutex);
+    // Coalesce with the previous chunk for the same file: replay records arrive several times a
+    // frame, and one string append is far cheaper than a queue node each. No wake-up either: the
+    // writer runs every 100 ms (or with the next log line), which is soon enough for a file, and
+    // a signal per record was a syscall per record on the simulation thread.
+    if (!fileQueue.empty() && fileQueue.back().file == file && fileQueue.back().bytes.size() < (1u << 16))
+        fileQueue.back().bytes.append(static_cast<const char*>(bytes), size);
+    else
+        fileQueue.push_back({static_cast<FILE*>(file), std::string(static_cast<const char*>(bytes), size)});
+    pthread_mutex_unlock(&mutex);
+}
+
+extern "C" void melee_nx_file_close(void* file) {
+    if (!file) return;
+    if (running) melee_nx_log_flush();   // every queued chunk for this file is written and flushed
+    std::fclose(static_cast<FILE*>(file));
 }

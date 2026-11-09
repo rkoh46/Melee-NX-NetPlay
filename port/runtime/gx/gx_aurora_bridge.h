@@ -4,6 +4,7 @@
 #include "gx_core.h"
 #include <array>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -22,6 +23,7 @@ struct Draw {
   // in documented GX big-endian wire order. Never the original guest FIFO.
   std::vector<uint8_t> state, vertices;
   std::array<TextureRef, 8> textures;
+  std::array<std::shared_ptr<const std::vector<uint8_t>>, 12> arrays;   // raw draws: the indexed-array slices the state points at
   uint8_t primitive = 0;
   uint16_t vertex_count = 0;
   uint32_t vertex_stride = 0;
