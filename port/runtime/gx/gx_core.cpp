@@ -334,17 +334,24 @@ std::shared_ptr<std::vector<uint8_t>> pooled_array() {
 void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src, uint32_t count) {
   auto& out = g_frame.raw_vertices;
   const size_t at = out.size(), bytes = size_t(count) * d.size;
-  out.resize(at + bytes);
-  std::memcpy(out.data() + at, src, bytes);
+  out.insert(out.end(), src, src + bytes);   // one copy (resize then memcpy zero-filled the bytes first)
   g_raw_pending = RawPending{};
   g_raw_pending.fmt = fmt; g_raw_pending.offset = uint32_t(at); g_raw_pending.size = uint32_t(bytes); g_raw_pending.valid = true;
   const uint8_t* verts = out.data() + at;
   for (uint32_t k = 0; k < d.indexed_count; ++k) {
     const IndexedAttr& ia = d.indexed[k];
     uint32_t hi = 0;
-    for (uint32_t v = 0; v < count; ++v) {
-      const uint8_t* p = verts + size_t(v) * d.size + ia.offset;
-      for (uint32_t j = 0; j < ia.index_count; ++j, p += ia.index_bytes) hi = std::max(hi, ia.index_bytes == 1 ? uint32_t(*p) : be16(p));
+    const uint8_t* p0 = verts + ia.offset;
+    const size_t step = d.size;
+    if (ia.index_count == 1 && ia.index_bytes == 1) {          // the common shapes, without the inner loop
+      for (uint32_t v = 0; v < count; ++v) hi = std::max(hi, uint32_t(p0[size_t(v) * step]));
+    } else if (ia.index_count == 1) {
+      for (uint32_t v = 0; v < count; ++v) { const uint8_t* p = p0 + size_t(v) * step; hi = std::max(hi, uint32_t(p[0]) << 8 | p[1]); }
+    } else {
+      for (uint32_t v = 0; v < count; ++v) {
+        const uint8_t* p = p0 + size_t(v) * step;
+        for (uint32_t j = 0; j < ia.index_count; ++j, p += ia.index_bytes) hi = std::max(hi, ia.index_bytes == 1 ? uint32_t(*p) : be16(p));
+      }
     }
     const uint32_t base = g_cp.array_base(ia.attr) & 0x01FFFFFFu, stride = g_cp.array_stride(ia.attr);
     const uint32_t need = hi * stride + ia.elem_bytes;
@@ -357,8 +364,7 @@ void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src,
     if (!slot) slot = pooled_array();
     if (slot->size() < need) {
       const size_t had = slot->size();
-      slot->resize(need);
-      std::memcpy(slot->data() + had, host::ram + base + had, need - had);
+      slot->insert(slot->end(), host::ram + base + had, host::ram + base + need);
     }
     ref.data = slot; ref.stride = stride; ref.first_index = 0; ref.count = hi + 1; ref.bytes = need;
   }
