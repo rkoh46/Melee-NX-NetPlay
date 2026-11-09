@@ -313,6 +313,23 @@ bool g_state_deltas = false;   // set by init(): the backend rebuilds draw state
 StateDelta g_dirty;            // parts of the live state written since the last recorded draw
 bool g_raw_vertices = false;   // set by init(): renderers that consume the hardware format ask for it
 std::unordered_map<uint64_t, std::shared_ptr<std::vector<uint8_t>>> g_frame_arrays;   // (base, stride) -> this frame's copy
+// The last array each attribute used (consecutive draws of one model share them), checked before the map.
+struct LastArray { uint64_t key = ~uint64_t(0); std::shared_ptr<std::vector<uint8_t>>* slot = nullptr; };
+LastArray g_last_array[12];
+// Array buffers outlive the frame on the render thread; a pooled buffer whose only owner is the pool
+// again (use_count 1: nothing else can take a new reference, since only this thread hands them out) is
+// reused with its capacity, instead of one allocation per array per frame freed on the other thread.
+std::vector<std::shared_ptr<std::vector<uint8_t>>> g_array_pool;
+size_t g_array_pool_next = 0;
+std::shared_ptr<std::vector<uint8_t>> pooled_array() {
+  for (size_t n = 0; n < g_array_pool.size(); ++n) {
+    auto& p = g_array_pool[g_array_pool_next];
+    g_array_pool_next = (g_array_pool_next + 1) % g_array_pool.size();
+    if (p.use_count() == 1) { p->clear(); return p; }
+  }
+  if (g_array_pool.size() < 4096) { g_array_pool.push_back(std::make_shared<std::vector<uint8_t>>()); return g_array_pool.back(); }
+  return std::make_shared<std::vector<uint8_t>>();
+}
 
 void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src, uint32_t count) {
   auto& out = g_frame.raw_vertices;
@@ -333,8 +350,11 @@ void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src,
     const uint32_t need = hi * stride + ia.elem_bytes;
     auto& ref = g_raw_pending.arrays[ia.attr];
     if (base >= ppc::RAM_SIZE || need > ppc::RAM_SIZE - base) { ref.stride = stride ? stride : 1; continue; }   // outside RAM: unbound, the bridge skips the draw
-    auto& slot = g_frame_arrays[uint64_t(base) | (uint64_t(stride) << 32)];
-    if (!slot) slot = std::make_shared<std::vector<uint8_t>>();
+    const uint64_t key = uint64_t(base) | (uint64_t(stride) << 32);
+    LastArray& last = g_last_array[ia.attr];
+    if (last.key != key || !last.slot) { last.key = key; last.slot = &g_frame_arrays[key]; }
+    auto& slot = *last.slot;
+    if (!slot) slot = pooled_array();
     if (slot->size() < need) {
       const size_t had = slot->size();
       slot->resize(need);
@@ -473,7 +493,11 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
   std::memcpy(dc.tev_colors, g_tev_colors, sizeof g_tev_colors);
   std::memcpy(dc.tev_kcolors, g_tev_kcolors, sizeof g_tev_kcolors);
   snapshot_textures(dc);
-  if (g_dl_addr) {
+  if (g_state_deltas) {
+    // Draw identities pair draws across frames for the Metal renderer's sub-frames; Aurora never reads
+    // them, and the per-frame hash maps behind them allocated nodes on every draw.
+    dc.identity = 0;
+  } else if (g_dl_addr) {
     dc.identity = hash_bytes(&g_dl_addr, 4) ^ ((uint64_t)g_dl_call_ordinal << 40) ^ ((uint64_t)g_dl_draw_ordinal << 20) ^ 1;
     ++g_dl_draw_ordinal;
   } else {
@@ -575,6 +599,7 @@ void bp_write(uint32_t value) {
         else g_frame.clear();
         g_texture_snapshots.end_frame();
         g_frame_arrays.clear();   // the frame's draws keep their shared copies alive
+        for (auto& last : g_last_array) last = LastArray{};
         g_dl_calls.clear(); g_immediate_draws.clear(); finish_observed_frame();
       }
       break;
@@ -613,7 +638,7 @@ void run_display_list(uint32_t addr, uint32_t size) {
   if ((addr & 0x3FFFFFFFu) + size > 0x01800000u) { host::log("gx: display list outside RAM %08X+%X", addr, size); return; }
   const uint8_t* p = host::ptr(addr, size);
   uint32_t saved_addr = g_dl_addr, saved_draw = g_dl_draw_ordinal, saved_call = g_dl_call_ordinal;
-  g_dl_addr = addr; g_dl_draw_ordinal = 0; g_dl_call_ordinal = g_dl_calls[addr]++;
+  g_dl_addr = addr; g_dl_draw_ordinal = 0; g_dl_call_ordinal = g_state_deltas ? 0 : g_dl_calls[addr]++;
   size_t used = 0;
   while (used < size) {
     size_t n = parse_command(p + used, size - used);
