@@ -85,14 +85,17 @@ struct DrawState {
   int32_t tev_colors[4][4];   // RGBA, signed 11-bit (BP E0-E7 writes with type 0)
   int32_t tev_kcolors[4][4];  // RGBA (type 1 writes)
 };
-// Which parts of a DrawCall's DrawState are valid (written since the previous draw): BP registers,
-// position/post matrix rows (4 floats), normal rows (3 floats), lights, XF registers 0x1000+n. The
-// matrix indices and TEV colours are always present. `full` marks a complete snapshot.
+// What a delta record carries (written since the previous draw): BP registers, position/post matrix
+// rows (4 words), normal rows (3 words), lights (16 words), XF registers 0x1000+n, then always the two
+// matrix indices, then the 32 TEV colour words when `tev`. A full record (`full`) holds the complete
+// DrawState in the DrawCall itself; a delta's values sit in Frame::state_words from state_offset on,
+// in exactly that order, so the record touches a line or two instead of the 4.4 KB block.
 struct StateDelta {
   bool full = true;
   uint64_t bp[4] = {}, pos = 0, post = 0, xf[2] = {};
   uint32_t nrm = 0;
   uint8_t lights = 0;
+  bool tev = false;   // TEV colour or konst registers were written
 };
 
 struct AuthoredPose;
@@ -113,6 +116,7 @@ struct DrawCall : DrawState {
   uint32_t vcd_lo = 0, vcd_hi = 0, vat[3] = {0, 0, 0};
   VertexArrayRef arrays[12];       // pos, nrm, col0, col1, tex0..tex7 (unused when not indexed)
   StateDelta delta;                // which DrawState parts this record carries (full unless deltas were asked for)
+  uint32_t state_offset = 0;       // delta records: first value in Frame::state_words
   TextureRef textures[8] = {};     // snapshot_textures relies on `used` starting false
   int viewport_x = 0, viewport_y = 0, viewport_w = 0, viewport_h = 0;  // unused placeholders (computed by backend)
   // Stable identity of this draw across frames (display-list address + call ordinal + draw ordinal,
@@ -134,7 +138,7 @@ struct DrawCall : DrawState {
 
 // Applies a draw's recorded state to `into`: everything for a full record, else the parts its delta marks.
 // Called for every draw of a frame in order, starting with the frame's first (always full) draw.
-void apply_state(DrawState& into, const DrawCall& from);
+void apply_state(DrawState& into, const DrawCall& from, const struct Frame& frame);
 
 // Replacement transform state for one draw when a sub-frame is rendered between simulation frames.
 struct DrawMatrices {
@@ -195,6 +199,7 @@ struct FrameCommand {
 struct Frame {
   VertexVector vertices;
   std::vector<uint8_t> raw_vertices;   // raw-captured vertex streams (DrawCall::raw_offset/raw_size)
+  std::vector<uint32_t> state_words;   // delta records' state values (DrawCall::state_offset, StateDelta)
   std::vector<DrawCall> draws;
   std::vector<EfbCopy> copies;
   std::vector<FrameCommand> commands;
@@ -213,7 +218,7 @@ struct Frame {
   // and the renderer decides when to present by comparing sequences. Leaving a stale one on a
   // buffer that is about to be refilled is only harmless while every producer remembers to assign
   // one before pushing.
-  void clear() { vertices.clear(); raw_vertices.clear(); draws.clear(); copies.clear(); commands.clear(); sequence = 0; time = 0.0; discontinuous = false; }
+  void clear() { vertices.clear(); raw_vertices.clear(); state_words.clear(); draws.clear(); copies.clear(); commands.clear(); sequence = 0; time = 0.0; discontinuous = false; }
 };
 
 // Whether a frame certainly shows a running match. Anything else counts as a menu: the character and

@@ -232,7 +232,7 @@ struct AuroraBackend::Impl {
     for (const auto& cmd : input.commands) {
       if (cmd.kind != FrameCommand::Draw) { std::fprintf(f, "copy %u\n", unsigned(cmd.index)); continue; }
       const auto& d = input.draws[cmd.index];
-      apply_state(st, d);
+      apply_state(st, d, input);
       const bool skipped = cmd.index < frame.draws.size() && frame.draws[cmd.index].vertex_count == 0;
       std::fprintf(f, "draw %zu%s prim=%02X verts=%u comps=%08X genmode=%08X texgens=%u tevstages=%u indstages=%u mtxidx=%08X/%08X zmode=%06X blend=%06X owner=%u\n",
                    draw_index++, skipped ? " SKIPPED" : "", d.primitive, d.vertex_count, d.components, st.bp.reg[0], st.bp.numtexgens(),

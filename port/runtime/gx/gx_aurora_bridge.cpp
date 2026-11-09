@@ -416,7 +416,7 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
   for (const auto& cmd : frame.commands) {
     if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
-    apply_state(state, frame.draws[i]);   // every draw, converted or not: the deltas chain through all of them
+    apply_state(state, frame.draws[i], frame);   // every draw, converted or not: the deltas chain through all of them
     try {
       convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, out.draws[i]);
       previous = &frame.draws[i];

@@ -88,10 +88,23 @@ inline uint32_t pipe_single_word(uint8_t* m, ppc::Context& c, uint32_t src) { re
 }  // namespace
 
 // static void WriteMTXPS4x3(f32 mtx[3][4], volatile f32* dest): six pairs.
+// A float whose psq_l/psq_st (or lfs/stfs) round trip returns its own bits: normal or zero. For those
+// the conversion is a copy, and guest RAM and the pipe are both big-endian, so the words go across
+// unchanged; any other word (denormal: flushed by psq_st; NaN, infinity) takes the exact conversion.
+inline bool copies_exactly(uint32_t be_word) {
+  const uint32_t exp = __builtin_bswap32(be_word) & 0x7F800000u;
+  return (exp != 0 && exp != 0x7F800000u) || !(__builtin_bswap32(be_word) & 0x7FFFFFFFu);
+}
 // Each writer converts the whole matrix, then appends it to the capture in one call.
 HLE(WriteMTXPS4x3) {
   const uint32_t mtx = ARG0;
   uint32_t w[12];
+  if ((mtx & 0x3FFFFFFFu) + 48 <= ppc::RAM_SIZE) {
+    std::memcpy(w, m + (mtx & 0x3FFFFFFFu), 48);
+    bool plain = true;
+    for (uint32_t i = 0; i < 12; ++i) plain &= copies_exactly(w[i]);
+    if (plain) { gx::fifo_store_words(w, 12); return; }
+  }
   for (uint32_t i = 0; i < 12; ++i) w[i] = pipe_pair_word(m, c, mtx + i * 4);
   gx::fifo_store_words(w, 12);
 }
