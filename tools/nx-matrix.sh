@@ -23,10 +23,21 @@ for cfg in "$@"; do
   curl -sS --connect-timeout 10 -T "$tmp" "ftp://$ip:${NX_FTP_PORT:-5000}/switch/melee-nx-netplay/launcher.ini" || { echo "$cfg: cannot push launcher.ini"; rm -f "$tmp"; continue; }
   rm -f "$tmp"
   tag="stage${stage}-${players}p${teams:+-$teams}"
-  ( sleep 70; "$repo/build/venv/bin/python" "$here/nx-bot.py" "$ip" shot "$out/$tag.jpg" >/dev/null 2>&1 ) &
-  "$here/nx-cycle.sh" "$ip" aurora > "$out/$tag.cycle.txt" 2>&1
-  wait
-  log="$(ls -t "$repo"/build/nxlink-logs/2026*-aurora.log | head -1)"
+  log=""
+  for attempt in 1 2; do
+    # The console can drop off Wi-Fi after a run (the Homebrew Menu has crashed on exit): wait up to
+    # ten minutes for sys-botbase before starting, and retry a run that produced no new log once.
+    for _ in $(seq 1 60); do nc -z -G 3 "$ip" 6000 >/dev/null 2>&1 && break; sleep 10; done
+    before="$(ls -t "$repo"/build/nxlink-logs/2026*-aurora.log 2>/dev/null | head -1)"
+    ( sleep 70; "$repo/build/venv/bin/python" "$here/nx-bot.py" "$ip" shot "$out/$tag.jpg" >/dev/null 2>&1 ) &
+    "$here/nx-cycle.sh" "$ip" aurora > "$out/$tag.cycle.txt" 2>&1
+    wait
+    newest="$(ls -t "$repo"/build/nxlink-logs/2026*-aurora.log 2>/dev/null | head -1)"
+    if [[ -n "$newest" && "$newest" != "$before" ]]; then log="$newest"; break; fi
+    echo "$cfg: no run log (attempt $attempt)"
+  done
+  [[ -n "$log" ]] || { printf "%s\tnorun\t0\t0\t0\t0\t0\t-\n" "$cfg" >> "$results"; continue; }
+  # Some runs need the pushed launcher.ini again after a retry; it is unchanged, so nothing to redo.
   cp "$log" "$out/$tag.log"
   python3 - "$out/$tag.log" "$cfg" "$results" <<'EOF'
 import re, sys

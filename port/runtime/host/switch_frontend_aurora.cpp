@@ -40,6 +40,8 @@ void require_directory(const std::string& value, const char* name) {
     throw std::invalid_argument(std::string(name) + " must be an existing directory: " + value);
 }
 
+extern "C" void aurora_warm_pipelines(void);   // aurora lib/gfx/pipeline_cache.cpp
+
 class AuroraSwitchNativeHost final : public MetalNativeHost {
 public:
   explicit AuroraSwitchNativeHost(const AuroraMetalConfig& requested) {
@@ -63,6 +65,11 @@ public:
     // The recompiled runtime owns guest RAM/ARAM; Aurora owns graphics only.
     config.mem1Size = 0;
     config.mem2Size = 0;
+    // Compile the pipelines this console has used before (Aurora's persisted cache) at launch, with every
+    // core, before the game runs. Without it the ~650 pipelines were rebuilt in the background during the
+    // first half-minute of play, on a compiler thread pinned to the top core - the simulation thread's -
+    // and the renderer dropped frames until it finished. shader_warmup=0 in launcher.ini turns it off.
+    setenv("AURORA_LAUNCH_WARM_SECONDS", "1", 0);
     info_ = aurora_initialize(0, nullptr, &config);
     initialized_ = true;
     try {
@@ -75,6 +82,11 @@ public:
                 info_.windowSize.native_fb_height);
       // AuroraBackend requires the 640x480 logical framebuffer Aurora defaults to.
       VIConfigure(nullptr);
+      {
+        const double t0 = host::now_seconds();
+        aurora_warm_pipelines();   // returns at once when there is nothing cached or warm-up is off
+        host::log("aurora: launch pipeline warm-up took %.1f s", host::now_seconds() - t0);
+      }
     } catch (...) {
       shutdown();
       throw;

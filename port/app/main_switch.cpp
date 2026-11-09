@@ -379,6 +379,7 @@ int main(int argc, char** argv) {
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
   if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
+  if (get("shader_warmup", "1") == "0") setenv("AURORA_LAUNCH_WARM_SECONDS", "0", 1);
 
   const bool applet_mode = appletGetAppletType() != AppletType_Application && appletGetAppletType() != AppletType_SystemApplication;
 #if !MELEE_NX_AURORA
