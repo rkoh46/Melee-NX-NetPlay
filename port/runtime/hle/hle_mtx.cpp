@@ -94,11 +94,11 @@ namespace {
 // to zero on store) and stfs singles for odd elements. `dest` is always the pipe, so the words go
 // straight to the FIFO capture after the same load/store conversions the translation performs.
 inline void fifo_pair(uint8_t* m, ppc::Context& c, uint32_t src) {
-  gx::write_fifo(ppc::double_to_float_bits_ftz(ps_load(m, c, src)), 4);
-  gx::write_fifo(ppc::double_to_float_bits_ftz(ps_load(m, c, src + 4)), 4);
+  gx::fifo_store32(__builtin_bswap32(ppc::double_to_float_bits_ftz(ps_load(m, c, src))));
+  gx::fifo_store32(__builtin_bswap32(ppc::double_to_float_bits_ftz(ps_load(m, c, src + 4))));
 }
 inline void fifo_single(uint8_t* m, ppc::Context& c, uint32_t src) {
-  gx::write_fifo(ppc::double_to_float_bits(ps_load(m, c, src)), 4);
+  gx::fifo_store32(__builtin_bswap32(ppc::double_to_float_bits(ps_load(m, c, src))));
 }
 }  // namespace
 

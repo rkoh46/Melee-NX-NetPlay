@@ -646,7 +646,10 @@ void fifo_parse_pending() {
     g_parse_need = 0;            // a display list inside the command may have left a stale need
     ++g_commands;
   }
-  if (g_buf_pos == g_buf_len) { g_buf_len = 0; g_buf_pos = 0; }
+  // Drained: the next command is at least a BP write (5 bytes; register writes, draws and display
+  // list calls are all longer, and the 1-byte NOPs carry no state), so waking the parser for every
+  // opcode byte or partial word is wasted work. A short pending tail is parsed by the next store.
+  if (g_buf_pos == g_buf_len) { g_buf_len = 0; g_buf_pos = 0; g_parse_need = 5; }
   else if (g_buf_pos >= 1 << 16) { std::memmove(g_buf.data(), g_buf.data() + g_buf_pos, g_buf_len - g_buf_pos); g_buf_len -= g_buf_pos; g_buf_pos = 0; }
 }
 void fifo_grow() {
@@ -657,6 +660,19 @@ void fifo_store32(uint32_t be) {   // the word is already in big-endian byte ord
   if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
   std::memcpy(g_fifo_data + g_fifo_len, &be, 4);
   g_fifo_len += 4;
+  if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
+}
+// Bytes and halfwords to the pipe (command opcodes, vertex counts, indices) take the same direct path
+// as words; they used to go through the MMIO dispatch and write_fifo's byte loop.
+void fifo_store8(uint32_t v) {
+  if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
+  g_fifo_data[g_fifo_len++] = uint8_t(v);
+  if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
+}
+void fifo_store16(uint32_t v) {   // v in host order; stored big-endian
+  if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
+  g_fifo_data[g_fifo_len] = uint8_t(v >> 8); g_fifo_data[g_fifo_len + 1] = uint8_t(v);
+  g_fifo_len += 2;
   if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
 }
 void write_fifo(uint32_t value, int bytes) {

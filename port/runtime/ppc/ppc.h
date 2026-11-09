@@ -181,7 +181,7 @@ inline uint64_t read_tb(Context& c) { c.tb += 32; return c.tb; }
 // instead of the MMIO dispatch chain (ppc::mmio_write -> host::mmio_write -> gx::write_fifo). It is
 // not inlined: st32 is expanded at hundreds of thousands of sites and the body is not worth 16 MB.
 }  // namespace ppc
-namespace gx { void fifo_store32(uint32_t be); }
+namespace gx { void fifo_store32(uint32_t be); void fifo_store8(uint32_t v); void fifo_store16(uint32_t v); }
 namespace ppc {
 inline void fifo_write32(uint32_t be) { gx::fifo_store32(be); }
 
@@ -257,11 +257,13 @@ inline void watch(Context& c, uint32_t ea, uint64_t v, int bytes) {
 inline void st8(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
   watch(c, ea, v, 1);
   uint32_t off; if (in_ram(ea, off)) { m[off] = (uint8_t)v; return; }
+  if (__builtin_expect((ea & 0xFFFFC000u) == 0xCC008000u, 1)) { gx::fifo_store8(v); return; }   // pipe: opcodes, indices
   st_slow(c, ea, v, 1);
 }
 inline void st16(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
   watch(c, ea, v, 2);
   uint32_t off; if (in_ram(ea, off)) { const uint16_t s = bswap16((uint16_t)v); std::memcpy(m + off, &s, 2); return; }
+  if (__builtin_expect((ea & 0xFFFFC000u) == 0xCC008000u, 1)) { gx::fifo_store16(v & 0xFFFF); return; }   // pipe: counts, indices
   st_slow(c, ea, v, 2);
 }
 inline void st32(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {

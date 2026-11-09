@@ -254,6 +254,8 @@ extern uint8_t* g_fifo_data; extern size_t g_fifo_cap, g_fifo_len, g_fifo_pos, g
 void fifo_parse_pending();
 void fifo_grow();
 void fifo_store32(uint32_t be);
+void fifo_store8(uint32_t v);
+void fifo_store16(uint32_t v);
 const uint8_t* tmem();
 
 }  // namespace gx
