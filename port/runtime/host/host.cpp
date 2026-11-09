@@ -58,8 +58,9 @@ static std::string g_dol_sha1;
 static bool g_dol_verified = false;
 static uint32_t g_fst_offset, g_fst_size, g_fst_max;
 static std::deque<Completion> g_completions;
-static bool g_pe_finish_pending = false;
-static bool g_pe_token_pending = false;
+// Set by the GX parse (the GPU thread when it runs), taken by the guest thread in wait_event.
+static std::atomic<bool> g_pe_finish_pending{false};
+static std::atomic<bool> g_pe_token_pending{false};
 static uint16_t g_pe_token = 0;
 static uint32_t g_retraces = 0;
 static std::atomic<bool> g_exit{false};
@@ -362,7 +363,7 @@ void call_guest(uint32_t addr, uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r
 // ---------------- events ----------------
 void post_completion(Completion fn) { g_completions.push_back(std::move(fn)); }
 void set_pe_finish_pending() { g_pe_finish_pending = true; }
-void set_pe_token_pending(uint16_t token) { g_pe_token = token; g_pe_token_pending = true; }
+void set_pe_token_pending(uint16_t token) { g_pe_token = token; g_pe_token_pending.store(true, std::memory_order_release); }
 bool exit_requested() { return g_exit; }
 void request_exit(int code) { g_exit_code.store(code); g_exit.store(true); }
 int exit_code() { return g_exit_code.load(); }
@@ -742,6 +743,7 @@ static bool deliver_completions(bool force) {
 }
 
 void wait_event() {
+  gx::gpu_sync_for_wait();   // with the GPU thread, a queued draw-done or token is parsed before we look for it
   std::string background_error;
   if (take_background_failure(background_error)) die("background task failed: %s", background_error.c_str());
   if (g_pe_finish_pending) {

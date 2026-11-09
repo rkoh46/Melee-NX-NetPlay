@@ -38,6 +38,7 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
 #include "exi_slippi.h"
 #include "discord_rpc.h"
 #include "host.h"
+#include "gx_core.h"
 #include "window.h"
 #include <algorithm>
 #include <array>
@@ -455,6 +456,7 @@ void handle_load_savestate(const uint8_t* payload) {
   if (!g_active_savestates.count(frame)) { host::log("slippi: savestate for frame %d does not exist", frame); return; }
   std::vector<PreserveBlock> blocks;
   for (int i = 4; be32(payload + i) != 0; i += 8) blocks.push_back({be32(payload + i), be32(payload + i + 4)});
+  gx::gpu_sync_all();   // the GPU thread may still be reading RAM the load replaces
   g_active_savestates[frame]->Load(blocks);
   ++g_rollbacks;
   net_diag::on_rollback();

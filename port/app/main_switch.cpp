@@ -121,6 +121,7 @@ void run_guest(GuestRun& run) {
   } catch (...) {
     run.code = describe_current_exception(run.result);
   }
+  try { gx::gpu_finish(); } catch (...) {}   // the GPU thread's last frames reach the renderer before it stops
   run.done.store(true, std::memory_order_release);
 }
 void guest_thread_entry(void* arg) { run_guest(*static_cast<GuestRun*>(arg)); }
@@ -361,6 +362,8 @@ int main(int argc, char** argv) {
   if (const std::string level = get("force_cpu", ""); !level.empty()) setenv("MELEE_FORCE_CPU", level.c_str(), 1);
   // hle_verify=1: hooked matrix routines also run the original code in the interpreter and log differences.
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
+  // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
+  if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
 
   const bool applet_mode = appletGetAppletType() != AppletType_Application && appletGetAppletType() != AppletType_SystemApplication;
 #if !MELEE_NX_AURORA

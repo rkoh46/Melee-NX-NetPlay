@@ -7,6 +7,12 @@
 #include <algorithm>
 #include <cstring>
 #include <unordered_map>
+#include <condition_variable>
+#include <cstdlib>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include "fatal_boundary.h"
 
 namespace gx {
 
@@ -727,7 +733,9 @@ size_t parse_command(const uint8_t* d, size_t len) {
 
 void mark_discontinuity() { g_discontinuity = true; }
 
+namespace { void gpu_start(); void gpu_stop(); }
 void init(Backend* backend) {
+  gpu_stop();   // the worker owns the parse state below while it runs
   g_backend = backend;
   g_raw_vertices = backend && backend->wants_raw_vertices();
   g_state_deltas = backend && backend->wants_state_deltas();
@@ -740,6 +748,10 @@ void init(Backend* backend) {
   g_buf_len = 0; g_buf_pos = 0; g_parse_need = 0; ++g_cp_version;
   if (g_buf.size() < (1u << 20)) g_buf.resize(1u << 20);
   g_fifo_data = g_buf.data(); g_fifo_cap = g_buf.size();
+  if (g_state_deltas) {
+    const char* v = std::getenv("MELEE_GPU_THREAD");
+    if (!v || v[0] != '0') gpu_start();
+  }
 }
 
 void fifo_parse_pending() {
@@ -763,7 +775,7 @@ void fifo_grow() {
   g_buf.resize(std::max<size_t>(g_buf.size() * 2, 1u << 20));
   g_fifo_data = g_buf.data(); g_fifo_cap = g_buf.size();
 }
-void fifo_store32(uint32_t be) {   // the word is already in big-endian byte order
+static void direct_fifo_store32(uint32_t be) {   // the word is already in big-endian byte order
   if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
   std::memcpy(g_fifo_data + g_fifo_len, &be, 4);
   g_fifo_len += 4;
@@ -771,24 +783,24 @@ void fifo_store32(uint32_t be) {   // the word is already in big-endian byte ord
 }
 // Bytes and halfwords to the pipe (command opcodes, vertex counts, indices) take the same direct path
 // as words; they used to go through the MMIO dispatch and write_fifo's byte loop.
-void fifo_store_words(const uint32_t* be, size_t n) {   // n big-endian words, one parse check
+static void direct_fifo_store_words(const uint32_t* be, size_t n) {   // n big-endian words, one parse check
   if (__builtin_expect(g_fifo_len + n * 4 + 8 > g_fifo_cap, 0)) { while (g_fifo_len + n * 4 + 8 > g_fifo_cap) fifo_grow(); }
   std::memcpy(g_fifo_data + g_fifo_len, be, n * 4);
   g_fifo_len += n * 4;
   if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
 }
-void fifo_store8(uint32_t v) {
+static void direct_fifo_store8(uint32_t v) {
   if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
   g_fifo_data[g_fifo_len++] = uint8_t(v);
   if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
 }
-void fifo_store16(uint32_t v) {   // v in host order; stored big-endian
+static void direct_fifo_store16(uint32_t v) {   // v in host order; stored big-endian
   if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
   g_fifo_data[g_fifo_len] = uint8_t(v >> 8); g_fifo_data[g_fifo_len + 1] = uint8_t(v);
   g_fifo_len += 2;
   if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
 }
-void write_fifo(uint32_t value, int bytes) {
+static void direct_write_fifo(uint32_t value, int bytes) {
   // The game writes the FIFO a word (or less) at a time, tens of thousands of times a frame:
   // the buffer keeps its storage and only a length moves; growth is rare and geometric.
   const size_t at = g_buf_len;
@@ -808,6 +820,173 @@ void stats(uint64_t* commands, uint64_t* draws, uint64_t* vertices, uint32_t* ef
 }
 
 const uint8_t* tmem() { return g_tmem; }
+
+
+// ---------------- GPU thread ----------------
+// With Aurora, the guest only appends what it writes to the pipe; a worker thread parses it, snapshots
+// what the commands reference and builds the frames (Dolphin's dual-core model). As on the hardware,
+// the guest may run ahead of the GPU until it synchronises: a sleep after a draw-done or token write
+// (the PE interrupt it waits for), a savestate load (RAM is replaced), and the end of the run. The
+// parse state above belongs to the worker in this mode; the guest touches only the producer buffer.
+}  // namespace gx
+extern "C" __attribute__((weak)) void switch_pin_current_thread(int core, int priority);
+namespace gx {
+namespace {
+bool g_gpu_threaded = false;
+constexpr size_t kChunkFlush = 32 * 1024, kChunkCap = 64 * 1024, kMaxQueued = 8u << 20;
+std::vector<uint8_t> g_prod;          // producer chunk (guest thread)
+size_t g_prod_len = 0;
+bool g_bp_opcode = false;              // the last byte stored was a BP-write opcode (0x61)
+bool g_pe_marker = false;              // a draw-done or token register write is queued since the last sync
+struct Chunk { std::vector<uint8_t> data; size_t len = 0; };
+std::mutex g_gpu_mutex;
+std::condition_variable g_gpu_cv;
+std::deque<Chunk> g_gpu_queue;
+std::vector<std::vector<uint8_t>> g_gpu_free;
+size_t g_gpu_queued = 0;
+bool g_gpu_busy = false, g_gpu_stop = false, g_gpu_failed = false;
+std::thread g_gpu_thread;
+
+void gpu_consume(const uint8_t* data, size_t len) {
+  while (g_fifo_len + len + 8 > g_fifo_cap) fifo_grow();
+  std::memcpy(g_fifo_data + g_fifo_len, data, len);
+  g_fifo_len += len;
+  fifo_parse_pending();
+}
+void gpu_main() {
+  if (switch_pin_current_thread) switch_pin_current_thread(0, 0x28);
+  host::ScopedFatalBoundary boundary(true);   // a fatal error here is relayed to the guest thread
+  try {
+    for (;;) {
+      Chunk chunk;
+      {
+        std::unique_lock<std::mutex> lock(g_gpu_mutex);
+        g_gpu_cv.wait(lock, [] { return g_gpu_stop || !g_gpu_queue.empty(); });
+        if (g_gpu_queue.empty()) return;   // stop requested and drained
+        chunk = std::move(g_gpu_queue.front()); g_gpu_queue.pop_front();
+        g_gpu_busy = true;
+      }
+      gpu_consume(chunk.data.data(), chunk.len);
+      {
+        std::lock_guard<std::mutex> lock(g_gpu_mutex);
+        g_gpu_queued -= chunk.len;
+        g_gpu_free.push_back(std::move(chunk.data));
+        g_gpu_busy = false;
+      }
+      g_gpu_cv.notify_all();
+    }
+  } catch (const std::exception& e) {
+    host::background_failure_relay.report(std::string("GPU thread: ") + e.what());
+  } catch (...) {
+    host::background_failure_relay.report("GPU thread: unknown exception");
+  }
+  std::lock_guard<std::mutex> lock(g_gpu_mutex);
+  g_gpu_failed = true; g_gpu_busy = false;
+  g_gpu_cv.notify_all();
+}
+// Hands the producer chunk to the worker (waiting while 8 MB are already queued).
+void gpu_submit() {
+  if (!g_prod_len) return;
+  {
+    std::unique_lock<std::mutex> lock(g_gpu_mutex);
+    g_gpu_cv.wait(lock, [] { return g_gpu_failed || g_gpu_queued < kMaxQueued; });
+    if (g_gpu_failed) { g_prod_len = 0; return; }
+    g_gpu_queue.push_back(Chunk{std::move(g_prod), g_prod_len});
+    g_gpu_queued += g_prod_len;
+    if (!g_gpu_free.empty()) { g_prod = std::move(g_gpu_free.back()); g_gpu_free.pop_back(); }
+    else g_prod = std::vector<uint8_t>();
+  }
+  if (g_prod.size() < kChunkCap) g_prod.resize(kChunkCap);
+  g_prod_len = 0;
+  g_gpu_cv.notify_all();
+}
+void gpu_sync() {
+  gpu_submit();
+  std::unique_lock<std::mutex> lock(g_gpu_mutex);
+  g_gpu_cv.wait(lock, [] { return g_gpu_failed || (g_gpu_queue.empty() && !g_gpu_busy); });
+}
+inline void prod_room(size_t n) { if (__builtin_expect(g_prod_len + n > kChunkCap, 0)) gpu_submit(); }
+inline void prod_done() { if (g_prod_len >= kChunkFlush) gpu_submit(); }
+void gpu_start() {
+  g_gpu_stop = false; g_gpu_failed = false; g_gpu_busy = false; g_gpu_queued = 0;
+  g_gpu_queue.clear();
+  g_prod.assign(kChunkCap, 0); g_prod_len = 0; g_bp_opcode = false; g_pe_marker = false;
+  g_gpu_thread = std::thread(gpu_main);
+  g_gpu_threaded = true;
+  host::log("gx: GPU thread on (the guest appends, a worker parses; MELEE_GPU_THREAD=0 / gpu_thread=0 turns it off)");
+}
+void gpu_stop() {
+  if (!g_gpu_threaded) return;
+  gpu_sync();
+  { std::lock_guard<std::mutex> lock(g_gpu_mutex); g_gpu_stop = true; }
+  g_gpu_cv.notify_all();
+  if (g_gpu_thread.joinable()) g_gpu_thread.join();
+  g_gpu_threaded = false;
+}
+}  // namespace
+
+void fifo_store32(uint32_t be) {   // the word is already in big-endian byte order
+  if (g_gpu_threaded) {
+    prod_room(4);
+    std::memcpy(g_prod.data() + g_prod_len, &be, 4); g_prod_len += 4;
+    // GX_WRITE_RAS_REG: the 0x61 opcode byte, then the register word, whose first byte names it.
+    if (__builtin_expect(g_bp_opcode, 0)) {
+      const uint8_t reg = uint8_t(be);   // first byte in memory order
+      if (reg == 0x45 || reg == 0x47 || reg == 0x48) g_pe_marker = true;   // draw done, token (set/int)
+      g_bp_opcode = false;
+    }
+    prod_done();
+    return;
+  }
+  direct_fifo_store32(be);
+}
+void fifo_store_words(const uint32_t* be, size_t n) {
+  if (g_gpu_threaded) {
+    prod_room(n * 4);
+    std::memcpy(g_prod.data() + g_prod_len, be, n * 4); g_prod_len += n * 4;
+    g_bp_opcode = false;
+    prod_done();
+    return;
+  }
+  direct_fifo_store_words(be, n);
+}
+void fifo_store8(uint32_t v) {
+  if (g_gpu_threaded) {
+    prod_room(1);
+    g_prod[g_prod_len++] = uint8_t(v);
+    g_bp_opcode = uint8_t(v) == 0x61;
+    prod_done();
+    return;
+  }
+  direct_fifo_store8(v);
+}
+void fifo_store16(uint32_t v) {
+  if (g_gpu_threaded) {
+    prod_room(2);
+    g_prod[g_prod_len] = uint8_t(v >> 8); g_prod[g_prod_len + 1] = uint8_t(v); g_prod_len += 2;
+    g_bp_opcode = false;
+    prod_done();
+    return;
+  }
+  direct_fifo_store16(v);
+}
+void write_fifo(uint32_t value, int bytes) {
+  if (g_gpu_threaded) {
+    if (bytes == 4) { fifo_store32(__builtin_bswap32(value)); return; }
+    if (bytes == 2) { fifo_store16(value & 0xFFFF); return; }
+    if (bytes == 1) { fifo_store8(value & 0xFF); return; }
+    for (int i = 0; i < bytes; ++i) fifo_store8(value >> (8 * (bytes - 1 - i)));
+    return;
+  }
+  direct_write_fifo(value, bytes);
+}
+void gpu_sync_for_wait() {
+  if (!g_gpu_threaded) return;
+  if (g_pe_marker) { g_pe_marker = false; gpu_sync(); }   // the guest is about to wait for a PE interrupt
+  else gpu_submit();                                       // keep the worker fed while the guest sleeps
+}
+void gpu_sync_all() { if (g_gpu_threaded) gpu_sync(); }
+void gpu_finish() { gpu_stop(); }
 
 void apply_state(DrawState& into, const DrawCall& from, const Frame& frame) { apply_state_impl(into, from, frame); }
 

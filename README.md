@@ -5,9 +5,10 @@ PowerPC code recompiled to C++ (Dashdance's runtime), running on Melee-NX's Swit
 The target is 60 fps on an overclocked Erista Switch, GameCube controllers through the official
 adapter, and matchmaking against the same Slippi servers and Dolphin players as on a PC.
 
-**Status: alpha, not playable yet.** The build pipeline and the headless simulation exist; the
-renderer, input and online phases are listed below with what each needs. Nothing from the game is in
-this repository and no built NRO is published: you build it from your own disc.
+**Status: alpha.** On an overclocked Erista Switch the game boots, renders and runs offline VS matches
+at full speed (two level-9 CPUs, Fox against Marth on Battlefield: 14-15 ms of simulation per 16.7 ms
+frame). Online play is built but untested on hardware. Nothing from the game is in this repository and
+no built NRO is published: you build it from your own disc.
 
 ## Why this shape
 
@@ -48,10 +49,10 @@ No built NRO is published: it would contain the game.
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Headless simulation on the console: a scripted match, log to SD, measure ms/frame | NRO builds (71 MB); first hardware run pending |
-| 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | NRO links (100 MB) against a locally built Mesa/NVK; in-game menu and HUD drawn through Aurora's ImGui pass; first hardware run pending |
+| 1 | Headless simulation on the console: a scripted match, log to SD, measure ms/frame | done; scripted CPU matches and a sampling profiler drive the tuning |
+| 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | runs on hardware: menus, character and stage select, matches with shadows and EFB-copy effects; GX commands parsed on a worker thread; 60 fps in the CPU match test |
 | 3 | Slippi online: ENet over libnx sockets, curl for login and reports, sign-in screen, online delay setting | built: netplay, matchmaking, login, reports, Shift-JIS names, a sign-in screen with the console keyboard, online delay in the menu; untested on hardware |
-| 4 | Overclock profile, rollback cost tuning, release notes | clock request through clkrst (CPU 1785 / GPU 921 / memory 1600 MHz, `overclock=` and per-rail keys); tuning waits for measurements |
+| 4 | Overclock profile, rollback cost tuning, release notes | clock request through clkrst (CPU 1785 / GPU 921 / memory 1600 MHz, `overclock=` and per-rail keys); rollback cost not yet measured |
 
 ## Layout
 

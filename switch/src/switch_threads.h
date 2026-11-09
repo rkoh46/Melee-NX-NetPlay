@@ -12,6 +12,8 @@ typedef void (*switch_exit_hook_fn)(void);
 void switch_set_exit_hook(switch_exit_hook_fn hook);
 // Confine threads created through pthread from now on to `mask` (bit per core; 0 = default placement).
 void switch_set_pthread_cores(int preferred, uint64_t mask);
+// Pins the calling thread to `core` at `priority` (lower is more urgent).
+void switch_pin_current_thread(int core, int priority);
 #ifdef __cplusplus
 }
 #endif

@@ -225,3 +225,10 @@ int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr, void* (
     }
     return rc;
 }
+
+// Pins the calling thread to one core at the given priority (the GX worker uses core 0, at the
+// simulation thread's priority so Aurora's floating workers cannot starve it).
+void switch_pin_current_thread(int core, int priority) {
+    svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1ull << core);
+    svcSetThreadPriority(CUR_THREAD_HANDLE, priority);
+}

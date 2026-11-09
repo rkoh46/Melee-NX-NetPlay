@@ -284,6 +284,12 @@ void fifo_grow();
 void fifo_store32(uint32_t be);
 void fifo_store8(uint32_t v);
 void fifo_store_words(const uint32_t* be, size_t n);
+// GPU thread (Aurora): the guest appends pipe writes and a worker parses them. The guest synchronises
+// before it waits for a PE interrupt (gpu_sync_for_wait, from host::wait_event), before RAM is replaced
+// (gpu_sync_all: savestate loads) and at the end of the run (gpu_finish: drains and stops the worker).
+void gpu_sync_for_wait();
+void gpu_sync_all();
+void gpu_finish();
 void fifo_store16(uint32_t v);
 const uint8_t* tmem();
 
