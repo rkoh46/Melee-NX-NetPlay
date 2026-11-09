@@ -278,6 +278,7 @@ void fifo_parse_pending();
 void fifo_grow();
 void fifo_store32(uint32_t be);
 void fifo_store8(uint32_t v);
+void fifo_store_words(const uint32_t* be, size_t n);
 void fifo_store16(uint32_t v);
 const uint8_t* tmem();
 

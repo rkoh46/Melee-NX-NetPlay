@@ -337,6 +337,9 @@ void syscall(Context& c, uint8_t* m) {
 }
 
 void update_fp_environment(Context& c) {
+  // Diagnostic: report when the guest changes the FPSCR NI (non-IEEE, denormal flush) or rounding bits.
+  static uint32_t reported = 0xFFFFFFFFu;
+  if ((c.fpscr & 7) != reported) { reported = c.fpscr & 7; host::log("fpscr: guest set NI=%u RN=%u (fpscr %08X)", (c.fpscr >> 2) & 1, c.fpscr & 3, c.fpscr); }
   set_fp_environment(c.fpscr, fp_profile());
 }
 

@@ -307,7 +307,7 @@ uint32_t components_of(const VertexDesc& d) {
 // captured once per frame from its base up to the highest element any draw addressed (a later draw
 // reaching further extends the copy). Pending until record_draw stores it in the DrawCall. One memcpy
 // per array per frame replaced a hashed, compared snapshot per draw, which cost as much as decoding.
-struct RawPending { uint32_t fmt = 0, offset = 0, size = 0; VertexArrayRef arrays[12]; bool valid = false; };
+struct RawPending { uint32_t fmt = 0, offset = 0, size = 0; VertexArrayRef arrays[12]; const VertexDesc* desc = nullptr; bool valid = false; };
 RawPending g_raw_pending;
 bool g_state_deltas = false;   // set by init(): the backend rebuilds draw state from deltas (apply_state)
 StateDelta g_dirty;            // parts of the live state written since the last recorded draw
@@ -336,7 +336,7 @@ void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src,
   const size_t at = out.size(), bytes = size_t(count) * d.size;
   out.insert(out.end(), src, src + bytes);   // one copy (resize then memcpy zero-filled the bytes first)
   g_raw_pending = RawPending{};
-  g_raw_pending.fmt = fmt; g_raw_pending.offset = uint32_t(at); g_raw_pending.size = uint32_t(bytes); g_raw_pending.valid = true;
+  g_raw_pending.fmt = fmt; g_raw_pending.offset = uint32_t(at); g_raw_pending.size = uint32_t(bytes); g_raw_pending.desc = &d; g_raw_pending.valid = true;
   const uint8_t* verts = out.data() + at;
   for (uint32_t k = 0; k < d.indexed_count; ++k) {
     const IndexedAttr& ia = d.indexed[k];
@@ -451,7 +451,7 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
   dc.components = components;
   if (g_raw_pending.valid) {
     dc.vtxfmt = g_raw_pending.fmt; dc.raw_offset = g_raw_pending.offset; dc.raw_size = g_raw_pending.size;
-    const VertexDesc& desc = build_desc(dc.vtxfmt);
+    const VertexDesc& desc = *g_raw_pending.desc;   // the descriptor the capture just used
     dc.vcd_lo = desc.vcd_lo; dc.vcd_hi = desc.vcd_hi; dc.vat[0] = desc.vat[0]; dc.vat[1] = desc.vat[1]; dc.vat[2] = desc.vat[2];
     for (int i = 0; i < 12; ++i) dc.arrays[i] = std::move(g_raw_pending.arrays[i]);
     g_raw_pending.valid = false;
@@ -747,6 +747,12 @@ void fifo_store32(uint32_t be) {   // the word is already in big-endian byte ord
 }
 // Bytes and halfwords to the pipe (command opcodes, vertex counts, indices) take the same direct path
 // as words; they used to go through the MMIO dispatch and write_fifo's byte loop.
+void fifo_store_words(const uint32_t* be, size_t n) {   // n big-endian words, one parse check
+  if (__builtin_expect(g_fifo_len + n * 4 + 8 > g_fifo_cap, 0)) { while (g_fifo_len + n * 4 + 8 > g_fifo_cap) fifo_grow(); }
+  std::memcpy(g_fifo_data + g_fifo_len, be, n * 4);
+  g_fifo_len += n * 4;
+  if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
+}
 void fifo_store8(uint32_t v) {
   if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
   g_fifo_data[g_fifo_len++] = uint8_t(v);

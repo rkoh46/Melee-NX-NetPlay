@@ -93,29 +93,34 @@ namespace {
 // The GX matrix writers stream a matrix into the write-gather pipe: psq_st pairs (type 0, flush
 // to zero on store) and stfs singles for odd elements. `dest` is always the pipe, so the words go
 // straight to the FIFO capture after the same load/store conversions the translation performs.
-inline void fifo_pair(uint8_t* m, ppc::Context& c, uint32_t src) {
-  gx::fifo_store32(__builtin_bswap32(ppc::double_to_float_bits_ftz(ps_load(m, c, src))));
-  gx::fifo_store32(__builtin_bswap32(ppc::double_to_float_bits_ftz(ps_load(m, c, src + 4))));
-}
-inline void fifo_single(uint8_t* m, ppc::Context& c, uint32_t src) {
-  gx::fifo_store32(__builtin_bswap32(ppc::double_to_float_bits(ps_load(m, c, src))));
-}
+inline uint32_t pipe_pair_word(uint8_t* m, ppc::Context& c, uint32_t src) { return __builtin_bswap32(ppc::double_to_float_bits_ftz(ps_load(m, c, src))); }
+inline uint32_t pipe_single_word(uint8_t* m, ppc::Context& c, uint32_t src) { return __builtin_bswap32(ppc::double_to_float_bits(ps_load(m, c, src))); }
 }  // namespace
 
 // static void WriteMTXPS4x3(f32 mtx[3][4], volatile f32* dest): six pairs.
+// Each writer converts the whole matrix, then appends it to the capture in one call.
 HLE(WriteMTXPS4x3) {
   const uint32_t mtx = ARG0;
-  for (uint32_t off = 0; off < 48; off += 8) fifo_pair(m, c, mtx + off);
+  uint32_t w[12];
+  for (uint32_t i = 0; i < 12; ++i) w[i] = pipe_pair_word(m, c, mtx + i * 4);
+  gx::fifo_store_words(w, 12);
 }
 // static void WriteMTXPS3x3from3x4(f32 mtx[3][4], volatile f32* dest): per row a pair then a single.
 HLE(WriteMTXPS3x3from3x4) {
   const uint32_t mtx = ARG0;
-  for (uint32_t row = 0; row < 3; ++row) { fifo_pair(m, c, mtx + row * 16); fifo_single(m, c, mtx + row * 16 + 8); }
+  uint32_t w[9];
+  for (uint32_t row = 0; row < 3; ++row) {
+    w[row * 3] = pipe_pair_word(m, c, mtx + row * 16); w[row * 3 + 1] = pipe_pair_word(m, c, mtx + row * 16 + 4);
+    w[row * 3 + 2] = pipe_single_word(m, c, mtx + row * 16 + 8);
+  }
+  gx::fifo_store_words(w, 9);
 }
 // static void WriteMTXPS4x2(f32 mtx[2][4], volatile f32* dest): four pairs.
 HLE(WriteMTXPS4x2) {
   const uint32_t mtx = ARG0;
-  for (uint32_t off = 0; off < 32; off += 8) fifo_pair(m, c, mtx + off);
+  uint32_t w[8];
+  for (uint32_t i = 0; i < 8; ++i) w[i] = pipe_pair_word(m, c, mtx + i * 4);
+  gx::fifo_store_words(w, 8);
 }
 
 // void HSD_MtxInverseTranspose(Mtx src, Mtx dest): the inverse transpose of the 3x3 part, used for
@@ -125,8 +130,57 @@ HLE(WriteMTXPS4x2) {
 // emitted, fabs through the integer sign mask, fdivs for 1/det, fmul/fmsubs/fnmsubs per element), so
 // the results match the translation to the bit. Source elements are read before any store, which is
 // what the original's copy to a stack temporary achieves when src == dest.
+// Plain-IEEE form of the sequence below, valid while FPSCR.NI is clear (the game never sets it; see the
+// fpscr log line): every helper then reduces to one IEEE operation rounded to double and, where the
+// original rounds, to single: f25 of a single-precision value is the identity, fs is (float), finish is a
+// no-op. Only NaNs differ (operand-priority quieting), and a NaN anywhere reaches the outputs, so any
+// non-finite output sends the call to the exact sequence. Returns false (nothing stored) in that case.
+static bool inverse_transpose_plain(ppc::Context& c, uint8_t* m, uint32_t src, uint32_t dest) {
+  if (ppc::detail::current_fpscr & 4) return false;
+  const auto L = [&](uint32_t off) { return ppc::float_bits_to_double(ppc::ld32(c, m, src + off)); };
+  const auto r = [](double x) { return double(float(x)); };
+  const double m00 = L(0), m01 = L(4), m02 = L(8), m10 = L(16), m11 = L(20), m12 = L(24), m20 = L(32), m21 = L(36), m22 = L(40);
+  double f1 = r(m01 * m12);
+  const double f4 = r(m10 * m01);
+  double f2 = r(m00 * m11);
+  f1 = r(m20 * f1);
+  const double f3 = r(m02 * m10);
+  f1 = r(std::fma(m22, f2, f1));
+  f2 = r(m20 * m11);
+  const double f5 = r(m00 * m21);
+  f1 = r(std::fma(m21, f3, f1));
+  f1 = -r(std::fma(m02, f2, -f1));
+  f1 = -r(std::fma(m22, f4, -f1));
+  const double det = -r(std::fma(m12, f5, -f1));
+  if (!std::isfinite(det)) return false;
+  const double eps = ppc::float_bits_to_double(ppc::ld32(c, m, c.r[2] - 5000u));
+  if (std::fabs(float(det)) < eps) return false;   // singular: the exact path copies (rare)
+  const double inv = r(ppc::float_bits_to_double(ppc::ld32(c, m, c.r[2] - 4996u)) / det);
+  double e00 = m00, e01 = m01, e02 = m02, e10 = m10, e11 = m11, e12 = m12, e20 = m20, e21 = m21, e22 = m22;
+  if (src == dest) {
+    const auto flush = [](double v) { return ppc::float_bits_to_double(ppc::double_to_float_bits_ftz(v)); };
+    e00 = flush(m00); e01 = flush(m01); e02 = flush(m02); e10 = flush(m10); e11 = flush(m11);
+    e12 = flush(m12); e20 = flush(m20); e21 = flush(m21); e22 = flush(m22);
+  }
+  const auto E = [&](double a, double b, double cc, double d, bool negate) {
+    const double t = r(a * b);
+    const double u = negate ? -r(std::fma(cc, d, -t)) : r(std::fma(cc, d, -t));
+    return r(inv * u);
+  };
+  const double out[9] = {E(e21, e12, e11, e22, false), E(e21, e02, e01, e22, true), E(e11, e02, e01, e12, false),
+                         E(e20, e12, e10, e22, true), E(e20, e02, e00, e22, false), E(e10, e02, e00, e12, true),
+                         E(e20, e11, e10, e21, false), E(e20, e01, e00, e21, true), E(e10, e01, e00, e11, false)};
+  for (double v : out) if (!std::isfinite(v)) return false;
+  static const uint32_t offs[9] = {0, 16, 32, 4, 20, 36, 8, 24, 40};
+  for (int i = 0; i < 9; ++i) ppc::st32(c, m, dest + offs[i], ppc::double_to_float_bits(out[i]));
+  const uint32_t zero = ppc::double_to_float_bits(ppc::float_bits_to_double(ppc::ld32(c, m, c.r[2] - 4992u)));
+  ppc::st32(c, m, dest + 12, zero); ppc::st32(c, m, dest + 28, zero); ppc::st32(c, m, dest + 44, zero);
+  return true;
+}
+
 static void inverse_transpose_body(ppc::Context& c, uint8_t* m) {
   const uint32_t src = ARG0, dest = ARG1;
+  if (inverse_transpose_plain(c, m, src, dest)) return;
   const auto L = [&](uint32_t off) { return ppc::float_bits_to_double(ppc::ld32(c, m, src + off)); };
   const auto S = [&](uint32_t off, double v) { ppc::st32(c, m, dest + off, ppc::double_to_float_bits(v)); };
   using ppc::fs; using ppc::fmul; using ppc::f25; using ppc::fmadds; using ppc::fmsubs; using ppc::fnmsubs;
