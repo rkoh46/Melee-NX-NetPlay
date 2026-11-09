@@ -11,6 +11,9 @@
 #include "hle.h"
 #include "gx_core.h"
 #include <cmath>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 #include <cstdlib>
 #include <cstring>
 
@@ -32,6 +35,51 @@ static void concat_body(ppc::Context& c, uint8_t* m) {
   // ps_madds = (float)fma(B, a, t); f25 is the identity on single values), and psq_st flushes a
   // denormal result to zero. Only NaNs differ (operand-priority quieting); a NaN anywhere reaches the
   // outputs, so a NaN output (or NI set) takes the exact sequence below, nothing stored before.
+#if defined(__aarch64__)
+  // NEON form of the same: two columns per vector, the same fused multiply-adds (vfmaq is fmadd) and
+  // roundings to single (fcvtn/fcvtl), so the results are those of the scalar path below.
+  if (!(ppc::detail::current_fpscr & 4) && (a & 0x3FFFFFFFu) + 48 <= ppc::RAM_SIZE && (b & 0x3FFFFFFFu) + 48 <= ppc::RAM_SIZE &&
+      (ab & 0x3FFFFFFFu) + 48 <= ppc::RAM_SIZE) {
+    uint32_t wa[12], wb[12];
+    std::memcpy(wa, m + (a & 0x3FFFFFFFu), 48); std::memcpy(wb, m + (b & 0x3FFFFFFFu), 48);
+    const auto load2 = [](const uint32_t* w) {   // two big-endian singles -> two doubles (exact)
+      return vcvt_f64_f32(vreinterpret_f32_u8(vrev32_u8(vreinterpret_u8_u32(vld1_u32(w)))));
+    };
+    const auto round = [](float64x2_t v) { return vcvt_f64_f32(vcvt_f32_f64(v)); };
+    float64x2_t B01[3], B23[3];
+    for (int k = 0; k < 3; ++k) { B01[k] = load2(wb + k * 4); B23[k] = load2(wb + k * 4 + 2); }
+    const float64x2_t unit01 = {0.0, 1.0};
+    float64x2_t R01[3], R23[3];
+    uint64x2_t ok = vdupq_n_u64(~0ull);
+    for (int r = 0; r < 3; ++r) {
+      const float64x2_t a01 = load2(wa + r * 4), a23 = load2(wa + r * 4 + 2);
+      const double a0 = vgetq_lane_f64(a01, 0), a1 = vgetq_lane_f64(a01, 1), a2 = vgetq_lane_f64(a23, 0), a3 = vgetq_lane_f64(a23, 1);
+      float64x2_t t = round(vmulq_n_f64(B01[0], a0));
+      t = round(vfmaq_n_f64(t, B01[1], a1));
+      t = round(vfmaq_n_f64(t, B01[2], a2));
+      float64x2_t u = round(vmulq_n_f64(B23[0], a0));
+      u = round(vfmaq_n_f64(u, B23[1], a1));
+      u = round(vfmaq_n_f64(u, B23[2], a2));
+      u = round(vfmaq_n_f64(u, unit01, a3));   // Unit01: adds a3 to column 3 only
+      R01[r] = t; R23[r] = u;
+      ok = vandq_u64(ok, vandq_u64(vceqq_f64(t, t), vceqq_f64(u, u)));   // false lanes are NaN
+    }
+    if (vgetq_lane_u64(ok, 0) && vgetq_lane_u64(ok, 1)) {
+      uint32_t out[12];
+      for (int r = 0; r < 3; ++r) {
+        const float32x4_t f = vcombine_f32(vcvt_f32_f64(R01[r]), vcvt_f32_f64(R23[r]));   // exact: already single values
+        uint32x4_t bits = vreinterpretq_u32_f32(f);
+        // psq_st flushes a denormal to a signed zero.
+        const uint32x4_t denormal = vandq_u32(vceqq_u32(vandq_u32(bits, vdupq_n_u32(0x7F800000u)), vdupq_n_u32(0)),
+                                              vtstq_u32(bits, vdupq_n_u32(0x007FFFFFu)));
+        bits = vbslq_u32(denormal, vandq_u32(bits, vdupq_n_u32(0x80000000u)), bits);
+        vst1q_u32(out + r * 4, vreinterpretq_u32_u8(vrev32q_u8(vreinterpretq_u8_u32(bits))));
+      }
+      std::memcpy(m + (ab & 0x3FFFFFFFu), out, 48);
+      return;
+    }
+  }
+#endif
   if (!(ppc::detail::current_fpscr & 4)) {
     double A[3][4], B[3][4], R[3][4];
     for (int r = 0; r < 3; ++r)
