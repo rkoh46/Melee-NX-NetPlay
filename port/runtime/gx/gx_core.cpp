@@ -530,6 +530,15 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
     dc.skinned = observed_skinned();
     dc.authored_pose = capture_authored_pose(); }
   g_frame.commands.push_back({FrameCommand::Draw, (uint32_t)g_frame.draws.size() - 1});
+  // The next slot of the frame's draw array (5.4 KB apart, ~8 MB a frame, rotating through the recycled
+  // frames) was last written frames ago: its initialisation stores were record_draw's hottest
+  // instructions. Draws come ~13 us apart; prefetching its per-draw fields for writing now has them in
+  // cache by then (the record slot measured 2.0 -> 1.6 ms). The state block before them is not written
+  // for delta records.
+  if (g_frame.draws.size() < g_frame.draws.capacity()) {
+    const char* next = reinterpret_cast<const char*>(g_frame.draws.data() + g_frame.draws.size());
+    for (size_t off = sizeof(DrawState) & ~size_t(63); off < sizeof(DrawCall); off += 64) __builtin_prefetch(next + off, 1, 3);
+  }
   ++g_draws;
   g_vertices += count;
 }
