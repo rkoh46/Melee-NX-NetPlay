@@ -544,7 +544,12 @@ void sim_cost_add(int slot, double seconds) {
 // "sim: 3.1 ms/frame (worst 12.4) | observe 0.9 texsnap 0.4" for the periodic frame log.
 static std::string sim_cost_line(uint32_t frames) {
   char buf[512];
-  size_t n = (size_t)std::snprintf(buf, sizeof buf, "sim: %.1f ms/frame (worst %.1f)", g_sim_ms_window / std::max(1u, frames), g_sim_ms_worst);
+  // late: frames of this window over the 16.7 ms budget (after boot warm-up); the run total follows.
+  static uint64_t late_reported = 0;
+  const uint64_t late_total = late_frame_count();
+  size_t n = (size_t)std::snprintf(buf, sizeof buf, "sim: %.1f ms/frame (worst %.1f, late %llu, %llu so far)", g_sim_ms_window / std::max(1u, frames),
+                                   g_sim_ms_worst, (unsigned long long)(late_total - late_reported), (unsigned long long)late_total);
+  late_reported = late_total;
   bool first = true;
   for (int i = 0; i < SIM_COST_COUNT; ++i) {
     double ms = g_sim_costs_window[i] * 1000.0 / std::max(1u, frames);
