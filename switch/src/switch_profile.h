@@ -12,3 +12,5 @@ void switch_profile_stop(const char* path);
 // Callers of a code range: while sampling, lr is also counted (table "rangelr"/"rangelr1") whenever
 // pc falls in [lo, hi), given as ELF addresses next to the ELF address of switch_profile_start.
 void switch_profile_watch_range(uint64_t elf_lo, uint64_t elf_hi, uint64_t elf_anchor);
+// Records samples only while the guest's retrace count is in [first, end) (end 0: always).
+void switch_profile_frames(uint32_t first, uint32_t end);

@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+namespace host { uint32_t retrace_count(); }
 namespace {
 Thread g_sampler;
 Handle g_target[2] = {INVALID_HANDLE, INVALID_HANDLE};   // sampled alternately
@@ -28,6 +29,7 @@ std::unordered_map<uint64_t, uint32_t> g_range_lr[2]; // callers of a watched co
 // syscall's lr names the libnx wrapper (mutexLock, condvarWait...), these name who called the wrapper.
 std::unordered_map<uint64_t, uint32_t> g_svc_up[2], g_svc_up2[2];
 uint64_t g_range_lo = 0, g_range_hi = 0;
+uint32_t g_frame_lo = 0, g_frame_hi = 0;   // profile_frames=A:B: record only while the guest's retrace count is in [A, B)
 
 void sampler(void*) {
   const uint64_t period_ns = 1000000000ull / (g_hz ? g_hz : 1000);
@@ -36,6 +38,10 @@ void sampler(void*) {
   unsigned which = 0;
   while (g_run.load(std::memory_order_relaxed)) {
     svcSleepThread(period_ns);
+    if (g_frame_hi) {
+      const uint32_t f = host::retrace_count();
+      if (f < g_frame_lo || f >= g_frame_hi) continue;
+    }
     if (g_target[1] != INVALID_HANDLE) which ^= 1;
     const Handle target = g_target[which];
     if (R_FAILED(svcSetThreadActivity(target, ThreadActivity_Paused))) { ++g_failed; continue; }
@@ -86,6 +92,7 @@ void write_table(FILE* f, const char* tag, const std::unordered_map<uint64_t, ui
 }
 }  // namespace
 
+void switch_profile_frames(uint32_t first, uint32_t end) { g_frame_lo = first; g_frame_hi = end; }
 void switch_profile_watch_range(uint64_t elf_lo, uint64_t elf_hi, uint64_t elf_anchor) {
   const uint64_t slide = reinterpret_cast<uintptr_t>(&switch_profile_start) - elf_anchor;
   g_range_lo = elf_lo + slide; g_range_hi = elf_hi + slide;

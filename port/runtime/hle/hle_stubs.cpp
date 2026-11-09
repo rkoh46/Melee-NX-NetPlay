@@ -103,8 +103,14 @@ namespace hle {
 // The symbol map names the MSL routine `longjmp` (older maps: `__longjmp`); both must be hooked,
 // otherwise the recompiled routine restores the registers and returns into the callback, which
 // then keeps running with the setjmp caller's registers and corrupts whatever it touches.
-void __longjmp(ppc::Context& c, uint8_t*) { throw ppc::GuestLongJmp{c.r[3], c.r[4]}; }
-void longjmp(ppc::Context& c, uint8_t*) { throw ppc::GuestLongJmp{c.r[3], c.r[4]}; }
+namespace {
+void report_longjmp(const ppc::Context& c) {   // diagnostic: each throw unwinds the host stack
+  static unsigned reported = 0;
+  if (reported < 2) { ++reported; host::log("longjmp: buf %08X val %u (frame %u, lr %08X)", c.r[3], c.r[4], host::retrace_count(), c.lr); }
+}
+}  // namespace
+void __longjmp(ppc::Context& c, uint8_t*) { report_longjmp(c); throw ppc::GuestLongJmp{c.r[3], c.r[4]}; }
+void longjmp(ppc::Context& c, uint8_t*) { report_longjmp(c); throw ppc::GuestLongJmp{c.r[3], c.r[4]}; }
 // Called at interrupt-safe points (see host::pump_completions / host::retrace).
 void audio_tick(bool force) {
   static bool ticking = false;

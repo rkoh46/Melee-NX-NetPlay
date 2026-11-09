@@ -660,7 +660,7 @@ void retrace() {
         // While the console is CPU-bound every frame is late: one line a second keeps the
         // log readable and the logging itself off the frame; the 60-frame summary has the rest.
         static double next_late_log = 0.0;
-        const bool report = now >= next_late_log;
+        const bool report = now >= next_late_log || g_last_sim_ms > 20.0;   // big hitches are always reported
         if (report) next_late_log = now + 1.0;
 #else
         const bool report = true;

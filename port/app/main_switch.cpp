@@ -107,8 +107,16 @@ struct GuestRun {
 // The guest from __start to the end of the run. On the renderer build this is its own thread
 // (core 2, the highest application priority) so the game never waits for the GPU side; the
 // frames it finishes go through gx::AsyncBackend to the thread that owns Aurora.
+// The first C++ exception of the process makes libgcc sort the unwind entries of the whole executable
+// (one per translated function, ~2 MB of .eh_frame; there is no .eh_frame_hdr to search on the
+// console). Melee's first guest longjmp (a stage animation lookup) paid that, ~16 ms, mid-match; one
+// throw here pays it during boot instead.
+[[gnu::noinline]] static void warm_unwinder() {
+  try { throw ppc::GuestLongJmp{0, 0}; } catch (const ppc::GuestLongJmp&) {}
+}
 void run_guest(GuestRun& run) {
   switch_sync_clang_tls();
+  { const double t0 = host::now_seconds(); warm_unwinder(); host::log("boot: unwinder warmed in %.1f ms", (host::now_seconds() - t0) * 1000.0); }
   host::ScopedFatalBoundary fatal_boundary;
   ppc::ScopedGuestFpEnvironment fp_environment(0);
   try {
@@ -232,6 +240,11 @@ void simulation_thread(void*) {
             if (const auto pr = g_ini.find("profile_range"); pr != g_ini.end()) {
               unsigned long long lo = 0, hi = 0, anchor = 0;
               if (std::sscanf(pr->second.c_str(), "%llx:%llx:%llx", &lo, &hi, &anchor) == 3) switch_profile_watch_range(lo, hi, anchor);
+            }
+            // profile_frames=A:B samples only frames A..B-1 (one hitch, instead of a whole run's average).
+            if (const auto pf = g_ini.find("profile_frames"); pf != g_ini.end()) {
+              unsigned a = 0, b = 0;
+              if (std::sscanf(pf->second.c_str(), "%u:%u", &a, &b) == 2 && b > a) { switch_profile_frames(a, b); host::log("profile: frames %u..%u only", a, b - 1); }
             }
             if (switch_profile_start(&guest, 2000, &self)) host::log("profile: sampling the guest and render threads at 1 kHz each (Logs/profile.txt at exit)");
             else host::log("profile: cannot start the sampler");

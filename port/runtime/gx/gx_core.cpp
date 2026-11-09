@@ -901,6 +901,7 @@ void gpu_submit() {
   g_gpu_cv.notify_all();
 }
 void gpu_sync() {
+  host::SimCostScope wait(host::SIM_GPUWAIT);   // the guest waiting for the GPU thread (late-frame logs show it)
   gpu_submit();
   std::unique_lock<std::mutex> lock(g_gpu_mutex);
   g_gpu_cv.wait(lock, [] { return g_gpu_failed || (g_gpu_queue.empty() && !g_gpu_busy); });
