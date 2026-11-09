@@ -4,7 +4,9 @@
 #   tools/nx-gfxdebug.sh <ip> <bits> [out.jpg]
 # Bits: 1 skip draws sampling EFB copies, 2 sample guest RAM instead of the GPU copy, 4 checkerboard
 # instead of the copy, 8 native copy format (I4...), 16 clear after partial copies, 32 draw dump of the
-# next frame (Logs/draws-now.txt), 64 perform no texture copies, 128 half-size copies (blit shader path), 256 show the frame's copies as quads.
+# next frame (Logs/draws-now.txt), 64 perform no texture copies, 128 half-size copies (blit shader path), 256 show the frame's copies as quads,
+# 512 show the textures the frame samples as thumbnails (bits 16-19 = one GX format, e.g. 512+14*65536 for CMPR; 0 = all),
+# 1024 hand Aurora paletted textures natively (indices + TLUT) instead of decoding them in the bridge.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

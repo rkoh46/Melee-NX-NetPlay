@@ -11,6 +11,8 @@
 // commands enter its real decoder, which generates WGSL and Metal pipelines.
 #include <gx/fifo.hpp>
 #include <gx/gx.hpp>
+#include <gfx/texture.hpp>
+#include <gfx/texture_convert.hpp>
 #include <imgui.h>
 
 #include <algorithm>
@@ -46,6 +48,8 @@ constexpr unsigned kDebugDumpNow = 32;          // one-shot: draw dump of the ne
 constexpr unsigned kDebugSkipCopies = 64;       // do not perform texture copies at all
 constexpr unsigned kDebugCopyHalfSize = 128;    // copy into a half-size texture (Aurora's blit shader instead of vkCmdCopyImage)
 constexpr unsigned kDebugShowCopies = 256;      // draw this frame's texture copies as quads along the top of the screen
+constexpr unsigned kDebugPaletteNative = 1024;  // hand Aurora the palette indices and TLUT instead of decoding them here (see texture())
+constexpr unsigned kDebugShowTextures = 512;    // draw the textures this frame samples as thumbnails; bits 16-19 pick one GX format (0 = all)
 unsigned g_debug = 0;
 bool copies_as_rgba8() { return !(g_debug & kDebugCopyNativeFormat); }
 GXTexFmt copy_format(const EfbCopy& c) {
@@ -83,6 +87,7 @@ struct AuroraBackend::Impl {
     bool has_palette = false;
     uint64_t last_frame = 0;
     std::shared_ptr<const TextureSnapshot> source;
+    std::vector<uint8_t> converted;   // paletted textures: the decoded image Aurora samples instead of the indices
   };
   std::map<TextureKey, TextureObject> textures;
   std::function<void()> overlay;
@@ -155,7 +160,12 @@ struct AuroraBackend::Impl {
     const bool checker_mode = copy_source && (g_debug & kDebugCopyChecker) && t.width == 256 && t.height == 256;
     const void* source = checker_mode ? checker_image() : copy_source ? copy_source : t.data->image.data();
     const uint32_t format = (checker_mode || (copy_source && copies_as_rgba8())) ? 6u : t.format;   // 6 = GX_TF_RGBA8
-    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format, t.mode0, t.mode1,
+    // Paletted textures (CI4/CI8/CI14) are decoded here with Aurora's own converter and handed over as RGBA8:
+    // given the indices and a TLUT, Aurora's draw-time palette path on the console drew nothing for CI8
+    // (every character-select icon and portrait, the stage tiles), while the same converter run on the
+    // same bytes decodes them correctly. Debug bit 1024 restores the native path for comparison.
+    const bool decode_palette = (format == 8 || format == 9 || format == 10) && !(g_debug & kDebugPaletteNative);
+    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format | (decode_palette ? 0x100u : 0u), t.mode0, t.mode1,
                          t.tlut_format, t.mip_levels, unit};
     auto [it, inserted] = textures.try_emplace(key);
     auto& obj = it->second;
@@ -166,7 +176,20 @@ struct AuroraBackend::Impl {
     const auto wrap_t = static_cast<GXTexWrapMode>(bits(t.mode0, 2, 2));
     const auto mips = t.mip_levels > 1 ? GX_TRUE : GX_FALSE;
     obj.has_palette = format == 8 || format == 9 || format == 10;
-    if (obj.has_palette) {
+    if (decode_palette) {
+      const uint16_t entries = format == 8 ? 16 : format == 9 ? 256 : 16384;
+      auto converted = aurora::gfx::convert_texture_palette(format, t.width, t.height, t.mip_levels,
+                                                            {t.data->image.data(), texture_chain_bytes(t.width, t.height, format, t.mip_levels)},
+                                                            static_cast<GXTlutFmt>(t.tlut_format), entries, {t.data->palette.data(), t.data->palette.size()});
+      if (!converted.data.empty()) {
+        obj.converted.assign(converted.data.data(), converted.data.data() + converted.data.size());
+        obj.has_palette = false;
+        GXInitTexObj(&obj.texture, obj.converted.data(), uint16_t(t.width), uint16_t(t.height), GX_TF_RGBA8_PC, wrap_s, wrap_t, mips);
+      }
+    }
+    if (!obj.has_palette && !obj.converted.empty()) {
+      // already initialised above
+    } else if (obj.has_palette) {
       GXInitTlutObj(&obj.palette, t.data->palette.data(), static_cast<GXTlutFmt>(t.tlut_format),
                     uint16_t(t.format == 8 ? 16 : t.format == 9 ? 256 : 16384));
       GXInitTexObjCI(&obj.texture, source, uint16_t(t.width), uint16_t(t.height), static_cast<GXCITexFmt>(format),
@@ -287,6 +310,70 @@ struct AuroraBackend::Impl {
       list->AddText(ImVec2(x0, y0 + 244), IM_COL32(255, 255, 0, 255), label);
     }
   }
+  // Diagnostic: show the textures this frame's draws sample, decoded by Aurora's own converters from the
+  // captured bytes and drawn by ImGui as 128-point thumbnails in rows along the top. The format selector in
+  // the debug bits (bits 16-19, 0 = every format) picks one GX texture format, so a blank or garbled
+  // texture can be told apart from a draw that goes wrong after sampling. Uploads are cached by content.
+  std::map<uint64_t, aurora::gfx::TextureHandle> debug_textures;
+  void show_textures(const Frame& frame) {
+    auto* list = ImGui::GetForegroundDrawList();
+    if (!list) return;
+    const unsigned want = (g_debug >> 16) & 0xF;
+    std::vector<const TextureRef*> shown;
+    for (const auto& cmd : frame.commands) {
+      if (cmd.kind != FrameCommand::Draw) continue;
+      for (const auto& t : frame.draws[cmd.index].textures) {
+        if (!t.used || !t.data || (want && t.format != want)) continue;
+        if (copy_tokens.count(t.addr)) continue;   // copies have their own viewer
+        bool seen = false;
+        for (const auto* s : shown) if (s->data->hash == t.data->hash) { seen = true; break; }
+        if (!seen) shown.push_back(&t);
+        if (shown.size() >= 18) break;
+      }
+      if (shown.size() >= 18) break;
+    }
+    char label[200];
+    std::snprintf(label, sizeof label, "textures: %zu distinct%s shown of this frame's draws (format filter %u)", shown.size(),
+                  shown.size() >= 18 ? "+" : "", want);
+    list->AddText(ImVec2(10, 20), IM_COL32(255, 255, 0, 255), label);
+    unsigned slot = 0;
+    for (const auto* tp : shown) {
+      const auto& t = *tp;
+      const float x0 = 10.f + (slot % 9) * 140.f, y0 = 40.f + (slot / 9) * 170.f;
+      ++slot;
+      const uint64_t key = t.data->hash ^ (uint64_t(t.format) << 60);
+      auto it = debug_textures.find(key);
+      if (it == debug_textures.end()) {
+        aurora::gfx::TextureHandle handle;
+        const uint32_t level0 = texture_level_bytes(t.width, t.height, t.format);
+        if (t.format == 8 || t.format == 9 || t.format == 10) {
+          const uint16_t entries = t.format == 8 ? 16 : t.format == 9 ? 256 : 16384;
+          auto converted = aurora::gfx::convert_texture_palette(t.format, t.width, t.height, 1, {t.data->image.data(), level0},
+                                                                static_cast<GXTlutFmt>(t.tlut_format), entries,
+                                                                {t.data->palette.data(), t.data->palette.size()});
+          if (!converted.data.empty())
+            handle = aurora::gfx::new_static_texture_2d(t.width, t.height, 1, GX_TF_RGBA8_PC, {converted.data.data(), converted.data.size()},
+                                                        false, "debug texture");
+        } else if (t.data->image.size() >= level0) {
+          handle = aurora::gfx::new_static_texture_2d(t.width, t.height, 1, t.format, {t.data->image.data(), level0}, false, "debug texture");
+        }
+        it = debug_textures.emplace(key, std::move(handle)).first;
+      }
+      list->AddRectFilled(ImVec2(x0 - 2, y0 - 2), ImVec2(x0 + 130, y0 + 130), IM_COL32(255, 0, 255, 255));
+      list->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + 128, y0 + 128), IM_COL32(40, 40, 40, 255));
+      if (it->second) {
+        const ImTextureID id = reinterpret_cast<ImTextureID>(it->second->sampleTextureView.Get());
+        list->AddImage(id, ImVec2(x0, y0), ImVec2(x0 + 128, y0 + 128));
+      } else {
+        list->AddText(ImVec2(x0 + 4, y0 + 56), IM_COL32(255, 80, 80, 255), "no upload");
+      }
+      std::snprintf(label, sizeof label, "%08X %ux%u f%u", t.addr, t.width, t.height, t.format);
+      list->AddText(ImVec2(x0, y0 + 132), IM_COL32(255, 255, 0, 255), label);
+      std::snprintf(label, sizeof label, "tlut %X/%u m%u", t.tlut_addr, t.tlut_format, t.mip_levels);
+      list->AddText(ImVec2(x0, y0 + 146), IM_COL32(255, 255, 0, 255), label);
+    }
+    if (debug_textures.size() > 256) debug_textures.clear();
+  }
   void submit(const Frame& input) {
     require_owner();
     if (last_sequence && input.sequence <= *last_sequence)
@@ -355,6 +442,7 @@ struct AuroraBackend::Impl {
       }
     }
     if (g_debug & kDebugShowCopies) show_copies(frame);
+    if (g_debug & kDebugShowTextures) show_textures(input); else if (!debug_textures.empty()) debug_textures.clear();
     if (overlay) overlay();
     aurora_end_frame(); // Drains FIFO; uploaded texture source bytes are now safe.
     last_sequence = input.sequence;

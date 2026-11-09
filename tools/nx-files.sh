@@ -44,7 +44,10 @@ case "$cmd" in
     ini="$repo/dist/sd/$app/launcher.ini"
     mkd "switch"; mkd "$app"; mkd "$app/Logs"
     ftp --ftp-create-dirs -T "$nro" "$base/$app/melee-nx-netplay.nro" && echo "  $app/melee-nx-netplay.nro ($(du -h "$nro" | cut -f1))"
-    [[ -f "$ini" ]] && ftp --ftp-create-dirs -T "$ini" "$base/$app/launcher.ini" && echo "  $app/launcher.ini" ;;
+    [[ -f "$ini" ]] && ftp --ftp-create-dirs -T "$ini" "$base/$app/launcher.ini" && echo "  $app/launcher.ini"
+    for s in "$repo"/port/scripts/*.txt; do   # the input scripts launcher.ini can name
+      ftp -T "$s" "$base/$app/$(basename "$s")" && echo "  $app/$(basename "$s")"
+    done ;;
   iso)
     iso="${1:?path to GALE01.iso}"
     mkd "switch"; mkd "$app"

@@ -51,7 +51,26 @@ HLE(PADRead) {
   // the copy is what gets patched: gmVsMelee_SssData at 0x80480668, VsModeData at +8, players at +0x68 of that,
   // 0x24 each, slot_type at +1 (Gm_PKind: 1 = CPU), cpu_level at +0xF (mn/types.h).
   static const uint8_t force_cpu = [] { const char* v = std::getenv("MELEE_FORCE_CPU"); const int n = v ? std::atoi(v) : 0; return (uint8_t)(n >= 1 && n <= 9 ? n : 0); }();
-  if (force_cpu && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01) {
+  // MELEE_FORCE_CSS=1: the hands-free line-up. While the main menu is up (mode 0x01), the saved VS Melee set-up
+  // becomes P2 Fox and P3 Marth as CPUs (level MELEE_FORCE_CPU, else 9) with P1 and P4 closed, written into the
+  // save block the character select copies when it opens (gmVsMelee_EnterCss: css->vs = *vs, where vs is
+  // gmMainLib_804D3EE0->modes.vs_melee at +0x590; players at +0x68 of the VsModeData, 0x24 each: ckind +0,
+  // slot_type +1 (Gm_PKind 1 = CPU, 3 = none), cpu_level +0xF). The screen then opens ready to fight and a
+  // script needs only START; toggling the tags with timed presses depended on the saved state and lost runs.
+  static const bool force_css = [] { const char* v = std::getenv("MELEE_FORCE_CSS"); return v && std::atoi(v) == 1; }();
+  if (force_css && host::rd8(0x80479D30) == 0x01) {
+    if (const uint32_t save = host::rd32(0x804D3EE0); save >= 0x80000000u && save < 0x81800000u) {
+      static const uint8_t kinds[4] = {0x1A, 0x02, 0x09, 0x1A};   // CKIND_PLAYABLE_COUNT (none), Fox, Marth, none
+      for (uint32_t i = 0; i < 4; ++i) {
+        const uint32_t player = save + 0x590 + 0x68 + i * 0x24;
+        const bool cpu = i == 1 || i == 2;
+        host::wr8(player + 0x0, kinds[i]);
+        host::wr8(player + 0x1, cpu ? 1 : 3);
+        host::wr8(player + 0xF, force_cpu ? force_cpu : 9);
+      }
+    }
+  }
+  if (force_cpu && !force_css && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01) {
     for (uint32_t i = 0; i < 2; ++i) {
       const uint32_t player = 0x80480668 + 0x8 + 0x68 + i * 0x24;
       host::wr8(player + 0x1, 1);

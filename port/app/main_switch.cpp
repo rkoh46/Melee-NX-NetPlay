@@ -355,6 +355,10 @@ int main(int argc, char** argv) {
   const std::string script = get("script", "");
   if (!script.empty() && !host::input_load_script(script.c_str()))
     std::printf("cannot load input script %s\n", script.c_str());
+  // Measurement aids read by hle_pad.cpp at the first pad poll: force_css=1 opens the character select
+  // with P2 Fox and P3 Marth as CPUs (a script then needs only START); force_cpu=1..9 is their level.
+  if (get("force_css", "0") == "1") setenv("MELEE_FORCE_CSS", "1", 1);
+  if (const std::string level = get("force_cpu", ""); !level.empty()) setenv("MELEE_FORCE_CPU", level.c_str(), 1);
 
   const bool applet_mode = appletGetAppletType() != AppletType_Application && appletGetAppletType() != AppletType_SystemApplication;
 #if !MELEE_NX_AURORA
