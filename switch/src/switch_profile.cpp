@@ -87,7 +87,7 @@ void sampler(void*) {
 void write_table(FILE* f, const char* tag, const std::unordered_map<uint64_t, uint32_t>& table) {
   std::vector<std::pair<uint64_t, uint32_t>> rows(table.begin(), table.end());
   std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-  const size_t n = std::min<size_t>(rows.size(), 3000);
+  const size_t n = std::min<size_t>(rows.size(), 200000);   // the whole tail: hot-function lists need it
   for (size_t i = 0; i < n; ++i) std::fprintf(f, "%s %016llx %u\n", tag, (unsigned long long)rows[i].first, rows[i].second);
 }
 }  // namespace

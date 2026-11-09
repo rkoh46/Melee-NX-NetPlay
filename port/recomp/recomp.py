@@ -266,6 +266,12 @@ def main():
             del thunks[t]
     func_names = {addr: "f_%08X" % addr for addr in infos}
     emitter = Emitter(dol, symbols, infos, hle_funcs, func_names)
+    # Hot functions (tools/nx-hotlist.py, from a console profile) go to .text.hot.* sections, which the
+    # linker script places together: the code every frame runs shares pages and cache lines.
+    hot_path = ROOT / "port/recomp/hot_functions.txt"
+    if hot_path.exists():
+        emitter.hot = {int(l.strip(), 16) for l in hot_path.read_text().splitlines() if l.strip() and not l.startswith("#")}
+        print("hot functions: %d" % len(emitter.hot))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     changed = 0

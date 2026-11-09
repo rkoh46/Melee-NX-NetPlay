@@ -66,6 +66,7 @@ class Emitter:
         self.symbols = symbols
         self.infos = infos
         self.hle = hle_names
+        self.hot = set()   # guest addresses placed in .text.hot.* (recomp.py loads hot_functions.txt)
         self.func_names = func_names  # addr -> C identifier
         self.referenced = set()
 
@@ -85,7 +86,8 @@ class Emitter:
             # The original translation stays available as <name>_orig: hle_verify compares the host
             # implementation against it call by call. Nothing else references it.
             name = name + "_orig"
-        out.append("void %s(ppc::Context& __restrict c, uint8_t* __restrict m) {" % name)
+        hot = ('__attribute__((section(".text.hot.%s"))) ' % name) if func.addr in self.hot else ""
+        out.append("%svoid %s(ppc::Context& __restrict c, uint8_t* __restrict m) {" % (hot, name))
         out.append("  ppc::enter(c, %s);" % hexs(func.addr))
         observer = {"HSD_JObjAlloc": "AllocateJoint", "JObjRelease": "ReleaseJoint",
                     "HSD_JObjDisp": "DisplayJoint", "SetupRigidModelMtx": "RigidMatrix",
