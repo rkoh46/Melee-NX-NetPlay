@@ -31,21 +31,35 @@
 430
 
 # VS character select: nudge each hand up and press A (picks a character for each port), then START.
+# Character select, driven by port 2 (port 1 is the keyboard placeholder and stays N/A). The
+# hand starts just under P2's tag: A grabs P2's token; a diagonal up-left drops it on a portrait;
+# back onto the tag, A turns P2 into a CPU that keeps that character; right to P3's tag, A makes
+# a second CPU with a default character; START.
 @scene 0x02 0x00
-150 sy=90 sx=20
-150 p=2 sy=90 sx=20
-154
-154 p=2
-170 A
-170 p=2 A
-176
-176 p=2
-320 START
-330
+165 p=2 A
+171 p=2
+185 p=2 sx=-70 sy=90
+191 p=2
+205 p=2 A
+211 p=2
+225 p=2 sx=75 sy=-95
+231 p=2
+245 p=2 A
+251 p=2
+265 p=2 sx=127
+276 p=2
+290 p=2 A
+296 p=2
+360 p=2 START
+370 p=2
 
-# Stage select: up-left for 0.3 s lands on Random (docs/PERFORMANCE.md), then A.
+# Stage select: slam the cursor up-right into the corner (Kongo Jungle N64, bottom row, deterministic),
+# then left along the bottom row past Final Destination to Battlefield, and A. Battlefield is the
+# simplest stage with shadow maps and a sky dome: the reference for graphics checks.
 @scene 0x02 0x01
-60 sx=-90 sy=90
-78
-100 A
-110
+60 p=2 sx=127 sy=60
+90 p=2
+100 p=2 sx=-127
+116 p=2
+140 p=2 A
+150 p=2
