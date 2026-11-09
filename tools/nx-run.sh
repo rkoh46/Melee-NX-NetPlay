@@ -25,8 +25,16 @@ nro="$repo/build/switch-$frontend/port/melee-nx-netplay.nro"
 mkdir -p "$repo/build/nxlink-logs"
 stamp="$(date +%Y%m%d-%H%M%S)"
 log="$repo/build/nxlink-logs/$stamp-$frontend.log"
-cp "$repo/build/switch-$frontend/port/melee-nx-netplay.elf" "$repo/build/nxlink-logs/$stamp-$frontend.elf"   # the profile of this run resolves against this ELF
-ln -sf "$stamp-$frontend.elf" "$repo/build/nxlink-logs/current.elf"
+# The profile of this run resolves against this ELF. One copy per distinct build (named by its hash,
+# ~140 MB each); the run gets a symlink, and only the newest five builds are kept.
+src_elf="$repo/build/switch-$frontend/port/melee-nx-netplay.elf"
+mkdir -p "$repo/build/nxlink-logs/elf"
+sum="$(shasum -a 1 "$src_elf" | cut -c1-12)"
+[[ -f "$repo/build/nxlink-logs/elf/$sum.elf" ]] || cp "$src_elf" "$repo/build/nxlink-logs/elf/$sum.elf"
+touch "$repo/build/nxlink-logs/elf/$sum.elf"
+ln -sf "elf/$sum.elf" "$repo/build/nxlink-logs/$stamp-$frontend.elf"
+ln -sf "elf/$sum.elf" "$repo/build/nxlink-logs/current.elf"
+ls -t "$repo/build/nxlink-logs/elf/"*.elf | tail -n +6 | while read -r old; do rm -f "$old"; done
 echo "sending $(du -h "$nro" | cut -f1) $frontend NRO to $ip when its netloader answers; output also in $log"
 deadline=$(( $(date +%s) + ${NX_WAIT:-600} ))
 while :; do

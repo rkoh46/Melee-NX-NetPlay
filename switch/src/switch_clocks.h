@@ -18,3 +18,7 @@ bool switch_clocks_init();                  // false when neither clkrst nor pcv
 void switch_clocks_exit();
 SwitchClockResult switch_clocks_apply(const SwitchClockRequest& request);
 SwitchClockResult switch_clocks_read();
+// The CPU clock the calling core really runs at: 32 M dependent adds (one cycle each on the A57) timed
+// against the 19.2 MHz system counter, about 16 ms at 2 GHz. The service reports the rate it was asked
+// for; this shows whether the core got it.
+uint32_t switch_measure_cpu_mhz();

@@ -10,7 +10,7 @@
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"; repo="$(cd "$here/.." && pwd -P)"
 ip="${1:?ip}"; frames="${2:?frames}"; shift 2
-out="$repo/build/matrix"; mkdir -p "$out"
+out="${MATRIX_OUT:-$repo/build/matrix}"; mkdir -p "$out"
 ini_src="$repo/dist/sd/switch/melee-nx-netplay/launcher.ini"
 results="$out/results.tsv"
 [[ -f "$results" ]] || printf "config\texit\tmatch_frames\tavg_ms\tworst_ms\tlate\tdropped\tlog\n" > "$results"
@@ -19,7 +19,9 @@ for cfg in "$@"; do
   tmp="$(mktemp)"
   grep -vE '^(frames|profile|profile_frames|force_css|force_stage|force_teams|hle_verify)=' "$ini_src" > "$tmp"
   { echo "frames=$frames"; echo "profile=0"; echo "force_css=$([[ "$players" == 4 ]] && echo 4 || echo 1)"; echo "force_stage=$stage"
-    [[ "${teams:-}" == "teams" ]] && echo "force_teams=1"; } >> "$tmp"
+    [[ "${teams:-}" == "teams" ]] && echo "force_teams=1"
+    # MATRIX_INI: extra launcher.ini lines for every run, e.g. MATRIX_INI=$'clock_cpu_mhz=2091\nclock_mem_mhz=1900'
+    [[ -n "${MATRIX_INI:-}" ]] && printf '%s\n' "$MATRIX_INI"; } >> "$tmp"
   curl -sS --connect-timeout 10 -T "$tmp" "ftp://$ip:${NX_FTP_PORT:-5000}/switch/melee-nx-netplay/launcher.ini" || { echo "$cfg: cannot push launcher.ini"; rm -f "$tmp"; continue; }
   rm -f "$tmp"
   tag="stage${stage}-${players}p${teams:+-$teams}"

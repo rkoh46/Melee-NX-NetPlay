@@ -292,6 +292,7 @@ void simulation_thread(void*) {
   // The result first: the AOT diagnostics below are hundreds of lines, and an exit that outruns the
   // nxlink socket used to cut the log before the result line.
   host::log("switch result: exit=%d retraces=%u requested=%u", code, host::retrace_count(), host::options.frames);
+  host::log("clocks: the CPU core measures %u MHz at the end of the run", switch_measure_cpu_mhz());
   ppc::log_aot_diagnostics();
   host::close_log_file();
   g_exit_code = code;
@@ -405,6 +406,7 @@ int main(int argc, char** argv) {
       host::log("clocks: requested cpu %u gpu %u mem %u MHz; now cpu %u gpu %u mem %u MHz (%s%s%s)", clocks.cpu_mhz, clocks.gpu_mhz,
                 clocks.mem_mhz, r.cpu_hz / 1000000u, r.gpu_hz / 1000000u, r.mem_hz / 1000000u, r.cpu_ok ? "cpu ok " : "cpu refused ",
                 r.gpu_ok ? "gpu ok " : "gpu refused ", r.mem_ok ? "mem ok" : "mem refused");
+      host::log("clocks: the CPU core measures %u MHz", switch_measure_cpu_mhz());
     } else {
       host::log("clocks: the clock service is not reachable; running at the system's clocks (sys-clk can set them)");
     }

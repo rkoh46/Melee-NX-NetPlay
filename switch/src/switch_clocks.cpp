@@ -78,3 +78,15 @@ SwitchClockResult switch_clocks_read() {
   read(PcvModuleId_EMC, &result.mem_hz);
   return result;
 }
+
+uint32_t switch_measure_cpu_mhz() {
+  uint64_t x = 0;
+  const uint64_t t0 = armGetSystemTick();
+  for (int i = 0; i < 1 << 18; ++i) {
+#define ADD8 "add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n"
+    asm volatile(ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 ADD8 : "+r"(x));
+#undef ADD8
+  }
+  const uint64_t ticks = armGetSystemTick() - t0;
+  return ticks ? static_cast<uint32_t>(x * armGetSystemTickFreq() / ticks / 1000000u) : 0;
+}
