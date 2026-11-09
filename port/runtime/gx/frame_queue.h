@@ -20,7 +20,17 @@ class FrameQueue {
   std::deque<Frame> recycled;   // buffers returned by the renderer, capacity preserved
   bool finished = false;
 public:
+#if defined(__SWITCH__)
+  // On the Switch a match frame is about 8 MB of draw state (1,500 draws of ~5 KB), and the render
+  // thread can stop for a second at a time while NVK compiles a shader variant it has not seen
+  // (the first match with new characters). 64 queued frames was half a gigabyte and ended the first
+  // Fox-against-Marth match in std::bad_alloc; 12 bounds the backlog near 100 MB and the
+  // simulation waits for the compile instead. Compiled pipelines are persisted, so this is once per
+  // variant per install.
+  static constexpr size_t capacity = 12;
+#else
   static constexpr size_t capacity = 64;   // > 1 s at 60 Hz: longer than the longest drawable wait the system allows
+#endif
   bool push(Frame frame) {
     std::unique_lock<std::mutex> lock(mutex);
     changed.wait(lock, [&] { return finished || frames.size() < capacity; });   // the renderer drains backlogs; this only trips if it is stuck

@@ -508,7 +508,18 @@ static double g_frame_time = 0.0;
 static double g_emulation_speed = 1.0;
 void set_emulation_speed(double speed) { g_emulation_speed = speed < 0.5 ? 0.5 : speed > 2.0 ? 2.0 : speed; }
 double emulation_speed() { return g_emulation_speed; }
+#if defined(__SWITCH__)
+// The ARM generic timer (19.2 MHz) read straight from CNTPCT_EL0, as libnx's armGetSystemTick does
+// (Horizon traps CNTVCT_EL0 from user code): steady_clock goes through newlib's clock_gettime, and the
+// per-draw cost scopes call this thousands of times a frame (1.2% of the simulation thread in a match).
+double now_seconds() {
+  uint64_t ticks;
+  asm volatile("mrs %0, cntpct_el0" : "=r"(ticks));
+  return double(ticks) * (1.0 / 19200000.0);
+}
+#else
 double now_seconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+#endif
 double frame_time() { return g_frame_time; }
 
 // Simulation-thread cost accounting: HLE entry points add their time to a slot; at the next

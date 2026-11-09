@@ -25,6 +25,17 @@ class TextureSnapshotCache {
         !std::memcmp(s.image.data(), image, image_size) &&
         (!palette_size || !std::memcmp(s.palette.data(), palette, palette_size));
   }
+  static bool sampled_equal(const TextureSnapshot& s, const uint8_t* image, size_t image_size,
+                            const uint8_t* palette, size_t palette_size) {
+    if (s.image.size() != image_size || s.palette.size() != palette_size) return false;
+    if (palette_size && std::memcmp(s.palette.data(), palette, palette_size)) return false;
+    const size_t step = (image_size - 64) / 15;
+    for (size_t i = 0; i < 16; ++i) {
+      const size_t at = i == 15 ? image_size - 64 : i * step;
+      if (std::memcmp(s.image.data() + at, image + at, 64)) return false;
+    }
+    return true;
+  }
 public:
   void clear() { entries.clear(); last_source.clear(); }
   // End of a simulation frame. The cache survives it: Melee reuses the same texture memory every
@@ -49,6 +60,14 @@ public:
     // or palette animated within a single frame showed its previous contents, which is one way a
     // draw ends up looking wrong for exactly one frame. Correctness needs the comparison, and the
     // comparison below is a vectorized memcmp of a few KB, so the cost is bounded.
+    // Second and later uses of a source within one frame, after a full comparison earlier in the same
+    // frame: compare the palette in full (32 or 512 bytes, where Melee's in-frame animations happen)
+    // and 16 spread 64-byte windows of the image instead of every byte. A character's textures are
+    // bound by dozens of draws a frame, and the full compares were 6.5% of the simulation thread in a
+    // match; an in-place rewrite of a texture touches far more than the bytes between windows.
+    if (previous != last_source.end() && previous->second.used == generation && image_size > 2048 &&
+        sampled_equal(*previous->second.snapshot, image, image_size, palette, palette_size))
+      return previous->second.snapshot;
     if (previous != last_source.end() && equal(*previous->second.snapshot, image, image_size, palette, palette_size)) {
       previous->second.used = generation;
       return previous->second.snapshot;
