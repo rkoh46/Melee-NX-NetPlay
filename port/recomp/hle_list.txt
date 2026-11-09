@@ -217,3 +217,5 @@ WriteMTXPS4x3
 WriteMTXPS3x3from3x4
 WriteMTXPS4x2
 HSD_MtxInverseTranspose
+sinf
+cosf

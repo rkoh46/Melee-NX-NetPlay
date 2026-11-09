@@ -82,7 +82,9 @@ class Emitter:
         out.append("// %s @ %08x size %x" % (func.name, func.addr, func.size))
         if func.name in self.hle:
             out.append("void %s(ppc::Context& c, uint8_t* m) { c.entry = 0; hle::%s(c, m); }" % (name, func.name))
-            return "\n".join(out) + "\n"
+            # The original translation stays available as <name>_orig: hle_verify compares the host
+            # implementation against it call by call. Nothing else references it.
+            name = name + "_orig"
         out.append("void %s(ppc::Context& __restrict c, uint8_t* __restrict m) {" % name)
         out.append("  ppc::enter(c, %s);" % hexs(func.addr))
         observer = {"HSD_JObjAlloc": "AllocateJoint", "JObjRelease": "ReleaseJoint",

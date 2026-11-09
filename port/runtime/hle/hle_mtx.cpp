@@ -286,12 +286,12 @@ static void inverse_transpose_body(ppc::Context& c, uint8_t* m) {
 
 namespace {
 // hle_verify=1 (MELEE_HLE_VERIFY=1): every call of a hooked matrix routine also runs the original
-// game code through the interpreter (which uses the same numeric helpers as the translation) on the
-// same inputs, and logs the first differing calls. The interpreter's result is what stays in memory.
+// translation (<name>_orig, which the recompiler keeps for hooked functions) on the same inputs and
+// logs the first differing calls. The original's result is what stays in memory.
 // Read at the first call, not at static initialisation: main sets the variable from launcher.ini.
 bool verify_enabled() { static const bool on = [] { const char* v = std::getenv("MELEE_HLE_VERIFY"); return v && v[0] == '1'; }(); return on; }
 template <class Body>
-void verified(ppc::Context& c, uint8_t* m, const char* name, uint32_t guest, uint32_t src_a, uint32_t src_b, uint32_t dest, Body body) {
+void verified(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), uint32_t src_a, uint32_t src_b, uint32_t dest, Body body) {
   if (!verify_enabled()) { body(c, m); return; }
   static uint64_t calls = 0, mismatches = 0;
   uint8_t* d = host::ram + (dest & 0x01FFFFFF);
@@ -304,7 +304,7 @@ void verified(ppc::Context& c, uint8_t* m, const char* name, uint32_t guest, uin
   std::memcpy(mine, d, 48);
   std::memcpy(d, keep_d, 48); std::memcpy(a, keep_a, 48); if (b) std::memcpy(b, keep_b, 48);
   ppc::Context ref = saved;
-  ppc::interpret(ref, m, guest);
+  orig(ref, m);   // the original translation (no interpreter: safe inside interpreted code)
   ++calls;
   if (std::memcmp(mine, d, 48)) {
     if (++mismatches <= 8) {
@@ -320,5 +320,155 @@ void verified(ppc::Context& c, uint8_t* m, const char* name, uint32_t guest, uin
 }
 }  // namespace
 
-HLE(PSMTXConcat) { verified(c, m, "PSMTXConcat", 0x80342204u, ARG0, ARG1, ARG2, concat_body); }
-HLE(HSD_MtxInverseTranspose) { verified(c, m, "HSD_MtxInverseTranspose", 0x80379A20u, ARG0, 0, ARG1, inverse_transpose_body); }
+namespace guest { void f_80342204_orig(ppc::Context& c, uint8_t* m); void f_80379A20_orig(ppc::Context& c, uint8_t* m); }
+HLE(PSMTXConcat) { verified(c, m, "PSMTXConcat", guest::f_80342204_orig, ARG0, ARG1, ARG2, concat_body); }
+HLE(HSD_MtxInverseTranspose) { verified(c, m, "HSD_MtxInverseTranspose", guest::f_80379A20_orig, ARG0, 0, ARG1, inverse_transpose_body); }
+
+// ---------------- sinf / cosf ----------------
+namespace guest { void f_803263D4_orig(ppc::Context& c, uint8_t* m); void f_80326240_orig(ppc::Context& c, uint8_t* m); }
+// MSL's sinf (803263D4) and cosf (80326240), ~6% of the simulation thread's work in a match. Below is the
+// translated instruction sequence of each with every helper in its plain-IEEE form (valid while
+// FPSCR.NI is clear: f25 is the identity on the single-precision multipliers, fs is (float), finish
+// does nothing; only NaNs differ, and a finite input yields no NaN or infinity anywhere). A non-finite
+// input or NI set runs the original translation (kept by the recompiler as <name>_orig). The original's stack-frame writes (saved
+// LR, back chain, f31/r31 saves, the input word and the conversion temporaries) are reproduced, so
+// guest memory ends up exactly as after the original.
+namespace {
+using trig_poly = double (*)(uint8_t* m, ppc::Context& c, double f31, uint32_t r31);
+struct TrigCommon { double x, f31; uint32_t r31, x_bits, r4; };
+inline double rd_single(uint8_t* m, ppc::Context& c, uint32_t ea) { return ppc::float_bits_to_double(ppc::ld32(c, m, ea)); }
+inline double rs(double v) { return double(float(v)); }
+inline double fma_(double a, double b, double c) { return ppc::detail::hardware_madd(a, b, c); }
+// Shared range reduction (803263D4..80326480, identical in cosf): x -> f31 (reduced), r31 (quadrant).
+bool trig_reduce(uint8_t* m, ppc::Context& c, TrigCommon& t) {
+  if (ppc::detail::current_fpscr & 4) return false;
+  if (c.r[1] - 0x80000040u >= ppc::RAM_SIZE - 0x80u) {   // the frame writes need a stack inside RAM
+    static int reported = 0;
+    if (reported++ < 4) host::log("trig: stack pointer %08X outside RAM (lr %08X): exact path", c.r[1], c.lr);
+    return false;
+  }
+  t.x_bits = ppc::double_to_float_bits(c.f[1].ps0);
+  if ((t.x_bits & 0x7F800000u) == 0x7F800000u) return false;   // infinity or NaN: the exact path
+  const double x = ppc::float_bits_to_double(t.x_bits);
+  const uint32_t r2 = c.r[2], tab = 0x80400778u;
+  const double f1 = rs(rd_single(m, c, r2 - 6216u) * x);
+  const double c2 = rd_single(m, c, r2 - 6212u);
+  const double f0 = (t.x_bits & 0x80000000u) ? rs(f1 - c2) : rs(c2 + f1);   // x >= 0: fadds C2 + f1; x < 0: fsubs f1 - C2
+  const uint64_t ctiw = ppc::fctiw(f0, true);
+  t.r4 = uint32_t(ctiw);
+  const uint32_t r0 = (t.r4 << 1) ^ 0x80000000u;
+  const double magic = ppc::bits_to_double(ppc::ld64(c, m, r2 - 6200u));
+  double g = rs(ppc::bits_to_double((uint64_t(0x43300000u) << 32) | r0) - magic);
+  g = rs(x - g);
+  g = rs(fma_(rd_single(m, c, tab + 0), x, g));
+  g = rs(fma_(rd_single(m, c, tab + 4), x, g));
+  g = rs(fma_(rd_single(m, c, tab + 8), x, g));
+  t.f31 = rs(fma_(rd_single(m, c, tab + 12), x, g));
+  t.r31 = t.r4 & 3u;
+  t.x = x;
+  // The frame the original builds: LR in the caller's slot, back chain, f31/r31 saves, the input word,
+  // and the fctiw/int-to-float temporaries as they are left at the end.
+  const uint32_t sp = c.r[1], fr = sp - 40u;
+  ppc::st32(c, m, sp + 4u, c.lr);
+  ppc::st32(c, m, fr, sp);
+  ppc::st64(c, m, fr + 32u, c.f[31].u0);
+  ppc::st32(c, m, fr + 28u, c.r[31]);
+  ppc::st32(c, m, fr + 8u, t.x_bits);
+  ppc::st32(c, m, fr + 16u, 0x43300000u);
+  ppc::st32(c, m, fr + 20u, r0);
+  return true;
+}
+inline void trig_result(ppc::Context& c, double v) { c.f[1].ps0 = c.f[1].ps1 = v; }
+}  // namespace
+
+static void sinf_body(ppc::Context& c, uint8_t* m) {
+  TrigCommon t;
+  if (!trig_reduce(m, c, t)) { guest::f_803263D4_orig(c, m); return; }
+  const double f31 = t.f31; const uint32_t r31 = t.r31;
+  const uint32_t t2 = 0x803B9358u + (r31 << 3), t3 = 0x803B9378u;
+  double r;
+  if (std::fabs(f31) < rd_single(m, c, c.r[2] - 6208u)) {          // small: a pair table lookup
+    const double f1 = rs(f31 * rd_single(m, c, t2 + 4));
+    r = rs(fma_(rd_single(m, c, t3 + 36), f1, rd_single(m, c, t2 + 0)));
+  } else {
+    const double f4 = rs(f31 * f31);
+    if (r31 & 1) {
+      double f3 = rs(fma_(rd_single(m, c, t3 + 0), f4, rd_single(m, c, t3 + 8)));
+      f3 = rs(fma_(f4, f3, rd_single(m, c, t3 + 16)));
+      const double f2 = rs(fma_(f4, f3, rd_single(m, c, t3 + 24)));
+      const double f1 = rs(fma_(f4, f2, rd_single(m, c, t3 + 32)));
+      r = rs(f1 * rd_single(m, c, t2 + 0));
+    } else {
+      double f3 = rs(fma_(rd_single(m, c, t3 + 4), f4, rd_single(m, c, t3 + 12)));
+      f3 = rs(fma_(f4, f3, rd_single(m, c, t3 + 20)));
+      const double f2 = rs(fma_(f4, f3, rd_single(m, c, t3 + 28)));
+      double f1 = rs(fma_(f4, f2, rd_single(m, c, t3 + 36)));
+      f1 = rs(f31 * f1);
+      r = rs(f1 * rd_single(m, c, t2 + 4));
+    }
+  }
+  trig_result(c, r);
+}
+
+static void cosf_body(ppc::Context& c, uint8_t* m) {
+  TrigCommon t;
+  if (!trig_reduce(m, c, t)) { guest::f_80326240_orig(c, m); return; }
+  const double f31 = t.f31; const uint32_t r31 = t.r31;
+  const uint32_t t2 = 0x803B9358u + (r31 << 3), t3 = 0x803B9378u;
+  double r;
+  if (std::fabs(f31) < rd_single(m, c, c.r[2] - 6208u)) {
+    // fnmsubs f1 = -(f31 * t2[0] - t2[1])
+    r = -rs(fma_(f31, rd_single(m, c, t2 + 0), -rd_single(m, c, t2 + 4)));
+  } else {
+    const double f4 = rs(f31 * f31);
+    if (r31 & 1) {
+      double f3 = rs(fma_(rd_single(m, c, t3 + 4), f4, rd_single(m, c, t3 + 12)));
+      f3 = rs(fma_(f4, f3, rd_single(m, c, t3 + 20)));
+      const double f2 = rs(fma_(f4, f3, rd_single(m, c, t3 + 28)));
+      double f1 = -rs(fma_(f4, f2, rd_single(m, c, t3 + 36)));   // fnmadds
+      f1 = rs(f31 * f1);
+      r = rs(f1 * rd_single(m, c, t2 + 0));
+    } else {
+      double f3 = rs(fma_(rd_single(m, c, t3 + 0), f4, rd_single(m, c, t3 + 8)));
+      f3 = rs(fma_(f4, f3, rd_single(m, c, t3 + 16)));
+      const double f2 = rs(fma_(f4, f3, rd_single(m, c, t3 + 24)));
+      const double f1 = rs(fma_(f4, f2, rd_single(m, c, t3 + 32)));
+      r = rs(f1 * rd_single(m, c, t2 + 4));
+    }
+  }
+  trig_result(c, r);
+}
+
+namespace {
+// hle_verify for register-result routines: compares f1 and the 48 bytes around the stack pointer the
+// original writes (its frame and the caller's LR slot) against the original translation (<name>_orig,
+// kept by the recompiler for hooked functions; no interpreter, so it works inside interpreted code too).
+template <class Body>
+void verified_f1(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), Body body) {
+  if (!verify_enabled() || c.r[1] - 0x80000040u >= ppc::RAM_SIZE - 0x80u) { body(c, m); return; }
+  static uint64_t calls = 0, mismatches = 0;
+  const uint32_t lo = c.r[1] - 40u;
+  uint8_t* s = host::ram + (lo & 0x01FFFFFF);
+  uint8_t keep[48], mine_mem[48];
+  std::memcpy(keep, s, 48);
+  const ppc::Context saved = c;
+  body(c, m);
+  const uint64_t mine_f1 = c.f[1].u0;
+  std::memcpy(mine_mem, s, 48);
+  std::memcpy(s, keep, 48);
+  ppc::Context ref = saved;
+  orig(ref, m);
+  ++calls;
+  if (ref.f[1].u0 != mine_f1 || std::memcmp(mine_mem, s, 48)) {
+    if (++mismatches <= 8)
+      host::log("hle-verify %s MISMATCH call %llu: x=%016llX f1 %016llX/%016llX stack %s", name, (unsigned long long)calls,
+                (unsigned long long)saved.f[1].u0, (unsigned long long)mine_f1, (unsigned long long)ref.f[1].u0,
+                std::memcmp(mine_mem, s, 48) ? "differs" : "same");
+  }
+  c.f[1] = ref.f[1];   // the interpreter's result stands
+  if ((calls & (calls - 1)) == 0 && calls >= 1024) host::log("hle-verify %s: %llu calls, %llu mismatches", name, (unsigned long long)calls, (unsigned long long)mismatches);
+}
+}  // namespace
+
+HLE(sinf) { verified_f1(c, m, "sinf", guest::f_803263D4_orig, sinf_body); }
+HLE(cosf) { verified_f1(c, m, "cosf", guest::f_80326240_orig, cosf_body); }
