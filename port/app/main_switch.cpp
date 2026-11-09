@@ -196,6 +196,8 @@ void simulation_thread(void*) {
           if (std::sscanf(dd->second.c_str(), "%x:%x:%u", &mm, &ss, &n) >= 2)
             host::switch_frontend_set_draw_dump(g_base + "/Logs/draws.txt", uint8_t(mm), uint8_t(ss), n);
         }
+        // Logs/gfx_debug.txt holds render experiment bits, re-read every second (upload a new one over FTP).
+        host::switch_frontend_set_debug_file(g_base + "/Logs/gfx_debug.txt");
         host::switch_frontend_set_overlay([] {
           host::OverlayFrame overlay;
           if (host::game_overlay(overlay)) host::overlay_imgui_draw(overlay);

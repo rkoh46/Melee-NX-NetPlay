@@ -111,5 +111,7 @@ std::unique_ptr<MetalFrontend> create_aurora_switch_frontend(const AuroraMetalCo
 // Overlay callback run inside each presented frame of the Switch frontend (ImGui drawing).
 void switch_frontend_set_overlay(std::function<void()> draw);
 void switch_frontend_set_draw_dump(const std::string& path, uint8_t scene_major, uint8_t scene_minor, unsigned after);
+// Logs/gfx_debug.txt: live render experiment bits (gx::AuroraBackend::set_debug_file).
+void switch_frontend_set_debug_file(const std::string& path);
 
 } // namespace host

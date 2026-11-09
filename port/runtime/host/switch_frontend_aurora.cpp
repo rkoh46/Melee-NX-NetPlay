@@ -131,4 +131,7 @@ void switch_frontend_set_overlay(std::function<void()> draw) {
 void switch_frontend_set_draw_dump(const std::string& path, uint8_t scene_major, uint8_t scene_minor, unsigned after) {
   if (g_switch_backend) g_switch_backend->set_draw_dump(path, scene_major, scene_minor, after);
 }
+void switch_frontend_set_debug_file(const std::string& path) {
+  if (g_switch_backend) g_switch_backend->set_debug_file(path);
+}
 }  // namespace host

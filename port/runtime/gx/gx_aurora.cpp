@@ -19,6 +19,7 @@
 #include <optional>
 #include <thread>
 #include <tuple>
+#include <vector>
 
 namespace gx {
 namespace {
@@ -34,9 +35,19 @@ void bp(uint8_t reg, uint32_t value) {
 // game samples it as. Aurora converts the RGBA8 framebuffer into that format itself.
 // Experiment (Switch bring-up): every texture copy is kept as RGBA8 on the GPU and sampled as
 // RGBA8. Melee's shadow maps are 256x256 I4 intensity copies and the I4 path rendered noise.
-constexpr bool kCopiesAsRgba8 = true;
+// Live debug bits (set_debug_file): experiments that can be flipped during a match.
+constexpr unsigned kDebugSkipCopyDraws = 1;     // drop every draw that samples an EFB copy
+constexpr unsigned kDebugCopyFromRam = 2;       // sample the guest RAM snapshot instead of the GPU copy
+constexpr unsigned kDebugCopyChecker = 4;       // sample a host checkerboard instead of the GPU copy
+constexpr unsigned kDebugCopyNativeFormat = 8;  // copy in the game's format (I4...) instead of RGBA8
+constexpr unsigned kDebugCopyClearPartial = 16; // honour the copy's clear flag for partial rects too
+constexpr unsigned kDebugDumpNow = 32;          // one-shot: draw dump of the next frame
+constexpr unsigned kDebugSkipCopies = 64;       // do not perform texture copies at all
+constexpr unsigned kDebugCopyHalfSize = 128;    // copy into a half-size texture (Aurora's blit shader instead of vkCmdCopyImage)
+unsigned g_debug = 0;
+bool copies_as_rgba8() { return !(g_debug & kDebugCopyNativeFormat); }
 GXTexFmt copy_format(const EfbCopy& c) {
-  if (kCopiesAsRgba8) return GX_TF_RGBA8;
+  if (copies_as_rgba8()) return GX_TF_RGBA8;
   if (c.intensity) {
     switch (c.format) { case 0: return GX_TF_I4; case 2: return GX_TF_IA4; case 3: return GX_TF_IA8; case 8: return GX_TF_I8; default: return GX_TF_I8; }
   }
@@ -75,6 +86,40 @@ struct AuroraBackend::Impl {
   std::function<void()> overlay;
   aurora_bridge::PreparedFrame prepared;   // reused every frame: its draws keep their byte buffers
   std::string dump_path; uint8_t dump_major = 0, dump_minor = 0; unsigned dump_after = 0, dump_seen = 0; bool dump_armed = false;
+  std::string debug_path; bool dump_now = false;
+  std::vector<uint8_t> checker;   // 256x256 RGBA8 host checkerboard for kDebugCopyChecker (GX tiled RGBA8)
+  void poll_debug_file() {
+    if (debug_path.empty() || counters.frames % 60) return;
+    FILE* f = std::fopen(debug_path.c_str(), "r");
+    if (!f) return;
+    unsigned v = 0;
+    const bool ok = std::fscanf(f, "%u", &v) == 1;
+    std::fclose(f);
+    if (!ok) return;
+    if (v & kDebugDumpNow) {
+      dump_now = true;
+      v &= ~kDebugDumpNow;
+      if (FILE* w = std::fopen(debug_path.c_str(), "w")) { std::fprintf(w, "%u\n", v); std::fclose(w); }
+    }
+    if (v != g_debug) { std::fprintf(stderr, "aurora debug bits: %u -> %u\n", g_debug, v); g_debug = v; }
+  }
+  const void* checker_image() {
+    if (checker.empty()) {
+      // GX RGBA8 tiles: 4x4 texels, 64 bytes: AR pairs for 16 texels then GB pairs.
+      checker.resize(256 * 256 * 4);
+      for (unsigned ty = 0; ty < 64; ++ty) for (unsigned tx = 0; tx < 64; ++tx) {
+        uint8_t* tile = checker.data() + (ty * 64 + tx) * 64;
+        for (unsigned y = 0; y < 4; ++y) for (unsigned x = 0; x < 4; ++x) {
+          const unsigned px = tx * 4 + x, py = ty * 4 + y;
+          const bool on = ((px / 16) + (py / 16)) & 1;
+          const uint8_t r = on ? 255 : 32, g = uint8_t(px), b = uint8_t(py);
+          tile[(y * 4 + x) * 2] = 255; tile[(y * 4 + x) * 2 + 1] = r;
+          tile[32 + (y * 4 + x) * 2] = g; tile[32 + (y * 4 + x) * 2 + 1] = b;
+        }
+      }
+    }
+    return checker.data();
+  }
 
   explicit Impl(AuroraOptions o) : options(o) {
     require_owner();
@@ -105,8 +150,9 @@ struct AuroraBackend::Impl {
     textures.clear(); copy_tokens.clear(); copy_history.clear();
   }
   TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source) {
-    const void* source = copy_source ? copy_source : t.data->image.data();
-    const uint32_t format = (copy_source && kCopiesAsRgba8) ? 6u : t.format;   // 6 = GX_TF_RGBA8
+    const bool checker_mode = copy_source && (g_debug & kDebugCopyChecker) && t.width == 256 && t.height == 256;
+    const void* source = checker_mode ? checker_image() : copy_source ? copy_source : t.data->image.data();
+    const uint32_t format = (checker_mode || (copy_source && copies_as_rgba8())) ? 6u : t.format;   // 6 = GX_TF_RGBA8
     const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format, t.mode0, t.mode1,
                          t.tlut_format, t.mip_levels, unit};
     auto [it, inserted] = textures.try_emplace(key);
@@ -171,6 +217,31 @@ struct AuroraBackend::Impl {
         std::fprintf(f, " [%u map=%d coord=%d en=%d c=%08X a=%08X ind=%08X]", s2, d.bp.order_texmap(int(s2)), d.bp.order_texcoord(int(s2)),
                      d.bp.order_enable(int(s2)), d.bp.reg[0xC0 + s2 * 2] & 0xffffff, d.bp.reg[0xC1 + s2 * 2] & 0xffffff, d.bp.tevind(int(s2)) & 0xffffff);
       std::fprintf(f, " ztex=%06X/%06X alpha=%06X\n", d.bp.reg[0x74] & 0xffffff, d.bp.reg[0x75] & 0xffffff, d.bp.reg[0xF3] & 0xffffff);
+      std::fprintf(f, "  regs:");
+      for (unsigned i = 0; i < 4; ++i) std::fprintf(f, " c%u=%d,%d,%d,%d", i, d.tev_colors[i][0], d.tev_colors[i][1], d.tev_colors[i][2], d.tev_colors[i][3]);
+      for (unsigned i = 0; i < 4; ++i) std::fprintf(f, " k%u=%d,%d,%d,%d", i, d.tev_kcolors[i][0], d.tev_kcolors[i][1], d.tev_kcolors[i][2], d.tev_kcolors[i][3]);
+      std::fprintf(f, " ksel=");
+      for (unsigned r = 0xF6; r <= 0xFD; ++r) std::fprintf(f, "%06X ", d.bp.reg[r] & 0xffffff);
+      std::fprintf(f, "chan=%08X/%08X/%08X/%08X amb=%08X/%08X mat=%08X/%08X\n", d.xf_regs[0x0e], d.xf_regs[0x0f], d.xf_regs[0x10], d.xf_regs[0x11],
+                   d.xf_regs[0x0a], d.xf_regs[0x0b], d.xf_regs[0x0c], d.xf_regs[0x0d]);
+      if (d.bp.numtexgens()) {
+        const unsigned pn = d.matrix_index_a & 63;
+        std::fprintf(f, "  pnmtx%u:", pn);
+        for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", d.posMatrices[(pn / 3) * 12 + k]);
+        for (unsigned i = 0; i < d.bp.numtexgens() && i < 8; ++i) {
+          const unsigned tm = i < 4 ? (d.matrix_index_a >> (6 + i * 6)) & 63 : (d.matrix_index_b >> ((i - 4) * 6)) & 63;
+          if (tm != 60) {   // GX_IDENTITY
+            std::fprintf(f, "\n  texmtx%u(%u):", i, tm);
+            for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", d.posMatrices[(tm / 3) * 12 + k]);
+          }
+          const unsigned post = (d.xf_regs[0x12] & 1) ? d.xf_regs[0x50 + i] & 63 : 61;
+          if (post != 61) {
+            std::fprintf(f, "\n  postmtx%u(%u):", i, post);
+            for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", d.postMatrices[(post / 3) * 12 + k]);
+          }
+        }
+        std::fprintf(f, "\n");
+      }
       for (unsigned i = 0; i < 8; ++i) {
         const auto& t = d.textures[i];
         if (!t.used) continue;
@@ -186,11 +257,20 @@ struct AuroraBackend::Impl {
     require_owner();
     if (last_sequence && input.sequence <= *last_sequence)
       throw CoverageError("Aurora coverage: repeated/reversed source frame; reset_epoch is required after rollback");
+    poll_debug_file();
     aurora_bridge::prepare_frame(input, {options.logical_width, options.logical_height}, prepared);
     const auto& frame = prepared;
     if (dump_armed && input.scene_major == dump_major && input.scene_minor == dump_minor && ++dump_seen == dump_after) {
       dump_armed = false;
       write_draw_dump(input, frame);
+    }
+    if (dump_now) {
+      dump_now = false;
+      const auto slash = debug_path.find_last_of('/');
+      const std::string saved = dump_path;
+      dump_path = (slash == std::string::npos ? std::string() : debug_path.substr(0, slash + 1)) + "draws-now.txt";
+      write_draw_dump(input, frame);
+      dump_path = saved;
     }
     aurora_bridge::advance_copy_history_in_place(frame, copy_history);   // warns only: nothing to roll back
     if (!aurora_begin_frame()) throw std::runtime_error("Aurora frame unavailable; owner must service the window before submission");
@@ -198,10 +278,16 @@ struct AuroraBackend::Impl {
       if (cmd.kind == FrameCommand::Draw) {
         const auto& d = frame.draws[cmd.index];
         if (d.vertex_count == 0) continue;   // skipped by the bridge
+        if (g_debug & kDebugSkipCopyDraws) {
+          bool samples_copy = false;
+          for (unsigned unit = 0; unit < 8; ++unit)
+            if (d.textures[unit].used && copy_tokens.count(d.textures[unit].addr)) samples_copy = true;
+          if (samples_copy) continue;
+        }
         for (unsigned unit = 0; unit < 8; ++unit) {
           const auto& t = d.textures[unit];
           if (!t.used) continue;
-          const auto found = copy_tokens.find(t.addr);
+          const auto found = (g_debug & kDebugCopyFromRam) ? copy_tokens.end() : copy_tokens.find(t.addr);
           auto& obj = texture(t, unit, found == copy_tokens.end() ? nullptr : found->second.get());
           if (obj.has_palette) GXLoadTlut(&obj.palette, unit);
           GXLoadTexObj(&obj.texture, static_cast<GXTexMapID>(unit));
@@ -219,13 +305,14 @@ struct AuroraBackend::Impl {
         bp(BP_ZMODE, c.zmode); bp(BP_BLENDMODE, c.blendmode);
         bp(BP_CONSTANTALPHA, c.dstalpha); bp(BP_ZCOMPARE, c.zcontrol);
         GXSetCopyClear(clear_color(c.clear_color), c.clear_z);
-        if (!c.to_xfb) {
+        if (!c.to_xfb && !(g_debug & kDebugSkipCopies)) {
           auto& token = copy_tokens[c.dest_addr];
           if (!token) token = std::make_unique<CopyToken>();
           const bool full_rect = c.src_x == 0 && c.src_y == 0 && c.src_w == options.logical_width && c.src_h == options.logical_height;
           GXSetTexCopySrc(uint16_t(c.src_x), uint16_t(c.src_y), uint16_t(c.src_w), uint16_t(c.src_h));
-          GXSetTexCopyDst(uint16_t(c.src_w), uint16_t(c.src_h), copy_format(c), GX_FALSE);
-          GXCopyTex(token.get(), c.clear && full_rect ? GX_TRUE : GX_FALSE);
+          const unsigned shrink = (g_debug & kDebugCopyHalfSize) ? 2 : 1;
+          GXSetTexCopyDst(uint16_t(c.src_w / shrink), uint16_t(c.src_h / shrink), copy_format(c), GX_FALSE);
+          GXCopyTex(token.get(), c.clear && (full_rect || (g_debug & kDebugCopyClearPartial)) ? GX_TRUE : GX_FALSE);
           ++counters.texture_copies;
         }
         // GXCopyDisp is a stub. The validated final full-size XFB is presented
@@ -272,4 +359,5 @@ void AuroraBackend::set_draw_dump(std::string path, uint8_t scene_major, uint8_t
   impl_->dump_path = std::move(path); impl_->dump_major = scene_major; impl_->dump_minor = scene_minor;
   impl_->dump_after = after ? after : 1; impl_->dump_seen = 0; impl_->dump_armed = true;
 }
+void AuroraBackend::set_debug_file(std::string path) { impl_->debug_path = std::move(path); }
 } // namespace gx

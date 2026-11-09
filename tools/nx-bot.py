@@ -72,13 +72,34 @@ def classify(path):
     grey = lambda c, v, tol=10: all(abs(ch - v) <= tol for ch in c)
     if all(c[1] > 120 and c[2] > 110 for c in bottom): return "hbmenu"              # teal bar
     if all(grey(c, 70) for c in bottom) and grey(px(640, 357), 70, 12): return "picker"   # "Who is using the software?"
-    if all(grey(c, 45) for c in bottom) and grey(px(640, 357), 45, 12): return "home"
+    left = [px(x, 690) for x in (200, 400, 640)]      # the bar's right half carries button hints
+    if all(grey(c, 45) for c in left) and grey(px(640, 357), 45, 12):
+        return "home-playing" if sum(px(849, 675)) > 500 else "home"   # white (X) glyph: "Close Software" offered
     band = [px(x, 245) for x in (300, 640, 1000)]
     if all(c[0] > 150 and c[1] < 80 and c[2] < 80 for c in band): return "ready"    # READY TO FIGHT banner
     ok_button = px(461, 564)
     if ok_button[1] > 170 and ok_button[2] > 170 and ok_button[0] < 170 and sum(px(640, 200)) < 30: return "error"   # "The software was closed because an error occurred."
     if all(sum(c) < 30 for c in bottom) and sum(px(640, 357)) < 30: return "black"
     return "unknown"
+
+
+def quit_app(bot, shots_dir):
+    """Close whatever application is running or suspended (HOME, X on its tile, A to confirm)."""
+    import os
+    os.makedirs(shots_dir, exist_ok=True)
+    for step in range(6):
+        path = os.path.join(shots_dir, f"quit-{step}.jpg")
+        bot.screenshot(path)
+        state = classify(path)
+        print(f"[quit] step {step}: {state}", flush=True)
+        if state == "hbmenu": return True
+        if state == "error": bot.click("A"); time.sleep(2.5); continue
+        if state == "home": return True
+        if state == "home-playing":
+            bot.click("X"); time.sleep(1.2)          # "Close the software?"
+            bot.click("A"); time.sleep(3); continue
+        bot.click("HOME"); time.sleep(1.5)
+    return False
 
 
 def launch_hbmenu(bot, shots_dir):
@@ -98,6 +119,9 @@ def launch_hbmenu(bot, shots_dir):
         if state == "home":
             if not held_r: bot.press("R"); held_r = True; time.sleep(0.4)
             bot.click("A"); time.sleep(1.5); continue
+        if state == "home-playing":
+            if held_r: bot.release("R"); held_r = False
+            bot.click("X"); time.sleep(1.2); bot.click("A"); time.sleep(3); continue
         if state == "picker":
             if not held_r: bot.press("R"); held_r = True; time.sleep(0.4)
             bot.click("A"); time.sleep(2.5); continue
@@ -128,8 +152,11 @@ def main(argv):
     elif cmd == "raw":
         bot.send(" ".join(args)); print(bot.read_line())
     elif cmd == "hbmenu-netloader":
-        ok = launch_hbmenu(bot, args[0] if args else "build/switch-pull/launch")
+        shots = args[0] if args else "build/switch-pull/launch"
+        ok = quit_app(bot, shots) and launch_hbmenu(bot, shots)
         return 0 if ok else 1
+    elif cmd == "quit-app":
+        return 0 if quit_app(bot, args[0] if args else "build/switch-pull/launch") else 1
     elif cmd == "state":
         bot.screenshot(args[0] if args else "switch.jpg"); print(classify(args[0] if args else "switch.jpg"))
     else:

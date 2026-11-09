@@ -40,6 +40,10 @@ public:
   // Diagnostic: write one frame's draw state (registers, textures, texgens, what the bridge
   // skipped) to `path` the `after`-th frame after the scene (major, minor) is first submitted.
   void set_draw_dump(std::string path, uint8_t scene_major, uint8_t scene_minor, unsigned after);
+  // Diagnostic: a text file holding one integer bitmask, re-read once a second on the owning thread,
+  // so render experiments can be switched during a match without relaunching (see kDebug* in the .cpp).
+  // Bit 32 writes a draw dump of the next frame next to the file (draws-now.txt) and clears itself.
+  void set_debug_file(std::string path);
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
