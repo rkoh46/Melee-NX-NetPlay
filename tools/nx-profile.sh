@@ -28,7 +28,7 @@ anchor_elf=$(docker run --rm -v "$repo:/project" "$image" $tc-nm "/project/$rele
 [[ -n "$anchor_elf" ]] || { echo "anchor symbol not in ELF" >&2; exit 65; }
 slide=$(( 0x$anchor_rt - 0x$anchor_elf ))
 work="$(dirname "$profile")/$(basename "$profile" .txt).work"; mkdir -p "$work"
-for tag in pc pc1 svclr svclr1 rangelr rangelr1; do
+for tag in pc pc1 svclr svclr1 svcup svcup1 svcup2 svcup21 rangelr rangelr1; do
   awk -v t="$tag" '$1==t' "$profile" > "$work/$tag.rows"
   [[ -s "$work/$tag.rows" ]] || continue
   total=$(awk '{s+=$3} END {print s}' "$work/$tag.rows")
@@ -38,6 +38,10 @@ for tag in pc pc1 svclr svclr1 rangelr rangelr1; do
   label="guest thread"; [[ "$tag" == "pc1" ]] && label="render thread"
   [[ "$tag" == "svclr" ]] && label="guest thread: callers of syscalls (lr at the svc)"
   [[ "$tag" == "svclr1" ]] && label="render thread: callers of syscalls (lr at the svc)"
+  [[ "$tag" == "svcup" ]] && label="guest thread: syscalls, one frame record up (who called the wrapper)"
+  [[ "$tag" == "svcup1" ]] && label="render thread: syscalls, one frame record up"
+  [[ "$tag" == "svcup2" ]] && label="guest thread: syscalls, two frame records up"
+  [[ "$tag" == "svcup21" ]] && label="render thread: syscalls, two frame records up"
   [[ "$tag" == "rangelr" ]] && label="guest thread: callers of the watched range (profile_range)"
   [[ "$tag" == "rangelr1" ]] && label="render thread: callers of the watched range (profile_range)"
   echo; echo "== $label: $total samples in the table, by function"

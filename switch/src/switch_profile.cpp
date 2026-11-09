@@ -24,6 +24,9 @@ uint64_t g_samples[2] = {0, 0}, g_failed = 0;
 std::unordered_map<uint64_t, uint32_t> g_pc[2], g_lr[2];
 std::unordered_map<uint64_t, uint32_t> g_svc_lr[2];   // callers of syscalls: lr when pc sits on an SVC instruction
 std::unordered_map<uint64_t, uint32_t> g_range_lr[2]; // callers of a watched code range (switch_profile_watch_range)
+// For syscall samples, the return addresses one and two frame records up the stack (x29 chain): the
+// syscall's lr names the libnx wrapper (mutexLock, condvarWait...), these name who called the wrapper.
+std::unordered_map<uint64_t, uint32_t> g_svc_up[2], g_svc_up2[2];
 uint64_t g_range_lo = 0, g_range_hi = 0;
 
 void sampler(void*) {
@@ -43,8 +46,24 @@ void sampler(void*) {
       if (R_SUCCEEDED(rc)) break;
       svcSleepThread(5000);
     }
+    // Frame records are read while the target is still paused; fp is trusted only inside its stack.
+    uint64_t up = 0, up2 = 0;
+    bool on_svc = false;
+    if (R_SUCCEEDED(rc) && ctx.pc.x >= 0x1000 && (ctx.pc.x & 3) == 0) {
+      const uint32_t insn = *reinterpret_cast<const uint32_t*>(ctx.pc.x);
+      const uint32_t prev = *reinterpret_cast<const uint32_t*>(ctx.pc.x - 4);
+      on_svc = (insn & 0xFFE0001Fu) == 0xD4000001u || (prev & 0xFFE0001Fu) == 0xD4000001u;
+      const auto in_stack = [&](uint64_t fp) { return fp >= ctx.sp && fp < ctx.sp + (8u << 20) && !(fp & 15); };
+      if (on_svc && which == 0 && in_stack(ctx.fp)) {   // the guest thread only: its 32 MB stack contains the whole 8 MB window
+        const uint64_t* rec = reinterpret_cast<const uint64_t*>(ctx.fp);
+        up = rec[1];
+        if (in_stack(rec[0]) && rec[0] > ctx.fp) up2 = reinterpret_cast<const uint64_t*>(rec[0])[1];
+      }
+    }
     svcSetThreadActivity(target, ThreadActivity_Runnable);
     if (R_FAILED(rc)) { ++g_failed; continue; }
+    if (up) ++g_svc_up[which][up];
+    if (up2) ++g_svc_up2[which][up2];
     ++g_samples[which];
     ++g_pc[which][ctx.pc.x];
     ++g_lr[which][ctx.lr];
@@ -103,6 +122,10 @@ void switch_profile_stop(const char* path) {
   write_table(f, "lr1", g_lr[1]);
   write_table(f, "svclr", g_svc_lr[0]);
   write_table(f, "svclr1", g_svc_lr[1]);
+  write_table(f, "svcup", g_svc_up[0]);
+  write_table(f, "svcup1", g_svc_up[1]);
+  write_table(f, "svcup2", g_svc_up2[0]);
+  write_table(f, "svcup21", g_svc_up2[1]);
   write_table(f, "rangelr", g_range_lr[0]);
   write_table(f, "rangelr1", g_range_lr[1]);
   std::fclose(f);
