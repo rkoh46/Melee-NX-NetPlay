@@ -53,10 +53,10 @@ void trace_enter(Context& c, uint32_t pc);
 void add_trace_func(uint32_t addr, uint32_t limit);
 inline void enter(Context& c, uint32_t pc) {
 #ifdef __SWITCH__
-  // Console build: the crash report keeps the last pc and the hang watchdog its counter, but the
-  // 64-entry call ring and the --trace-func test are left out of the hottest path there.
+  // Console build: only the last pc (crash reports) on this path, which every translated call takes
+  // (a few hundred thousand a frame). The hang watchdog runs from the loop back-edge poll instead
+  // (loop_poll, every 1,024 back-edges), which is where a spinning guest is.
   c.last_pc = pc;
-  if ((++c.backedges & 0xFFFFFu) == 0) hang_check(c);
 #else
   c.last_pc = pc; c.trace[c.trace_pos++ & 63] = pc;
   if ((++g_enter_count & 0xFFFFFu) == 0) hang_check(c);

@@ -776,7 +776,12 @@ void wait_event() {
 
 namespace ppc {
 void loop_poll(Context& c) {
+#ifdef __SWITCH__
+  static uint32_t polls = 0;
+  if ((++polls & 0x3FFu) == 0) hang_check(c);   // enter() no longer counts calls on the console
+#else
   (void)c;
+#endif
   host::pump_completions();   // advances time; fires alarms / audio frames / completions when EE is set
 }
 void interrupts_enabled(Context& c) {
