@@ -219,3 +219,4 @@ WriteMTXPS4x2
 HSD_MtxInverseTranspose
 sinf
 cosf
+HSD_MtxScaledAdd

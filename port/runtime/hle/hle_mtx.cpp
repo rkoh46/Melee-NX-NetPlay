@@ -160,6 +160,15 @@ HLE(WriteMTXPS4x3) {
 HLE(WriteMTXPS3x3from3x4) {
   const uint32_t mtx = ARG0;
   uint32_t w[9];
+  if ((mtx & 0x3FFFFFFFu) + 48 <= ppc::RAM_SIZE) {   // rows of three normal-or-zero words copy across unchanged
+    const uint8_t* src = m + (mtx & 0x3FFFFFFFu);
+    bool plain = true;
+    for (uint32_t row = 0; row < 3; ++row) {
+      std::memcpy(w + row * 3, src + row * 16, 12);
+      plain &= copies_exactly(w[row * 3]) & copies_exactly(w[row * 3 + 1]) & copies_exactly(w[row * 3 + 2]);
+    }
+    if (plain) { gx::fifo_store_words(w, 9); return; }
+  }
   for (uint32_t row = 0; row < 3; ++row) {
     w[row * 3] = pipe_pair_word(m, c, mtx + row * 16); w[row * 3 + 1] = pipe_pair_word(m, c, mtx + row * 16 + 4);
     w[row * 3 + 2] = pipe_single_word(m, c, mtx + row * 16 + 8);
@@ -316,7 +325,7 @@ void verified(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::C
       host::log("%s", line);
     }
   }
-  if ((calls & (calls - 1)) == 0 && calls >= 1024) host::log("hle-verify %s: %llu calls, %llu mismatches", name, (unsigned long long)calls, (unsigned long long)mismatches);
+  if ((calls & (calls - 1)) == 0 && calls >= 64) host::log("hle-verify %s: %llu calls, %llu mismatches", name, (unsigned long long)calls, (unsigned long long)mismatches);
 }
 }  // namespace
 
@@ -466,9 +475,33 @@ void verified_f1(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc
                 std::memcmp(mine_mem, s, 48) ? "differs" : "same");
   }
   c.f[1] = ref.f[1];   // the interpreter's result stands
-  if ((calls & (calls - 1)) == 0 && calls >= 1024) host::log("hle-verify %s: %llu calls, %llu mismatches", name, (unsigned long long)calls, (unsigned long long)mismatches);
+  if ((calls & (calls - 1)) == 0 && calls >= 64) host::log("hle-verify %s: %llu calls, %llu mismatches", name, (unsigned long long)calls, (unsigned long long)mismatches);
 }
 }  // namespace
 
 HLE(sinf) { verified_f1(c, m, "sinf", guest::f_803263D4_orig, sinf_body); }
 HLE(cosf) { verified_f1(c, m, "cosf", guest::f_80326240_orig, cosf_body); }
+
+// void HSD_MtxScaledAdd(Mtx a, Mtx b, Mtx dst, f32 scale): dst[i] = scale * a[i] + b[i] for the 12
+// elements, in order (element i is loaded after element i-1 is stored, as in the original, so any
+// aliasing behaves the same). Each fmadds is one fused operation rounded to single while NI is clear
+// (f25 of the single multiplier a[i] is the identity); a NaN element, or NI set, uses the exact helper
+// for that element, whose result is otherwise identical. The registers end as the original leaves them.
+static void scaled_add_body(ppc::Context& c, uint8_t* m) {
+  const uint32_t a = ARG0, b = ARG1, dst = ARG2;
+  const double scale = c.f[1].ps0;
+  const bool plain = !(ppc::detail::current_fpscr & 4);
+  double ai = 0, r = 0;
+  for (uint32_t i = 0; i < 12; ++i) {
+    ai = ppc::float_bits_to_double(ppc::ld32(c, m, a + i * 4));
+    const double bi = ppc::float_bits_to_double(ppc::ld32(c, m, b + i * 4));
+    r = plain ? double(float(ppc::detail::hardware_madd(scale, ai, bi))) : 0.0;
+    if (!plain || std::isnan(r)) r = ppc::fmadds(scale, ppc::f25(ai), bi);
+    ppc::st32(c, m, dst + i * 4, ppc::double_to_float_bits(r));
+  }
+  c.r[3] = a + 4; c.r[4] = b + 4;            // the two update-form loads
+  c.f[0].ps0 = c.f[0].ps1 = r;
+  c.f[2].ps0 = c.f[2].ps1 = ai;
+}
+namespace guest { void f_8037A54C_orig(ppc::Context& c, uint8_t* m); }
+HLE(HSD_MtxScaledAdd) { verified(c, m, "HSD_MtxScaledAdd", guest::f_8037A54C_orig, ARG0, ARG1, ARG2, scaled_add_body); }

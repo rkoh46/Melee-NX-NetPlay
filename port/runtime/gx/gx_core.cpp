@@ -845,6 +845,7 @@ std::deque<Chunk> g_gpu_queue;
 std::vector<std::vector<uint8_t>> g_gpu_free;
 size_t g_gpu_queued = 0;
 bool g_gpu_busy = false, g_gpu_stop = false, g_gpu_failed = false;
+bool g_gpu_idle = false;   // the worker is waiting for a chunk: only then does a hand-off need a wake-up
 std::thread g_gpu_thread;
 
 void gpu_consume(const uint8_t* data, size_t len) {
@@ -861,7 +862,9 @@ void gpu_main() {
       Chunk chunk;
       {
         std::unique_lock<std::mutex> lock(g_gpu_mutex);
+        g_gpu_idle = true;
         g_gpu_cv.wait(lock, [] { return g_gpu_stop || !g_gpu_queue.empty(); });
+        g_gpu_idle = false;
         if (g_gpu_queue.empty()) return;   // stop requested and drained
         chunk = std::move(g_gpu_queue.front()); g_gpu_queue.pop_front();
         g_gpu_busy = true;
@@ -887,10 +890,12 @@ void gpu_main() {
 // Hands the producer chunk to the worker (waiting while 8 MB are already queued).
 void gpu_submit() {
   if (!g_prod_len) return;
+  bool wake = false;
   {
     std::unique_lock<std::mutex> lock(g_gpu_mutex);
     g_gpu_cv.wait(lock, [] { return g_gpu_failed || g_gpu_queued < kMaxQueued; });
     if (g_gpu_failed) { g_prod_len = 0; return; }
+    wake = g_gpu_idle;
     g_gpu_queue.push_back(Chunk{std::move(g_prod), g_prod_len});
     g_gpu_queued += g_prod_len;
     if (!g_gpu_free.empty()) { g_prod = std::move(g_gpu_free.back()); g_gpu_free.pop_back(); }
@@ -898,7 +903,7 @@ void gpu_submit() {
   }
   if (g_prod.size() < kChunkCap) g_prod.resize(kChunkCap);
   g_prod_len = 0;
-  g_gpu_cv.notify_all();
+  if (wake) g_gpu_cv.notify_all();   // a busy worker takes the chunk when it finishes the current one
 }
 void gpu_sync() {
   host::SimCostScope wait(host::SIM_GPUWAIT);   // the guest waiting for the GPU thread (late-frame logs show it)
