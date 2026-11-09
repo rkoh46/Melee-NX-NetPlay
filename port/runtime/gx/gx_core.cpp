@@ -833,7 +833,7 @@ extern "C" __attribute__((weak)) void switch_pin_current_thread(int core, int pr
 namespace gx {
 namespace {
 bool g_gpu_threaded = false;
-constexpr size_t kChunkFlush = 32 * 1024, kChunkCap = 64 * 1024, kMaxQueued = 8u << 20;
+constexpr size_t kChunkFlush = 8 * 1024, kChunkCap = 64 * 1024, kMaxQueued = 8u << 20;
 std::vector<uint8_t> g_prod;          // producer chunk (guest thread)
 size_t g_prod_len = 0;
 bool g_bp_opcode = false;              // the last byte stored was a BP-write opcode (0x61)
