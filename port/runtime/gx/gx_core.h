@@ -68,8 +68,35 @@ struct VertexArrayRef {
   uint32_t stride = 0, first_index = 0, count = 0, bytes = 0;
 };
 
+// The register and matrix state a draw renders with (~4.4 KB). A renderer that asks for state deltas
+// (Backend::wants_state_deltas) receives, per draw, only the registers and matrix rows written since
+// the previous draw of the frame (DrawCall::delta), the first draw of every frame carrying all of it;
+// apply_state rebuilds the full state in order on the renderer's side. Others get full copies.
+struct DrawState {
+  // Register snapshots used by shader generation and pipeline state.
+  BPMemory bp;
+  // XF subset needed by the vertex shader.
+  float posMatrices[256];
+  float normalMatrices[96];
+  float postMatrices[256];
+  uint8_t lights[8][64];           // raw light blocks (Light struct is 64 bytes)
+  uint32_t xf_regs[0x58];          // 0x1000..0x1057
+  uint32_t matrix_index_a, matrix_index_b;
+  int32_t tev_colors[4][4];   // RGBA, signed 11-bit (BP E0-E7 writes with type 0)
+  int32_t tev_kcolors[4][4];  // RGBA (type 1 writes)
+};
+// Which parts of a DrawCall's DrawState are valid (written since the previous draw): BP registers,
+// position/post matrix rows (4 floats), normal rows (3 floats), lights, XF registers 0x1000+n. The
+// matrix indices and TEV colours are always present. `full` marks a complete snapshot.
+struct StateDelta {
+  bool full = true;
+  uint64_t bp[4] = {}, pos = 0, post = 0, xf[2] = {};
+  uint32_t nrm = 0;
+  uint8_t lights = 0;
+};
+
 struct AuthoredPose;
-struct DrawCall {
+struct DrawCall : DrawState {
   // ~5 KB of register and matrix snapshots, recorded ~1400 times per simulation frame. Zeroing all
   // of that costs real time on the simulation thread, so record_draw (which overwrites every one of
   // those arrays) opts out with the tag below. Every other caller gets the safe zeroed default.
@@ -85,17 +112,7 @@ struct DrawCall {
   uint32_t vtxfmt = 0, raw_offset = 0, raw_size = 0;
   uint32_t vcd_lo = 0, vcd_hi = 0, vat[3] = {0, 0, 0};
   VertexArrayRef arrays[12];       // pos, nrm, col0, col1, tex0..tex7 (unused when not indexed)
-  // Register snapshots used by shader generation and pipeline state.
-  BPMemory bp;
-  // XF subset needed by the vertex shader (matrices are copied in full: simplest and rollback-safe).
-  float posMatrices[256];
-  float normalMatrices[96];
-  float postMatrices[256];
-  uint8_t lights[8][64];           // raw light blocks (Light struct is 64 bytes)
-  uint32_t xf_regs[0x58];          // 0x1000..0x1057
-  uint32_t matrix_index_a, matrix_index_b;
-  int32_t tev_colors[4][4];   // RGBA, signed 11-bit (BP E0-E7 writes with type 0)
-  int32_t tev_kcolors[4][4];  // RGBA (type 1 writes)
+  StateDelta delta;                // which DrawState parts this record carries (full unless deltas were asked for)
   TextureRef textures[8] = {};     // snapshot_textures relies on `used` starting false
   int viewport_x = 0, viewport_y = 0, viewport_w = 0, viewport_h = 0;  // unused placeholders (computed by backend)
   // Stable identity of this draw across frames (display-list address + call ordinal + draw ordinal,
@@ -114,6 +131,10 @@ struct DrawCall {
   mutable void* cached_pipeline = nullptr;
   mutable uint64_t cached_pipeline_owner = 0;
 };
+
+// Applies a draw's recorded state to `into`: everything for a full record, else the parts its delta marks.
+// Called for every draw of a frame in order, starting with the frame's first (always full) draw.
+void apply_state(DrawState& into, const DrawCall& from);
 
 // Replacement transform state for one draw when a sub-frame is rendered between simulation frames.
 struct DrawMatrices {
@@ -236,6 +257,8 @@ struct Backend {
   // True for a renderer that consumes the hardware vertex format: the capture then records each
   // draw's raw vertex bytes and indexed-array slices (DrawCall::raw_*) instead of decoding vertices.
   virtual bool wants_raw_vertices() const { return false; }
+  // True when the backend rebuilds draw state itself from per-draw deltas (apply_state).
+  virtual bool wants_state_deltas() const { return false; }
   // Queueing backends take the frame's buffers and hand back recycled ones (no copy, no
   // per-frame reallocation on the simulation thread); `frame` comes back cleared either way.
   virtual void submit_and_recycle(Frame& frame) { submit_frame(frame); frame.clear(); }

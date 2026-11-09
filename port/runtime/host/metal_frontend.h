@@ -73,6 +73,7 @@ public:
   void submit_frame(const gx::Frame& frame) override;
   void submit_frame(const gx::Frame& frame, const gx::DrawMatrices* overrides) override;
   bool wants_raw_vertices() const override { return renderer_ && renderer_->wants_raw_vertices(); }
+  bool wants_state_deltas() const override { return renderer_ && renderer_->wants_state_deltas(); }
   void set_skip_present(bool skip) override;
   bool pump_events();
   bool on_owner_thread() const noexcept { return std::this_thread::get_id() == owner_thread_; }

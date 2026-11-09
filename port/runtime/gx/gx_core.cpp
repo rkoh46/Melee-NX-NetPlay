@@ -309,6 +309,8 @@ uint32_t components_of(const VertexDesc& d) {
 // per array per frame replaced a hashed, compared snapshot per draw, which cost as much as decoding.
 struct RawPending { uint32_t fmt = 0, offset = 0, size = 0; VertexArrayRef arrays[12]; bool valid = false; };
 RawPending g_raw_pending;
+bool g_state_deltas = false;   // set by init(): the backend rebuilds draw state from deltas (apply_state)
+StateDelta g_dirty;            // parts of the live state written since the last recorded draw
 bool g_raw_vertices = false;   // set by init(): renderers that consume the hardware format ask for it
 std::unordered_map<uint64_t, std::shared_ptr<std::vector<uint8_t>>> g_frame_arrays;   // (base, stride) -> this frame's copy
 
@@ -340,6 +342,22 @@ void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src,
     }
     ref.data = slot; ref.stride = stride; ref.first_index = 0; ref.count = hi + 1; ref.bytes = need;
   }
+}
+
+void apply_state_impl(DrawState& into, const DrawCall& from) {
+  const StateDelta& d = from.delta;
+  if (d.full) { into = static_cast<const DrawState&>(from); return; }
+  for (unsigned w = 0; w < 4; ++w)
+    for (uint64_t m = d.bp[w]; m; m &= m - 1) { const unsigned r = w * 64 + __builtin_ctzll(m); into.bp.reg[r] = from.bp.reg[r]; }
+  for (uint64_t m = d.pos; m; m &= m - 1) std::memcpy(into.posMatrices + __builtin_ctzll(m) * 4, from.posMatrices + __builtin_ctzll(m) * 4, 16);
+  for (uint32_t m = d.nrm; m; m &= m - 1) std::memcpy(into.normalMatrices + __builtin_ctz(m) * 3, from.normalMatrices + __builtin_ctz(m) * 3, 12);
+  for (uint64_t m = d.post; m; m &= m - 1) std::memcpy(into.postMatrices + __builtin_ctzll(m) * 4, from.postMatrices + __builtin_ctzll(m) * 4, 16);
+  for (unsigned m = d.lights; m; m &= m - 1) std::memcpy(into.lights[__builtin_ctz(m)], from.lights[__builtin_ctz(m)], 64);
+  for (unsigned w = 0; w < 2; ++w)
+    for (uint64_t m = d.xf[w]; m; m &= m - 1) { const unsigned r = w * 64 + __builtin_ctzll(m); into.xf_regs[r] = from.xf_regs[r]; }
+  into.matrix_index_a = from.matrix_index_a; into.matrix_index_b = from.matrix_index_b;
+  std::memcpy(into.tev_colors, from.tev_colors, sizeof into.tev_colors);
+  std::memcpy(into.tev_kcolors, from.tev_kcolors, sizeof into.tev_kcolors);
 }
 
 // ---------------- draw snapshot ----------------
@@ -415,16 +433,41 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
     dc.raw_size = 0;
     for (int i = 0; i < 12; ++i) dc.arrays[i] = VertexArrayRef{};
   }
-  dc.bp = g_bp;
-  std::memcpy(dc.posMatrices, g_xf.posMatrices, sizeof dc.posMatrices);
-  std::memcpy(dc.normalMatrices, g_xf.normalMatrices, sizeof dc.normalMatrices);
-  std::memcpy(dc.xf_regs, &g_xf.raw[0x1000], sizeof dc.xf_regs);
-  // Post-transform matrices and lights are 1.5 KB of the draw and most draws use neither; the
-  // renderer reads them under the same tests (fill_vs_constants), so skipped copies are never read.
-  if (dc.xf_regs[0x12] & 1) std::memcpy(dc.postMatrices, g_xf.postMatrices, sizeof dc.postMatrices);
-  bool lit = false;
-  for (uint32_t j = 0; j < (dc.xf_regs[0x09] & 3); ++j) lit = lit || lit_enable(dc.xf_regs[0x0E + j]) || lit_enable(dc.xf_regs[0x10 + j]);
-  if (lit) std::memcpy(dc.lights, g_xf.lights, sizeof dc.lights);
+  if (g_state_deltas && g_frame.draws.size() > 1) {
+    // Only what changed since the previous draw of this frame: on a typical draw a position and a
+    // normal matrix and a few BP registers, instead of ~4.4 KB copied for every one of ~1,500 draws.
+    dc.delta = g_dirty; dc.delta.full = false;
+    for (unsigned w = 0; w < 4; ++w)
+      for (uint64_t m = g_dirty.bp[w]; m; m &= m - 1) { const unsigned r = w * 64 + __builtin_ctzll(m); dc.bp.reg[r] = g_bp.reg[r]; }
+    for (uint64_t m = g_dirty.pos; m; m &= m - 1) std::memcpy(dc.posMatrices + __builtin_ctzll(m) * 4, g_xf.posMatrices + __builtin_ctzll(m) * 4, 16);
+    for (uint32_t m = g_dirty.nrm; m; m &= m - 1) std::memcpy(dc.normalMatrices + __builtin_ctz(m) * 3, g_xf.normalMatrices + __builtin_ctz(m) * 3, 12);
+    for (uint64_t m = g_dirty.post; m; m &= m - 1) std::memcpy(dc.postMatrices + __builtin_ctzll(m) * 4, g_xf.postMatrices + __builtin_ctzll(m) * 4, 16);
+    for (unsigned m = g_dirty.lights; m; m &= m - 1) std::memcpy(dc.lights[__builtin_ctz(m)], &g_xf.lights[__builtin_ctz(m)], 64);
+    for (unsigned w = 0; w < 2; ++w)
+      for (uint64_t m = g_dirty.xf[w]; m; m &= m - 1) { const unsigned r = w * 64 + __builtin_ctzll(m); dc.xf_regs[r] = g_xf.raw[0x1000 + r]; }
+  } else if (g_state_deltas) {
+    // The frame's first draw carries the whole state the deltas build on.
+    dc.delta = StateDelta{};
+    dc.bp = g_bp;
+    std::memcpy(dc.posMatrices, g_xf.posMatrices, sizeof dc.posMatrices);
+    std::memcpy(dc.normalMatrices, g_xf.normalMatrices, sizeof dc.normalMatrices);
+    std::memcpy(dc.postMatrices, g_xf.postMatrices, sizeof dc.postMatrices);
+    std::memcpy(dc.lights, g_xf.lights, sizeof dc.lights);
+    std::memcpy(dc.xf_regs, &g_xf.raw[0x1000], sizeof dc.xf_regs);
+  } else {
+    dc.delta = StateDelta{};
+    dc.bp = g_bp;
+    std::memcpy(dc.posMatrices, g_xf.posMatrices, sizeof dc.posMatrices);
+    std::memcpy(dc.normalMatrices, g_xf.normalMatrices, sizeof dc.normalMatrices);
+    std::memcpy(dc.xf_regs, &g_xf.raw[0x1000], sizeof dc.xf_regs);
+    // Post-transform matrices and lights are 1.5 KB of the draw and most draws use neither; the
+    // renderer reads them under the same tests (fill_vs_constants), so skipped copies are never read.
+    if (dc.xf_regs[0x12] & 1) std::memcpy(dc.postMatrices, g_xf.postMatrices, sizeof dc.postMatrices);
+    bool lit = false;
+    for (uint32_t j = 0; j < (dc.xf_regs[0x09] & 3); ++j) lit = lit || lit_enable(dc.xf_regs[0x0E + j]) || lit_enable(dc.xf_regs[0x10 + j]);
+    if (lit) std::memcpy(dc.lights, g_xf.lights, sizeof dc.lights);
+  }
+  g_dirty = StateDelta{}; g_dirty.full = false;
   dc.matrix_index_a = g_cp.matrix_index_a();
   dc.matrix_index_b = g_cp.matrix_index_b();
   std::memcpy(dc.tev_colors, g_tev_colors, sizeof g_tev_colors);
@@ -456,6 +499,7 @@ void bp_write(uint32_t value) {
   uint32_t masked = (g_bp.reg[r] & ~g_bp_mask) | (v & g_bp_mask);
   g_bp_mask = 0xFFFFFF;
   g_bp.reg[r] = masked;
+  g_dirty.bp[r >> 6] |= uint64_t(1) << (r & 63);
   if (r >= BP_TEV_COLOR_RA && r <= BP_TEV_COLOR_RA + 7) {
     // TEV color/konst registers share BP slots; the type bit selects the destination at write time.
     int idx = (r - BP_TEV_COLOR_RA) / 2;
@@ -544,7 +588,14 @@ void bp_write(uint32_t value) {
 void xf_load(uint32_t address, uint32_t count, const uint8_t* data) {
   for (uint32_t i = 0; i < count; ++i) {
     uint32_t a = address + i;
-    if (a < 0x1058) g_xf.raw[a] = be32(data + i * 4);
+    if (a < 0x1058) {
+      g_xf.raw[a] = be32(data + i * 4);
+      if (a < 0x100) g_dirty.pos |= uint64_t(1) << (a >> 2);
+      else if (a >= 0x400 && a < 0x460) g_dirty.nrm |= 1u << ((a - 0x400) / 3);
+      else if (a >= 0x500 && a < 0x600) g_dirty.post |= uint64_t(1) << ((a - 0x500) >> 2);
+      else if (a >= 0x600 && a < 0x680) g_dirty.lights |= uint8_t(1u << ((a - 0x600) >> 4));
+      else if (a >= 0x1000) g_dirty.xf[(a - 0x1000) >> 6] |= uint64_t(1) << ((a - 0x1000) & 63);
+    }
   }
 }
 
@@ -625,6 +676,7 @@ void mark_discontinuity() { g_discontinuity = true; }
 void init(Backend* backend) {
   g_backend = backend;
   g_raw_vertices = backend && backend->wants_raw_vertices();
+  g_state_deltas = backend && backend->wants_state_deltas();
   std::memset(&g_bp, 0, sizeof g_bp);
   std::memset(&g_cp, 0, sizeof g_cp);
   std::memset(&g_xf, 0, sizeof g_xf);
@@ -695,5 +747,7 @@ void stats(uint64_t* commands, uint64_t* draws, uint64_t* vertices, uint32_t* ef
 }
 
 const uint8_t* tmem() { return g_tmem; }
+
+void apply_state(DrawState& into, const DrawCall& from) { apply_state_impl(into, from); }
 
 }  // namespace gx

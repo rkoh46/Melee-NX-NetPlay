@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <array>
 #include <map>
+#include <memory>
 #include <optional>
 #include <thread>
 #include <tuple>
@@ -226,43 +227,46 @@ struct AuroraBackend::Impl {
     std::fprintf(f, "# frame seq=%llu scene %02X/%02X draws=%zu copies=%zu commands=%zu\n", (unsigned long long)input.sequence,
                  input.scene_major, input.scene_minor, input.draws.size(), input.copies.size(), input.commands.size());
     size_t draw_index = 0;
+    auto rebuilt = std::make_unique<DrawState>();   // the draws carry state deltas: rebuild it in order
+    DrawState& st = *rebuilt;
     for (const auto& cmd : input.commands) {
       if (cmd.kind != FrameCommand::Draw) { std::fprintf(f, "copy %u\n", unsigned(cmd.index)); continue; }
       const auto& d = input.draws[cmd.index];
+      apply_state(st, d);
       const bool skipped = cmd.index < frame.draws.size() && frame.draws[cmd.index].vertex_count == 0;
       std::fprintf(f, "draw %zu%s prim=%02X verts=%u comps=%08X genmode=%08X texgens=%u tevstages=%u indstages=%u mtxidx=%08X/%08X zmode=%06X blend=%06X owner=%u\n",
-                   draw_index++, skipped ? " SKIPPED" : "", d.primitive, d.vertex_count, d.components, d.bp.reg[0], d.bp.numtexgens(),
-                   d.bp.numtevstages() + 1, d.bp.numindstages(), d.matrix_index_a, d.matrix_index_b, d.bp.reg[0x40] & 0xffffff,
-                   d.bp.reg[0x41] & 0xffffff, d.owner_player);
-      std::fprintf(f, "  xf: numtexgens=%u", d.xf_regs[0x3f]);
-      for (unsigned i = 0; i < 8; ++i) std::fprintf(f, " tg%u=%08X/post%08X", i, d.xf_regs[0x40 + i], d.xf_regs[0x50 + i]);
-      std::fprintf(f, " dualtex=%u colorchans=%u\n", d.xf_regs[0x12] & 1, d.xf_regs[0x09]);
+                   draw_index++, skipped ? " SKIPPED" : "", d.primitive, d.vertex_count, d.components, st.bp.reg[0], st.bp.numtexgens(),
+                   st.bp.numtevstages() + 1, st.bp.numindstages(), st.matrix_index_a, st.matrix_index_b, st.bp.reg[0x40] & 0xffffff,
+                   st.bp.reg[0x41] & 0xffffff, d.owner_player);
+      std::fprintf(f, "  xf: numtexgens=%u", st.xf_regs[0x3f]);
+      for (unsigned i = 0; i < 8; ++i) std::fprintf(f, " tg%u=%08X/post%08X", i, st.xf_regs[0x40 + i], st.xf_regs[0x50 + i]);
+      std::fprintf(f, " dualtex=%u colorchans=%u\n", st.xf_regs[0x12] & 1, st.xf_regs[0x09]);
       std::fprintf(f, "  tev:");
-      for (unsigned s2 = 0; s2 <= d.bp.numtevstages(); ++s2)
-        std::fprintf(f, " [%u map=%d coord=%d en=%d c=%08X a=%08X ind=%08X]", s2, d.bp.order_texmap(int(s2)), d.bp.order_texcoord(int(s2)),
-                     d.bp.order_enable(int(s2)), d.bp.reg[0xC0 + s2 * 2] & 0xffffff, d.bp.reg[0xC1 + s2 * 2] & 0xffffff, d.bp.tevind(int(s2)) & 0xffffff);
-      std::fprintf(f, " ztex=%06X/%06X alpha=%06X\n", d.bp.reg[0x74] & 0xffffff, d.bp.reg[0x75] & 0xffffff, d.bp.reg[0xF3] & 0xffffff);
+      for (unsigned s2 = 0; s2 <= st.bp.numtevstages(); ++s2)
+        std::fprintf(f, " [%u map=%d coord=%d en=%d c=%08X a=%08X ind=%08X]", s2, st.bp.order_texmap(int(s2)), st.bp.order_texcoord(int(s2)),
+                     st.bp.order_enable(int(s2)), st.bp.reg[0xC0 + s2 * 2] & 0xffffff, st.bp.reg[0xC1 + s2 * 2] & 0xffffff, st.bp.tevind(int(s2)) & 0xffffff);
+      std::fprintf(f, " ztex=%06X/%06X alpha=%06X\n", st.bp.reg[0x74] & 0xffffff, st.bp.reg[0x75] & 0xffffff, st.bp.reg[0xF3] & 0xffffff);
       std::fprintf(f, "  regs:");
-      for (unsigned i = 0; i < 4; ++i) std::fprintf(f, " c%u=%d,%d,%d,%d", i, d.tev_colors[i][0], d.tev_colors[i][1], d.tev_colors[i][2], d.tev_colors[i][3]);
-      for (unsigned i = 0; i < 4; ++i) std::fprintf(f, " k%u=%d,%d,%d,%d", i, d.tev_kcolors[i][0], d.tev_kcolors[i][1], d.tev_kcolors[i][2], d.tev_kcolors[i][3]);
+      for (unsigned i = 0; i < 4; ++i) std::fprintf(f, " c%u=%d,%d,%d,%d", i, st.tev_colors[i][0], st.tev_colors[i][1], st.tev_colors[i][2], st.tev_colors[i][3]);
+      for (unsigned i = 0; i < 4; ++i) std::fprintf(f, " k%u=%d,%d,%d,%d", i, st.tev_kcolors[i][0], st.tev_kcolors[i][1], st.tev_kcolors[i][2], st.tev_kcolors[i][3]);
       std::fprintf(f, " ksel=");
-      for (unsigned r = 0xF6; r <= 0xFD; ++r) std::fprintf(f, "%06X ", d.bp.reg[r] & 0xffffff);
-      std::fprintf(f, "chan=%08X/%08X/%08X/%08X amb=%08X/%08X mat=%08X/%08X\n", d.xf_regs[0x0e], d.xf_regs[0x0f], d.xf_regs[0x10], d.xf_regs[0x11],
-                   d.xf_regs[0x0a], d.xf_regs[0x0b], d.xf_regs[0x0c], d.xf_regs[0x0d]);
-      if (d.bp.numtexgens()) {
-        const unsigned pn = d.matrix_index_a & 63;
+      for (unsigned r = 0xF6; r <= 0xFD; ++r) std::fprintf(f, "%06X ", st.bp.reg[r] & 0xffffff);
+      std::fprintf(f, "chan=%08X/%08X/%08X/%08X amb=%08X/%08X mat=%08X/%08X\n", st.xf_regs[0x0e], st.xf_regs[0x0f], st.xf_regs[0x10], st.xf_regs[0x11],
+                   st.xf_regs[0x0a], st.xf_regs[0x0b], st.xf_regs[0x0c], st.xf_regs[0x0d]);
+      if (st.bp.numtexgens()) {
+        const unsigned pn = st.matrix_index_a & 63;
         std::fprintf(f, "  pnmtx%u:", pn);
-        for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", d.posMatrices[(pn / 3) * 12 + k]);
-        for (unsigned i = 0; i < d.bp.numtexgens() && i < 8; ++i) {
-          const unsigned tm = i < 4 ? (d.matrix_index_a >> (6 + i * 6)) & 63 : (d.matrix_index_b >> ((i - 4) * 6)) & 63;
+        for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", st.posMatrices[(pn / 3) * 12 + k]);
+        for (unsigned i = 0; i < st.bp.numtexgens() && i < 8; ++i) {
+          const unsigned tm = i < 4 ? (st.matrix_index_a >> (6 + i * 6)) & 63 : (st.matrix_index_b >> ((i - 4) * 6)) & 63;
           if (tm != 60) {   // GX_IDENTITY
             std::fprintf(f, "\n  texmtx%u(%u):", i, tm);
-            for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", d.posMatrices[(tm / 3) * 12 + k]);
+            for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", st.posMatrices[(tm / 3) * 12 + k]);
           }
-          const unsigned post = (d.xf_regs[0x12] & 1) ? d.xf_regs[0x50 + i] & 63 : 61;
+          const unsigned post = (st.xf_regs[0x12] & 1) ? st.xf_regs[0x50 + i] & 63 : 61;
           if (post != 61) {
             std::fprintf(f, "\n  postmtx%u(%u):", i, post);
-            for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", d.postMatrices[(post / 3) * 12 + k]);
+            for (unsigned k = 0; k < 12; ++k) std::fprintf(f, " %.4g", st.postMatrices[(post / 3) * 12 + k]);
           }
         }
         std::fprintf(f, "\n");
@@ -271,7 +275,7 @@ struct AuroraBackend::Impl {
         const auto& t = d.textures[i];
         if (!t.used) continue;
         std::fprintf(f, "  tex%u: addr=%08X %ux%u fmt=%u tlut=%08X/%u mode0=%08X mode1=%08X mips=%u image0=%08X\n", i, t.addr, t.width, t.height, t.format,
-                     t.tlut_addr, t.tlut_format, t.mode0, t.mode1, t.mip_levels, d.bp.teximage0(int(i)) & 0xffffff);
+                     t.tlut_addr, t.tlut_format, t.mode0, t.mode1, t.mip_levels, st.bp.teximage0(int(i)) & 0xffffff);
       }
     }
     for (const auto& c : input.copies)

@@ -47,6 +47,8 @@ public:
   // Aurora's command processor consumes the GameCube vertex format directly (VCD/VAT registers,
   // indexed arrays bound by host pointer): the capture hands it the raw streams.
   bool wants_raw_vertices() const override { return true; }
+  // The bridge rebuilds each frame's draw state from per-draw deltas (apply_state).
+  bool wants_state_deltas() const override { return true; }
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

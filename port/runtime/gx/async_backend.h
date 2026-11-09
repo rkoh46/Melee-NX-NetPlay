@@ -21,6 +21,7 @@ public:
   void submit_frame(const Frame& frame) override;
   void submit_and_recycle(Frame& frame) override;
   bool wants_raw_vertices() const override { return renderer_.wants_raw_vertices(); }
+  bool wants_state_deltas() const override { return renderer_.wants_state_deltas(); }
   // Owner thread: renders queued frames until `stop` is set and the queue is empty. Rendering
   // exceptions propagate to the caller, which owns the result of the run.
   void run(const std::atomic<bool>& stop);

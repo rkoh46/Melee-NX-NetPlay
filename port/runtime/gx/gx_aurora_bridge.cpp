@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gx_aurora_bridge.h"
+#include <memory>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -73,7 +74,9 @@ void validate_texture(const Frame& frame, const std::string& where, const Textur
     fail(frame, where, "palette format or immutable palette bytes are incomplete");
 }
 
-void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCall* prev, Draw& out) {
+void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawState& st, const DrawCall* prev, const DrawState* pst, Draw& out) {
+  // `d` holds the draw's own data (vertices, textures, formats); `st` the register and matrix state it
+  // renders with, rebuilt from the frame's deltas, and `pst` that of the previous emitted draw.
   const auto& d = frame.draws[index];
   const std::string where = "draw " + std::to_string(index);
   const auto check = [&](bool ok, const char* reason) { if (!ok) fail(frame, where, reason); };
@@ -92,33 +95,33 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   constexpr uint32_t any_normal = VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT;
   soft(d.raw_size || !(d.components & (VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT)),
        "NBT binormal/tangent are not captured; the normal alone is used (emboss texgens will be flat)");
-  const auto texgens = d.xf_regs[0x3f];
+  const auto texgens = st.xf_regs[0x3f];
   // Emboss texgens and binormal/tangent sources need nine-component normals in
   // Aurora. The capture carries only the normal, which is replicated: shading
   // from those vectors is approximate, but the textures they address render.
   bool nbt = (d.components & VB_UNCAPTURED_NBT) != 0;
   for (unsigned i = 0; i < texgens && i < 8; ++i) {
-    const auto info = d.xf_regs[0x40 + i];
+    const auto info = st.xf_regs[0x40 + i];
     if (tmi_texgentype(info) == 1) nbt = true;
   }
   if (nbt && !(d.components & (VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT))) nbt = false;
-  check(texgens <= 8 && d.xf_regs[0x09] <= 2 && d.bp.numindstages() <= 4, "invalid GX stage/channel count");
-  check(texgens == d.bp.numtexgens() && d.xf_regs[0x09] == d.bp.numcolchans(), "BP/XF stage counts disagree");
-  soft(!d.bp.zfreeze() && bits(d.bp.ztex2(), 2, 2) == 0, "z-freeze or z-texture is not implemented in Aurora");
-  check((d.bp.zcontrol() & 7) <= 1, "only RGB8/RGBA6 EFB pixel formats are covered");
-  soft(!(d.bp.blendmode() & 4), "EFB dithering is not implemented in Aurora");
-  if ((d.bp.blendmode() & 3) == 2 && !(d.bp.blendmode() & (1u << 11))) {
-    const auto op = bits(d.bp.blendmode(), 12, 4);
+  check(texgens <= 8 && st.xf_regs[0x09] <= 2 && st.bp.numindstages() <= 4, "invalid GX stage/channel count");
+  check(texgens == st.bp.numtexgens() && st.xf_regs[0x09] == st.bp.numcolchans(), "BP/XF stage counts disagree");
+  soft(!st.bp.zfreeze() && bits(st.bp.ztex2(), 2, 2) == 0, "z-freeze or z-texture is not implemented in Aurora");
+  check((st.bp.zcontrol() & 7) <= 1, "only RGB8/RGBA6 EFB pixel formats are covered");
+  soft(!(st.bp.blendmode() & 4), "EFB dithering is not implemented in Aurora");
+  if ((st.bp.blendmode() & 3) == 2 && !(st.bp.blendmode() & (1u << 11))) {
+    const auto op = bits(st.bp.blendmode(), 12, 4);
     soft(op == 0 || op == 3 || op == 5, "logic operation is not implemented in Aurora");
   }
-  check(d.xf_regs[0x26] <= 1, "invalid projection kind");
-  check((d.matrix_index_a & 63) <= 27 && (d.matrix_index_a & 63) % 3 == 0,
+  check(st.xf_regs[0x26] <= 1, "invalid projection kind");
+  check((st.matrix_index_a & 63) <= 27 && (st.matrix_index_a & 63) % 3 == 0,
         "default position matrix is outside Aurora's ten aligned matrices");
   for (unsigned i = 0; i < 8; ++i) {
-    const uint32_t row = i < 4 ? bits(d.matrix_index_a, 6 + i * 6, 6) : bits(d.matrix_index_b, (i - 4) * 6, 6);
+    const uint32_t row = i < 4 ? bits(st.matrix_index_a, 6 + i * 6, 6) : bits(st.matrix_index_b, (i - 4) * 6, 6);
     soft(matrix_row(row, true), "unaligned or out-of-range texture matrix selector");
     if (i < texgens) {
-      const auto info = d.xf_regs[0x40 + i];
+      const auto info = st.xf_regs[0x40 + i];
       // Aurora's shader generator is fatal on texgen sources it does not handle and
       // emboss maps need binormal/tangent vectors the capture does not carry, so
       // such draws are skipped rather than warned about.
@@ -126,33 +129,33 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
       soft(tmi_sourcerow(info) < 13, "texgen source row is out of range; position is used instead");
       // Aurora always applies post transforms: disabled dual-transform is
       // explicitly normalized to the documented identity post-matrix below.
-      const auto post = d.xf_regs[0x50 + i] & 63;
-      soft(!(d.xf_regs[0x12] & 1) || post == 61 || (post <= 57 && post % 3 == 0),
+      const auto post = st.xf_regs[0x50 + i] & 63;
+      soft(!(st.xf_regs[0x12] & 1) || post == 61 || (post <= 57 && post % 3 == 0),
             "unaligned or out-of-range post-texture matrix");
-      soft(!(d.bp.texcoord_s(i) & (1u << 17)) && !(d.bp.texcoord_t(i) & (1u << 17)),
+      soft(!(st.bp.texcoord_s(i) & (1u << 17)) && !(st.bp.texcoord_t(i) & (1u << 17)),
             "cylindrical texture-coordinate wrap is not implemented in Aurora");
     }
     if (d.textures[i].used) {
       validate_texture(frame, where + " texture " + std::to_string(i), d.textures[i]);
       const auto& t = d.textures[i];
-      check(t.width == (d.bp.teximage0(i) & 1023) + 1 && t.height == bits(d.bp.teximage0(i), 10, 10) + 1 &&
-            t.format == bits(d.bp.teximage0(i), 20, 4) && t.mode0 == d.bp.texmode0(i) && t.mode1 == d.bp.texmode1(i),
+      check(t.width == (st.bp.teximage0(i) & 1023) + 1 && t.height == bits(st.bp.teximage0(i), 10, 10) + 1 &&
+            t.format == bits(st.bp.teximage0(i), 20, 4) && t.mode0 == st.bp.texmode0(i) && t.mode1 == st.bp.texmode1(i),
             "texture descriptor disagrees with BP snapshot");
     }
   }
-  for (unsigned s = 0; s <= d.bp.numtevstages(); ++s) {
-    if (d.bp.order_enable(s)) {
-      check(unsigned(d.bp.order_texcoord(s)) < texgens, "TEV references a missing texgen");
-      check(d.textures[d.bp.order_texmap(s)].used, "TEV texture was not captured");
+  for (unsigned s = 0; s <= st.bp.numtevstages(); ++s) {
+    if (st.bp.order_enable(s)) {
+      check(unsigned(st.bp.order_texcoord(s)) < texgens, "TEV references a missing texgen");
+      check(d.textures[st.bp.order_texmap(s)].used, "TEV texture was not captured");
     }
-    const auto ind = d.bp.tevind(s);
+    const auto ind = st.bp.tevind(s);
     const auto mtx = bits(ind, 9, 4);
     soft(mtx == 0 || (mtx >= 1 && mtx <= 3) || (mtx >= 5 && mtx <= 7) || (mtx >= 9 && mtx <= 11),
           "invalid indirect matrix selector");
     soft(bits(ind, 13, 3) <= 6 && bits(ind, 16, 3) <= 6, "invalid indirect wrapping mode");
   }
-  for (unsigned s = 0; s < d.bp.numindstages(); ++s)
-    check(d.textures[bits(d.bp.iref(), s * 6, 3)].used && bits(d.bp.iref(), s * 6 + 3, 3) < texgens,
+  for (unsigned s = 0; s < st.bp.numindstages(); ++s)
+    check(d.textures[bits(st.bp.iref(), s * 6, 3)].used && bits(st.bp.iref(), s * 6 + 3, 3) < texgens,
           "indirect stage source was not captured");
 
   out.state.clear(); out.vertices.clear();   // the caller's Draw keeps its buffers between frames
@@ -165,8 +168,8 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   // and matrix blocks that changed since the previous emitted draw are written.
   // Texture mode registers are always written because texture loads between
   // draws go through the SDK and may touch them.
-  const auto bp_changed = [&](unsigned r) { return !prev || prev->bp.reg[r] != d.bp.reg[r]; };
-  const auto bp_delta = [&](unsigned r) { if (bp_changed(r)) bp(state, uint8_t(r), d.bp.reg[r]); };
+  const auto bp_changed = [&](unsigned r) { return !prev || pst->bp.reg[r] != st.bp.reg[r]; };
+  const auto bp_delta = [&](unsigned r) { if (bp_changed(r)) bp(state, uint8_t(r), st.bp.reg[r]); };
   const auto block_changed = [&](const void* a, const void* b, size_t bytes) { return !prev || std::memcmp(a, b, bytes) != 0; };
   // A snapshot has already applied the guest BP mask. Do not replay masks,
   // interrupts, TLUT DMA, or copy triggers as draw state.
@@ -175,11 +178,11 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   for (unsigned r = 0x06; r <= 0x0e; ++r) bp_delta(r);
   for (unsigned r = 0x10; r <= 0x1f; ++r) bp_delta(r);
   // Bake guest scissor offsets because Aurora's BP decoder does not handle 0x59.
-  const auto so = d.bp.reg[BP_SCISSOROFFSET];
-  const int left = std::clamp(int(bits(d.bp.reg[BP_SCISSORTL], 12, 11)) - int(bits(so, 0, 10) * 2), 0, int(extent.width));
-  const int top = std::clamp(int(bits(d.bp.reg[BP_SCISSORTL], 0, 11)) - int(bits(so, 10, 10) * 2), 0, int(extent.height));
-  const int right = std::clamp(int(bits(d.bp.reg[BP_SCISSORBR], 12, 11)) - int(bits(so, 0, 10) * 2) + 1, left, int(extent.width));
-  const int bottom = std::clamp(int(bits(d.bp.reg[BP_SCISSORBR], 0, 11)) - int(bits(so, 10, 10) * 2) + 1, top, int(extent.height));
+  const auto so = st.bp.reg[BP_SCISSOROFFSET];
+  const int left = std::clamp(int(bits(st.bp.reg[BP_SCISSORTL], 12, 11)) - int(bits(so, 0, 10) * 2), 0, int(extent.width));
+  const int top = std::clamp(int(bits(st.bp.reg[BP_SCISSORTL], 0, 11)) - int(bits(so, 10, 10) * 2), 0, int(extent.height));
+  const int right = std::clamp(int(bits(st.bp.reg[BP_SCISSORBR], 12, 11)) - int(bits(so, 0, 10) * 2) + 1, left, int(extent.width));
+  const int bottom = std::clamp(int(bits(st.bp.reg[BP_SCISSORBR], 0, 11)) - int(bits(so, 10, 10) * 2) + 1, top, int(extent.height));
   if (bp_changed(BP_SCISSORTL) || bp_changed(BP_SCISSORBR) || bp_changed(BP_SCISSOROFFSET)) {
     bp(state, BP_SCISSORTL, uint32_t(left + 342) << 12 | uint32_t(top + 342));
     bp(state, BP_SCISSORBR, uint32_t(right + 341) << 12 | uint32_t(bottom + 341));
@@ -196,10 +199,10 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   for (unsigned r = 0xc0; r <= 0xdf; ++r) bp_delta(r);
   // BP E0-E7 is a multiplexed port, not a single register bank.
   for (unsigned bank = 0; bank < 2; ++bank) for (unsigned i = 0; i < 4; ++i) {
-    const auto* color = bank ? d.tev_kcolors[i] : d.tev_colors[i];
+    const auto* color = bank ? st.tev_kcolors[i] : st.tev_colors[i];
     for (unsigned c = 0; c < 4; ++c)
       check(color[c] >= (bank ? 0 : -1024) && color[c] <= (bank ? 255 : 1023), "invalid TEV constant component");
-    const auto* previous = prev ? (bank ? prev->tev_kcolors[i] : prev->tev_colors[i]) : nullptr;
+    const auto* previous = prev ? (bank ? pst->tev_kcolors[i] : pst->tev_colors[i]) : nullptr;
     if (previous && std::memcmp(previous, color, sizeof(int32_t) * 4) == 0) continue;
     const auto type = bank << 23;
     bp(state, uint8_t(0xe0 + i * 2), type | (uint32_t(color[0]) & 0x7ff) | ((uint32_t(color[3]) & 0x7ff) << 12));
@@ -211,45 +214,45 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   // Aurora accepts complete SDK-aligned matrix blocks only, not the generic
   // hardware XF RAM image. Each float is encoded, never structure-copied.
   for (unsigned i = 0; i < 20; ++i)
-    if (block_changed(d.posMatrices + i * 12, prev ? prev->posMatrices + i * 12 : nullptr, 12 * sizeof(float)))
-      xf_floats(state, uint16_t(i * 12), d.posMatrices + i * 12, 12);
+    if (block_changed(st.posMatrices + i * 12, prev ? pst->posMatrices + i * 12 : nullptr, 12 * sizeof(float)))
+      xf_floats(state, uint16_t(i * 12), st.posMatrices + i * 12, 12);
   for (unsigned i = 0; i < 10; ++i)
-    if (block_changed(d.normalMatrices + i * 9, prev ? prev->normalMatrices + i * 9 : nullptr, 9 * sizeof(float)))
-      xf_floats(state, uint16_t(0x400 + i * 9), d.normalMatrices + i * 9, 9);
+    if (block_changed(st.normalMatrices + i * 9, prev ? pst->normalMatrices + i * 9 : nullptr, 9 * sizeof(float)))
+      xf_floats(state, uint16_t(0x400 + i * 9), st.normalMatrices + i * 9, 9);
   for (unsigned i = 0; i < 20; ++i)
-    if (block_changed(d.postMatrices + i * 12, prev ? prev->postMatrices + i * 12 : nullptr, 12 * sizeof(float)))
-      xf_floats(state, uint16_t(0x500 + i * 12), d.postMatrices + i * 12, 12);
+    if (block_changed(st.postMatrices + i * 12, prev ? pst->postMatrices + i * 12 : nullptr, 12 * sizeof(float)))
+      xf_floats(state, uint16_t(0x500 + i * 12), st.postMatrices + i * 12, 12);
   for (unsigned i = 0; i < 8; ++i) {
-    if (!block_changed(d.lights[i], prev ? prev->lights[i] : nullptr, 64)) continue;
+    if (!block_changed(st.lights[i], prev ? pst->lights[i] : nullptr, 64)) continue;
     xf_header(state, uint16_t(0x600 + i * 16), 16);
     for (unsigned w = 0; w < 16; ++w) {
       // lights[] is a byte view of host-endian XF words, including its color.
-      const std::array<uint8_t, 4> bytes{d.lights[i][w * 4], d.lights[i][w * 4 + 1], d.lights[i][w * 4 + 2], d.lights[i][w * 4 + 3]};
+      const std::array<uint8_t, 4> bytes{st.lights[i][w * 4], st.lights[i][w * 4 + 1], st.lights[i][w * 4 + 2], st.lights[i][w * 4 + 3]};
       u32(state, std::bit_cast<uint32_t>(bytes));
     }
   }
-  if (block_changed(d.xf_regs + 0x09, prev ? prev->xf_regs + 0x09 : nullptr, 9 * 4)) xf_words(state, 0x1009, d.xf_regs + 0x09, 9);
-  const uint32_t indices[2]{d.matrix_index_a, d.matrix_index_b};
-  const bool indices_changed = !prev || prev->matrix_index_a != d.matrix_index_a || prev->matrix_index_b != d.matrix_index_b;
+  if (block_changed(st.xf_regs + 0x09, prev ? pst->xf_regs + 0x09 : nullptr, 9 * 4)) xf_words(state, 0x1009, st.xf_regs + 0x09, 9);
+  const uint32_t indices[2]{st.matrix_index_a, st.matrix_index_b};
+  const bool indices_changed = !prev || pst->matrix_index_a != st.matrix_index_a || pst->matrix_index_b != st.matrix_index_b;
   if (indices_changed) xf_words(state, 0x1018, indices, 2);
   std::array<float, 6> viewport;
   for (unsigned i = 0; i < 6; ++i) {
-    viewport[i] = std::bit_cast<float>(d.xf_regs[0x1a + i]);
+    viewport[i] = std::bit_cast<float>(st.xf_regs[0x1a + i]);
     check(std::isfinite(viewport[i]), "non-finite viewport");
   }
   check(viewport[0] > 0 && viewport[1] < 0 && viewport[2] >= 0 && viewport[5] >= viewport[2] && viewport[5] <= 16777215.f,
         "flipped, empty or out-of-range viewport is not covered");
   viewport[3] -= 2; viewport[4] -= 2; // Aurora decoder subtracts 340; hardware uses 342.
-  if (block_changed(d.xf_regs + 0x1a, prev ? prev->xf_regs + 0x1a : nullptr, 6 * 4)) xf_floats(state, 0x101a, viewport.data(), 6);
-  if (block_changed(d.xf_regs + 0x20, prev ? prev->xf_regs + 0x20 : nullptr, 7 * 4)) xf_words(state, 0x1020, d.xf_regs + 0x20, 7);
-  if (block_changed(d.xf_regs + 0x3f, prev ? prev->xf_regs + 0x3f : nullptr, 9 * 4)) {
+  if (block_changed(st.xf_regs + 0x1a, prev ? pst->xf_regs + 0x1a : nullptr, 6 * 4)) xf_floats(state, 0x101a, viewport.data(), 6);
+  if (block_changed(st.xf_regs + 0x20, prev ? pst->xf_regs + 0x20 : nullptr, 7 * 4)) xf_words(state, 0x1020, st.xf_regs + 0x20, 7);
+  if (block_changed(st.xf_regs + 0x3f, prev ? pst->xf_regs + 0x3f : nullptr, 9 * 4)) {
     // Aurora leaves a texgen's source unset when the XF row is outside its table and
     // then aborts shader generation if any TEV stage samples it. Rows it cannot
     // serve (binormal/tangent, out of range) are rewritten to the position row.
     uint32_t texgen[9];
-    texgen[0] = d.xf_regs[0x3f];
+    texgen[0] = st.xf_regs[0x3f];
     for (unsigned i = 0; i < 8; ++i) {
-      uint32_t info = d.xf_regs[0x40 + i];
+      uint32_t info = st.xf_regs[0x40 + i];
       const auto type = tmi_texgentype(info), row = tmi_sourcerow(info);
       if (type != 2 && type != 3 && (row >= 13 || row == 3 || row == 4)) info &= ~(31u << 7);
       texgen[1 + i] = info;
@@ -257,12 +260,12 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
     xf_words(state, 0x103f, texgen, 9);
   }
   uint32_t post[8];
-  for (unsigned i = 0; i < 8; ++i) post[i] = d.xf_regs[0x12] & 1 ? d.xf_regs[0x50 + i] : 61;
-  if (!prev || (prev->xf_regs[0x12] & 1) != (d.xf_regs[0x12] & 1) ||
-      block_changed(d.xf_regs + 0x50, prev ? prev->xf_regs + 0x50 : nullptr, 8 * 4))
+  for (unsigned i = 0; i < 8; ++i) post[i] = st.xf_regs[0x12] & 1 ? st.xf_regs[0x50 + i] : 61;
+  if (!prev || (pst->xf_regs[0x12] & 1) != (st.xf_regs[0x12] & 1) ||
+      block_changed(st.xf_regs + 0x50, prev ? pst->xf_regs + 0x50 : nullptr, 8 * 4))
     xf_words(state, 0x1050, post, 8);
 
-  if (indices_changed) { cp(state, 0x30, d.matrix_index_a); cp(state, 0x40, d.matrix_index_b); }
+  if (indices_changed) { cp(state, 0x30, st.matrix_index_a); cp(state, 0x40, st.matrix_index_b); }
   if (d.raw_size) {
     // Raw capture: the game's own vertex descriptor, format registers and vertex bytes go to Aurora's
     // command processor unchanged; each indexed array is the snapshotted slice the indices (rebased
@@ -403,13 +406,21 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
       std::find(seen_copy.begin(), seen_copy.end(), false) != seen_copy.end())
     fail(frame, "commands", "missing final XFB or unreferenced captured work");
   if (out.draws.size() < frame.draws.size()) out.draws.resize(frame.draws.size());   // grows only; buffers persist
+  // Draw state is rebuilt in order from each draw's record (apply_state): `state` is the current draw's,
+  // `emitted` that of the last draw handed to Aurora, which the next draw's register deltas compare with.
+  // Both live as long as the thread (two 4.4 KB blocks, reused every frame).
+  static thread_local std::unique_ptr<DrawState> state_storage(new DrawState()), emitted_storage(new DrawState());
+  DrawState& state = *state_storage;
+  DrawState& emitted = *emitted_storage;
   const DrawCall* previous = nullptr;   // last emitted draw since the frame start or the last copy
   for (const auto& cmd : frame.commands) {
     if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
+    apply_state(state, frame.draws[i]);   // every draw, converted or not: the deltas chain through all of them
     try {
-      convert_draw(frame, i, extent, previous, out.draws[i]);
+      convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, out.draws[i]);
       previous = &frame.draws[i];
+      emitted = state;
     } catch (const CoverageError& error) {
       // One draw the bridge cannot represent must not take the frame down.
       warn(frame, "draw " + std::to_string(i), error.what());
