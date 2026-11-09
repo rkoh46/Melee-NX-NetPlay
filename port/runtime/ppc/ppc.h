@@ -176,6 +176,15 @@ uint8_t* locked_cache();
 // Timebase reads advance time slightly so guest delay loops (OSGetTime polling) terminate.
 inline uint64_t read_tb(Context& c) { c.tb += 32; return c.tb; }
 
+// ---- GX write-gather pipe ----
+// A word stored to 0xCC008000 goes to the GX capture buffer through one call (gx::fifo_store32)
+// instead of the MMIO dispatch chain (ppc::mmio_write -> host::mmio_write -> gx::write_fifo). It is
+// not inlined: st32 is expanded at hundreds of thousands of sites and the body is not worth 16 MB.
+}  // namespace ppc
+namespace gx { void fifo_store32(uint32_t be); }
+namespace ppc {
+inline void fifo_write32(uint32_t be) { gx::fifo_store32(be); }
+
 // ---- memory ----
 // Host pointer for a guest address in RAM, or nullptr when it needs the slow path.
 inline uint8_t* fast(uint8_t* m, uint32_t ea) {
@@ -237,6 +246,7 @@ inline void st32(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
   watch(c, ea, v, 4);
   uint32_t s = bswap32(v);
   if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 4); return; }
+  if (__builtin_expect((ea & 0xFFFFC000u) == 0xCC008000u, 1)) { fifo_write32(s); return; }   // write-gather pipe: most non-RAM stores
   if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 4); return; }
   mmio_write(c, ea, v, 4);
 }

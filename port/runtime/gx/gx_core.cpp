@@ -24,11 +24,19 @@ TextureSnapshotCache g_texture_snapshots;
 uint64_t g_frame_sequence = 0;
 bool g_discontinuity = false;   // simulation thread only, like the rest of this file's state
 std::vector<uint8_t> g_buf;   // storage only: g_buf_len bytes are valid (the vector is never shrunk per write)
-size_t g_buf_len = 0;
-size_t g_buf_pos = 0;   // parsed prefix of g_buf
+}  // namespace
+// The FIFO append state is public so the guest's stores to the write-gather pipe can land in the
+// buffer from ppc::st32 itself (see fifo_write32 in ppc.h); the parse runs here when a command is complete.
+uint8_t* g_fifo_data = nullptr; size_t g_fifo_cap = 0;
+size_t g_fifo_len = 0;
+size_t g_fifo_pos = 0;   // parsed prefix of the buffer
+size_t g_fifo_need = 0;
+namespace {
+size_t& g_buf_len = g_fifo_len;
+size_t& g_buf_pos = g_fifo_pos;
+size_t& g_parse_need = g_fifo_need;
 // Bytes the pending (incomplete) command at g_buf_pos needs before it can parse. The game writes the
 // FIFO a few bytes at a time, so retrying a large vertex primitive on every write was quadratic.
-size_t g_parse_need = 0;
 inline size_t incomplete(size_t need) { g_parse_need = need; return 0; }
 uint32_t g_cp_version = 1; // bumped on every CP register write: invalidates the vertex-descriptor cache
 // Draw identity bookkeeping (reset per frame).
@@ -624,17 +632,12 @@ void init(Backend* backend) {
   g_frame.clear();
   g_buf_len = 0; g_buf_pos = 0; g_parse_need = 0; ++g_cp_version;
   if (g_buf.size() < (1u << 20)) g_buf.resize(1u << 20);
+  g_fifo_data = g_buf.data(); g_fifo_cap = g_buf.size();
 }
 
-void write_fifo(uint32_t value, int bytes) {
-  // The game writes the FIFO a word (or less) at a time, tens of thousands of times a frame:
-  // the buffer keeps its storage and only a length moves; growth is rare and geometric.
-  const size_t at = g_buf_len;
-  if (at + 4 > g_buf.size()) g_buf.resize(std::max<size_t>(g_buf.size() * 2, 1u << 20));
-  uint8_t* out = g_buf.data() + at;
-  for (int i = 0; i < bytes; ++i) out[i] = (uint8_t)(value >> (8 * (bytes - 1 - i)));
-  g_buf_len = at + (size_t)bytes;
-  if (g_buf_len - g_buf_pos < g_parse_need) return;   // the pending command is still incomplete
+void fifo_parse_pending() {
+  // Parses every complete command in the buffer; the remainder (an incomplete command) stays, and
+  // g_fifo_need says how many bytes it is waiting for.
   g_parse_need = 0;
   while (g_buf_pos < g_buf_len) {
     size_t n = parse_command(g_buf.data() + g_buf_pos, g_buf_len - g_buf_pos);
@@ -645,6 +648,27 @@ void write_fifo(uint32_t value, int bytes) {
   }
   if (g_buf_pos == g_buf_len) { g_buf_len = 0; g_buf_pos = 0; }
   else if (g_buf_pos >= 1 << 16) { std::memmove(g_buf.data(), g_buf.data() + g_buf_pos, g_buf_len - g_buf_pos); g_buf_len -= g_buf_pos; g_buf_pos = 0; }
+}
+void fifo_grow() {
+  g_buf.resize(std::max<size_t>(g_buf.size() * 2, 1u << 20));
+  g_fifo_data = g_buf.data(); g_fifo_cap = g_buf.size();
+}
+void fifo_store32(uint32_t be) {   // the word is already in big-endian byte order
+  if (__builtin_expect(g_fifo_len + 8 > g_fifo_cap, 0)) fifo_grow();
+  std::memcpy(g_fifo_data + g_fifo_len, &be, 4);
+  g_fifo_len += 4;
+  if (g_fifo_len - g_fifo_pos >= g_fifo_need) fifo_parse_pending();
+}
+void write_fifo(uint32_t value, int bytes) {
+  // The game writes the FIFO a word (or less) at a time, tens of thousands of times a frame:
+  // the buffer keeps its storage and only a length moves; growth is rare and geometric.
+  const size_t at = g_buf_len;
+  if (at + 8 > g_buf.size()) fifo_grow();
+  uint8_t* out = g_buf.data() + at;
+  for (int i = 0; i < bytes; ++i) out[i] = (uint8_t)(value >> (8 * (bytes - 1 - i)));
+  g_buf_len = at + (size_t)bytes;
+  if (g_buf_len - g_buf_pos < g_parse_need) return;   // the pending command is still incomplete
+  fifo_parse_pending();
 }
 
 void stats(uint64_t* commands, uint64_t* draws, uint64_t* vertices, uint32_t* efb_copies) {

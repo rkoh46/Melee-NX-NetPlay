@@ -249,6 +249,11 @@ struct Backend {
 void init(Backend* backend);
 void write_fifo(uint32_t value, int bytes);   // write-gather pipe byte stream
 void stats(uint64_t* commands, uint64_t* draws, uint64_t* vertices, uint32_t* efb_copies);
+// FIFO append state for the inline write path (ppc.h fifo_write32); write_fifo is the general form.
+extern uint8_t* g_fifo_data; extern size_t g_fifo_cap, g_fifo_len, g_fifo_pos, g_fifo_need;
+void fifo_parse_pending();
+void fifo_grow();
+void fifo_store32(uint32_t be);
 const uint8_t* tmem();
 
 }  // namespace gx
