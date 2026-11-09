@@ -101,14 +101,20 @@ constexpr uint64_t quiet_bit = UINT64_C(0x0008000000000000);
 inline thread_local uint32_t current_fpscr = 0;
 inline thread_local FpProfile current_profile = FpProfile::ReferenceSlippi;
 
-[[gnu::always_inline]] inline bool is_nan(double d) {
-  return (double_to_bits(d) & ~sign_bit) > exp_mask;
-}
+// An unordered self-compare: one fcmp, no move of the value into an integer register (that move ran
+// under every translated float operation).
+[[gnu::always_inline]] inline bool is_nan(double d) { return __builtin_isnan(d); }
 [[gnu::always_inline]] inline double quiet(double d) {
   return bits_to_double(double_to_bits(d) | quiet_bit);
 }
 [[gnu::always_inline]] inline bool reference() {
+#if defined(__SWITCH__)
+  // The Switch build only ever runs the reference profile (set_fp_environment's default, never
+  // overridden there); a constant drops the legacy branches and a TLS load from every float helper.
+  return true;
+#else
   return current_profile == FpProfile::ReferenceSlippi;
+#endif
 }
 [[gnu::always_inline]] inline double finish(double d) {
   if (reference() && (current_fpscr & 4) && !(double_to_bits(d) & exp_mask))
@@ -141,7 +147,9 @@ inline thread_local FpProfile current_profile = FpProfile::ReferenceSlippi;
   return _mm_cvtsd_f64(_mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
 #elif defined(PPC_HOST_ARM64) && !defined(_MSC_VER)
   double r;
-  __asm__ __volatile__("fmadd %d0, %d1, %d2, %d3" : "=w"(r) : "w"(a), "w"(c), "w"(b));
+  // Not volatile: the instruction has no side effects beyond its result, so the compiler may schedule
+  // and combine it; it is still always this one fused instruction.
+  __asm__("fmadd %d0, %d1, %d2, %d3" : "=w"(r) : "w"(a), "w"(c), "w"(b));
   return r;
 #else
   // Correctly fused fallback; never replace this with a*c+b.
