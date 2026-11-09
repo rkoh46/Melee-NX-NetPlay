@@ -93,6 +93,7 @@ prepare() {
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-thread-sweep.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-gx-cpu.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-uber-shader.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-partial-clear.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-runtime-fixes.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-io-atomic.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-pad-trigger-bind.patch"

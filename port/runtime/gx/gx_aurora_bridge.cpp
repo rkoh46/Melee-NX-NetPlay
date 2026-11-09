@@ -352,7 +352,7 @@ void validate_copy(const Frame& frame, size_t index, Extent extent) {
     fail(frame, where, "copy rectangle is outside the logical framebuffer");
   if (c.is_depth || (c.zcontrol & 7) > 1) fail(frame, where, "depth/unsupported-pixel-format copy");
   const bool full_rect = c.src_x == 0 && c.src_y == 0 && c.src_w == extent.width && c.src_h == extent.height;
-  if (c.clear && !full_rect) warn(frame, where, "partial-rectangle clear is copied without clearing (Aurora clears whole targets only)");
+
   if (c.to_xfb) {
     if (!full_rect || c.y_scale != 1.f || c.half_scale || !c.clear ||
         (c.blendmode & 0x18) != 0x18 || !(c.zmode & 0x10))

@@ -1,0 +1,90 @@
+--- a/lib/gfx/clear.cpp
++++ b/lib/gfx/clear.cpp
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ #include "clear.hpp"
+ 
+ #include "encoding.hpp"
+@@ -157,7 +158,12 @@
+   pass.SetBlendConstant(&data.color);
+   pass.SetViewport(0.f, 0.f, static_cast<float>(targetSize.width), static_cast<float>(targetSize.height), data.depth,
+                    data.depth);
+-  pass.SetScissorRect(0, 0, targetSize.width, targetSize.height);
++  if (data.rectWidth != 0 && data.rectHeight != 0) {
++    const uint32_t x = std::min(data.rectX, targetSize.width), y = std::min(data.rectY, targetSize.height);
++    pass.SetScissorRect(x, y, std::min(data.rectWidth, targetSize.width - x), std::min(data.rectHeight, targetSize.height - y));
++  } else {
++    pass.SetScissorRect(0, 0, targetSize.width, targetSize.height);
++  }
+   pass.Draw(3);
+ }
+ } // namespace aurora::gfx::clear
+--- a/lib/gfx/clear.hpp
++++ b/lib/gfx/clear.hpp
+@@ -13,6 +13,9 @@
+   PipelineRef pipeline;
+   wgpu::Color color;
+   float depth = 0.f;
++  // A partial clear (a texture copy of part of the EFB with its clear flag): only this rectangle of the
++  // target, in target pixels. width 0 means the whole target.
++  uint32_t rectX = 0, rectY = 0, rectWidth = 0, rectHeight = 0;
+ };
+ 
+ constexpr uint32_t ClearPipelineConfigVersion = 4;
+--- a/lib/gfx/recording.cpp
++++ b/lib/gfx/recording.cpp
+@@ -819,6 +819,11 @@
+   prevPass.resolveUniformRange = push_uniform(uvTransform);
+   enqueue_pass(current_frame_packet(), g_recorder.currentRenderPass);
+ 
++  // A copy of part of the target clears only that part (Melee's shadow maps are rendered into the EFB's
++  // top-left corner, copied out and cleared before the scene is drawn; a whole-target clear there is
++  // only safe by luck, and skipping the clear left the corner's depth and colour in the scene).
++  const bool fullTarget = rect.x <= 0 && rect.y <= 0 && rect.width >= static_cast<int32_t>(srcW) &&
++                          rect.height >= static_cast<int32_t>(srcH);
+   // Populate new render pass from previous
+   const auto msaaSamples = prevPass.msaaSamples;
+   RenderPass newPass{
+@@ -832,11 +837,11 @@
+       .copySourceDepthView = prevPass.copySourceDepthView,
+       .msaaSamples = msaaSamples,
+       .clearDepthValue = clearDepthValue,
+-      .clearDepth = clearDepth,
++      .clearDepth = clearDepth && fullTarget,
+       .hasDepth = prevPass.hasDepth,
+       .hasStencil = prevPass.hasStencil,
+   };
+-  const bool fullColorClear = clearColor && clearAlpha;
++  const bool fullColorClear = clearColor && clearAlpha && fullTarget;
+   for (uint32_t i = 0; i < newPass.colorAttachmentCount; ++i) {
+     auto& color = newPass.colorAttachments[i];
+     color.loadOp = wgpu::LoadOp::Undefined;
+@@ -851,11 +856,13 @@
+   current_render_passes().emplace_back(std::move(newPass));
+   ++g_recorder.currentRenderPass;
+ 
+-  if (!fullColorClear && (clearColor || clearAlpha)) {
+-    // If we're only clearing color _or_ alpha, perform a clear draw
++  const bool partialDepth = clearDepth && !fullTarget && prevPass.hasDepth;
++  if ((!fullColorClear && (clearColor || clearAlpha)) || partialDepth) {
++    // Clearing color _or_ alpha, or any part of the target: a clear draw (scissored to the copy rect)
+     const auto targetLayout = current_render_passes()[g_recorder.currentRenderPass].target_layout();
+     push_draw_command(clear::DrawData{
+-        .pipeline = pipeline_ref(clear::make_pipeline_config(targetLayout, clearColor, clearAlpha, false)),
++        .pipeline = pipeline_ref(clear::make_pipeline_config(targetLayout, clearColor && !fullColorClear,
++                                                             clearAlpha && !fullColorClear, partialDepth)),
+         .color =
+             wgpu::Color{
+                 .r = clearColorValue.x(),
+@@ -863,6 +870,11 @@
+                 .b = clearColorValue.z(),
+                 .a = clearColorValue.w(),
+             },
++        .depth = clearDepthValue,
++        .rectX = fullTarget ? 0u : static_cast<uint32_t>(std::max(rect.x, 0)),
++        .rectY = fullTarget ? 0u : static_cast<uint32_t>(std::max(rect.y, 0)),
++        .rectWidth = fullTarget ? 0u : static_cast<uint32_t>(std::max(rect.width, 0)),
++        .rectHeight = fullTarget ? 0u : static_cast<uint32_t>(std::max(rect.height, 0)),
+     });
+   }
+   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_recorder.cachedViewport});

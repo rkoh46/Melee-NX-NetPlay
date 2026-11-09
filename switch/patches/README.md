@@ -38,6 +38,7 @@ Dusklight patches target `ref/SDL-dusklight`; the legacy patch targets `ref/SDL`
 | [aurora-switch-no-mmap.patch](aurora-switch-no-mmap.patch) | Horizon file access and the extracted-data DVD backend |
 | [aurora-switch-io-atomic.patch](aurora-switch-io-atomic.patch) | Horizon rename and exclusive-create fallbacks for persistent settings |
 | [aurora-switch-pad-trigger-bind.patch](aurora-switch-pad-trigger-bind.patch) | Allow analog triggers to bind digital GameCube buttons |
+| [aurora-switch-partial-clear.patch](aurora-switch-partial-clear.patch) | A texture copy of part of the EFB clears only that rectangle (scissored clear draw); Melee clears its shadow-map corner this way |
 | [aurora-switch-mem1-window.patch](aurora-switch-mem1-window.patch) | Makes Aurora resolve Melee's 32-bit disc-pointer slots through the MEM1 4 GiB window |
 | [aurora-switch-encoder-state-cache.patch](aurora-switch-encoder-state-cache.patch) | Reuse texture bind groups and destination-alpha blend constants within a render pass |
 | [aurora-switch-cache-recovery.patch](aurora-switch-cache-recovery.patch) | Descriptor recovery, compiler pacing, in-flight request tracking, persistence, and telemetry |

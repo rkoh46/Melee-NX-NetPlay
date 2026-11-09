@@ -289,8 +289,10 @@ void simulation_thread(void*) {
     frontend->shutdown();
   }
 #endif
-  ppc::log_aot_diagnostics();
+  // The result first: the AOT diagnostics below are hundreds of lines, and an exit that outruns the
+  // nxlink socket used to cut the log before the result line.
   host::log("switch result: exit=%d retraces=%u requested=%u", code, host::retrace_count(), host::options.frames);
+  ppc::log_aot_diagnostics();
   host::close_log_file();
   g_exit_code = code;
 }

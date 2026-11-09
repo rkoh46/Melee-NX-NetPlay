@@ -433,11 +433,11 @@ struct AuroraBackend::Impl {
         if (!c.to_xfb && !(g_debug & kDebugSkipCopies)) {
           auto& token = copy_tokens[c.dest_addr];
           if (!token) token = std::make_unique<CopyToken>();
-          const bool full_rect = c.src_x == 0 && c.src_y == 0 && c.src_w == options.logical_width && c.src_h == options.logical_height;
           GXSetTexCopySrc(uint16_t(c.src_x), uint16_t(c.src_y), uint16_t(c.src_w), uint16_t(c.src_h));
           const unsigned shrink = (g_debug & kDebugCopyHalfSize) ? 2 : 1;
           GXSetTexCopyDst(uint16_t(c.src_w / shrink), uint16_t(c.src_h / shrink), copy_format(c), GX_FALSE);
-          GXCopyTex(token.get(), c.clear && (full_rect || (g_debug & kDebugCopyClearPartial)) ? GX_TRUE : GX_FALSE);
+          // Partial-rectangle clears are scissored to the copy rect (aurora-switch-partial-clear.patch).
+          GXCopyTex(token.get(), c.clear ? GX_TRUE : GX_FALSE);
           ++counters.texture_copies;
         }
         // GXCopyDisp is a stub. The validated final full-size XFB is presented
