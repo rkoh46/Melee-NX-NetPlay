@@ -227,6 +227,11 @@ void simulation_thread(void*) {
             // The owner thread (this one) renders; sample it alongside the guest so both sides of the
             // frame show up (pc/lr = guest, pc1/lr1 = renderer).
             static Thread self; self.handle = threadGetCurHandle();   // a real handle: the pseudo handle means "caller" to the sampler
+            // profile_range=LO:HI:ANCHOR (ELF hex addresses; tools/nx-profile.sh --range writes it) counts the callers of that code.
+            if (const auto pr = g_ini.find("profile_range"); pr != g_ini.end()) {
+              unsigned long long lo = 0, hi = 0, anchor = 0;
+              if (std::sscanf(pr->second.c_str(), "%llx:%llx:%llx", &lo, &hi, &anchor) == 3) switch_profile_watch_range(lo, hi, anchor);
+            }
             if (switch_profile_start(&guest, 2000, &self)) host::log("profile: sampling the guest and render threads at 1 kHz each (Logs/profile.txt at exit)");
             else host::log("profile: cannot start the sampler");
           }
@@ -292,7 +297,7 @@ int main(int argc, char** argv) {
   (void)argc; (void)argv;
   // Runs on exit(), abort() and Aurora's FATAL: flush the log and, when sampling, write the profile
   // so a crash still leaves the hot-address table behind.
-  switch_set_exit_hook([] { switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
+  switch_set_exit_hook([] { host::card_flush(); switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
 #if !MELEE_NX_AURORA
   // The text console and libnx pad are the headless build's only UI. With the
   // renderer, Aurora's SDL window owns the display and the controllers.

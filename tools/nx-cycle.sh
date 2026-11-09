@@ -14,6 +14,14 @@ bot() { "$py" "$here/nx-bot.py" "$ip" "$@"; }
 echo "== launching the Homebrew Menu with the application's memory"
 bot hbmenu-netloader "$here/../build/switch-pull/launch" || { echo "could not reach the Homebrew Menu"; exit 1; }
 sleep 1
+# The same memory card save every run: the character select's port states come from the save, and
+# the scripted match needs them deterministic. build/golden-card/*.gci is uploaded over the card
+# (never deleted); refresh the golden copy from the console when the saved state should change.
+for f in "$here"/../build/golden-card/*.gci; do
+  [[ -f "$f" ]] || continue
+  echo "== restoring the memory card save $(basename "$f")"
+  curl -sS --connect-timeout 5 -T "$f" "ftp://$ip:${NX_FTP_PORT:-5000}/switch/melee-nx-netplay/User/GC/CardA/$(basename "$f")" || true
+done
 echo "== sending the NRO"
 NX_WAIT=120 "$here/nx-run.sh" "$ip" "$frontend"
 echo "== run over; fetching the profile if there is one"

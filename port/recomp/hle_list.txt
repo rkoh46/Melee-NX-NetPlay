@@ -210,3 +210,9 @@ CARDSetAttributesAsync
 CARDSetAttributes
 CARDCancel
 CARDGetCurrentMode
+
+# --- matrix library hot paths (port/runtime/hle/hle_mtx.cpp): bit-exact ports of the paired-single asm ---
+PSMTXConcat
+WriteMTXPS4x3
+WriteMTXPS3x3from3x4
+WriteMTXPS4x2

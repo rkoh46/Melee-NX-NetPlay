@@ -22,6 +22,9 @@ bool g_started = false;
 unsigned g_hz = 1000;
 uint64_t g_samples[2] = {0, 0}, g_failed = 0;
 std::unordered_map<uint64_t, uint32_t> g_pc[2], g_lr[2];
+std::unordered_map<uint64_t, uint32_t> g_svc_lr[2];   // callers of syscalls: lr when pc sits on an SVC instruction
+std::unordered_map<uint64_t, uint32_t> g_range_lr[2]; // callers of a watched code range (switch_profile_watch_range)
+uint64_t g_range_lo = 0, g_range_hi = 0;
 
 void sampler(void*) {
   const uint64_t period_ns = 1000000000ull / (g_hz ? g_hz : 1000);
@@ -45,6 +48,14 @@ void sampler(void*) {
     ++g_samples[which];
     ++g_pc[which][ctx.pc.x];
     ++g_lr[which][ctx.lr];
+    // A thread paused inside a syscall reports the pc of the SVC (or the instruction after it);
+    // its lr then names the libnx wrapper's caller, which is what tells one IPC user from another.
+    if (ctx.pc.x >= g_range_lo && ctx.pc.x < g_range_hi) ++g_range_lr[which][ctx.lr];
+    if (ctx.pc.x >= 0x1000 && (ctx.pc.x & 3) == 0) {
+      const uint32_t insn = *reinterpret_cast<const uint32_t*>(ctx.pc.x);
+      const uint32_t prev = *reinterpret_cast<const uint32_t*>(ctx.pc.x - 4);
+      if ((insn & 0xFFE0001Fu) == 0xD4000001u || (prev & 0xFFE0001Fu) == 0xD4000001u) ++g_svc_lr[which][ctx.lr];
+    }
   }
 }
 
@@ -55,6 +66,11 @@ void write_table(FILE* f, const char* tag, const std::unordered_map<uint64_t, ui
   for (size_t i = 0; i < n; ++i) std::fprintf(f, "%s %016llx %u\n", tag, (unsigned long long)rows[i].first, rows[i].second);
 }
 }  // namespace
+
+void switch_profile_watch_range(uint64_t elf_lo, uint64_t elf_hi, uint64_t elf_anchor) {
+  const uint64_t slide = reinterpret_cast<uintptr_t>(&switch_profile_start) - elf_anchor;
+  g_range_lo = elf_lo + slide; g_range_hi = elf_hi + slide;
+}
 
 bool switch_profile_start(Thread* target, unsigned hz, Thread* second) {
   if (g_started || !target) return false;
@@ -85,5 +101,9 @@ void switch_profile_stop(const char* path) {
   write_table(f, "lr", g_lr[0]);
   write_table(f, "pc1", g_pc[1]);    // thread 1 (the renderer), when given
   write_table(f, "lr1", g_lr[1]);
+  write_table(f, "svclr", g_svc_lr[0]);
+  write_table(f, "svclr1", g_svc_lr[1]);
+  write_table(f, "rangelr", g_range_lr[0]);
+  write_table(f, "rangelr1", g_range_lr[1]);
   std::fclose(f);
 }

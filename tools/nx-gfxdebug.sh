@@ -4,7 +4,7 @@
 #   tools/nx-gfxdebug.sh <ip> <bits> [out.jpg]
 # Bits: 1 skip draws sampling EFB copies, 2 sample guest RAM instead of the GPU copy, 4 checkerboard
 # instead of the copy, 8 native copy format (I4...), 16 clear after partial copies, 32 draw dump of the
-# next frame (Logs/draws-now.txt), 64 perform no texture copies, 128 half-size copies (blit shader path).
+# next frame (Logs/draws-now.txt), 64 perform no texture copies, 128 half-size copies (blit shader path), 256 show the frame's copies as quads.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

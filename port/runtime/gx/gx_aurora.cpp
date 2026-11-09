@@ -11,6 +11,7 @@
 // commands enter its real decoder, which generates WGSL and Metal pipelines.
 #include <gx/fifo.hpp>
 #include <gx/gx.hpp>
+#include <imgui.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -44,6 +45,7 @@ constexpr unsigned kDebugCopyClearPartial = 16; // honour the copy's clear flag 
 constexpr unsigned kDebugDumpNow = 32;          // one-shot: draw dump of the next frame
 constexpr unsigned kDebugSkipCopies = 64;       // do not perform texture copies at all
 constexpr unsigned kDebugCopyHalfSize = 128;    // copy into a half-size texture (Aurora's blit shader instead of vkCmdCopyImage)
+constexpr unsigned kDebugShowCopies = 256;      // draw this frame's texture copies as quads along the top of the screen
 unsigned g_debug = 0;
 bool copies_as_rgba8() { return !(g_debug & kDebugCopyNativeFormat); }
 GXTexFmt copy_format(const EfbCopy& c) {
@@ -253,6 +255,38 @@ struct AuroraBackend::Impl {
       std::fprintf(f, "efbcopy: dest=%08X src=%u,%u %ux%u fmt=%08X clear=%d xfb=%d\n", c.dest_addr, c.src_x, c.src_y, c.src_w, c.src_h, c.format, c.clear ? 1 : 0, c.to_xfb ? 1 : 0);
     std::fclose(f);
   }
+  // Diagnostic: show every texture copy of this frame as a 320x240 image along the top edge, drawn
+  // by ImGui from Aurora's own copy texture views, so the copy textures' contents are seen directly.
+  void show_copies(const aurora_bridge::PreparedFrame& frame) {
+    auto* list = ImGui::GetForegroundDrawList();
+    if (!list) return;
+    char label[160];
+    std::snprintf(label, sizeof label, "frame copies %zu, tokens %zu, aurora copy textures %zu / cache %zu, texture copies so far %llu",
+                  frame.copies.size(), copy_tokens.size(), aurora::gx::g_gxState.copyTextures.size(),
+                  aurora::gx::g_gxState.copyTextureCache.size(), (unsigned long long)counters.texture_copies);
+    list->AddText(ImVec2(10, 20), IM_COL32(255, 255, 0, 255), label);
+    unsigned slot = 0;
+    for (const auto& c : frame.copies) {
+      if (c.to_xfb || slot >= 3) continue;
+      const float x0 = 10.f + slot * 330.f, y0 = 40.f;
+      ++slot;
+      const auto token = copy_tokens.find(c.dest_addr);
+      if (token == copy_tokens.end()) { list->AddText(ImVec2(x0, y0), IM_COL32(255, 80, 80, 255), "no token"); continue; }
+      const auto it = aurora::gx::g_gxState.copyTextures.find(token->second.get());
+      if (it == aurora::gx::g_gxState.copyTextures.end()) {
+        std::snprintf(label, sizeof label, "copy %08X: token %p has no Aurora copy texture", c.dest_addr, (void*)token->second.get());
+        list->AddText(ImVec2(x0, y0), IM_COL32(255, 80, 80, 255), label); continue;
+      }
+      if (!it->second.handle) { list->AddText(ImVec2(x0, y0), IM_COL32(255, 80, 80, 255), "copy texture handle is null"); continue; }
+      const auto& tex = *it->second.handle;
+      const ImTextureID id = reinterpret_cast<ImTextureID>(tex.sampleTextureView.Get());
+      list->AddRectFilled(ImVec2(x0 - 2, y0 - 2), ImVec2(x0 + 322, y0 + 242), IM_COL32(255, 0, 255, 255));
+      list->AddImage(id, ImVec2(x0, y0), ImVec2(x0 + 320, y0 + 240));
+      std::snprintf(label, sizeof label, "copy %08X %ux%u fmt %u -> %ux%u gx %u rev %u", c.dest_addr, c.src_w, c.src_h, c.format,
+                    tex.size.width, tex.size.height, tex.gxFormat, it->second.revision);
+      list->AddText(ImVec2(x0, y0 + 244), IM_COL32(255, 255, 0, 255), label);
+    }
+  }
   void submit(const Frame& input) {
     require_owner();
     if (last_sequence && input.sequence <= *last_sequence)
@@ -320,6 +354,7 @@ struct AuroraBackend::Impl {
         // clear using the copy-time values just loaded. Never clear before blit.
       }
     }
+    if (g_debug & kDebugShowCopies) show_copies(frame);
     if (overlay) overlay();
     aurora_end_frame(); // Drains FIFO; uploaded texture source bytes are now safe.
     last_sequence = input.sequence;

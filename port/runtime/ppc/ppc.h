@@ -52,9 +52,16 @@ void trace_enter(Context& c, uint32_t pc);
 
 void add_trace_func(uint32_t addr, uint32_t limit);
 inline void enter(Context& c, uint32_t pc) {
+#ifdef __SWITCH__
+  // Console build: the crash report keeps the last pc and the hang watchdog its counter, but the
+  // 64-entry call ring and the --trace-func test are left out of the hottest path there.
+  c.last_pc = pc;
+  if ((++c.backedges & 0xFFFFFu) == 0) hang_check(c);
+#else
   c.last_pc = pc; c.trace[c.trace_pos++ & 63] = pc;
   if ((++g_enter_count & 0xFFFFFu) == 0) hang_check(c);
   if (g_trace_funcs) trace_enter(c, pc);
+#endif
 }
 // MSR writes: when the guest re-enables external interrupts (EE), deliver pending host events,
 // exactly where a real interrupt would have been taken.
@@ -205,6 +212,11 @@ extern bool g_watch_value_on;
 void watch_hit(Context& c, uint32_t ea, uint64_t v, int bytes);
 void watch_init();   // reads MELEE_WATCH_ADDR / MELEE_WATCH_LEN / MELEE_WATCH_VALUE
 inline void watch(Context& c, uint32_t ea, uint64_t v, int bytes) {
+#ifdef __SWITCH__
+  // No store watchpoints on the console: the two global loads and compares on every guest store
+  // are measurable there, and MELEE_WATCH_* come from the environment, which it does not have.
+  (void)c; (void)ea; (void)v; (void)bytes; return;
+#endif
   if (__builtin_expect(ea + (uint32_t)bytes - g_watch_lo < g_watch_len + (uint32_t)bytes, 0)) watch_hit(c, ea, v, bytes);
   if (__builtin_expect(g_watch_value_on && bytes >= 4 && ((uint32_t)v == g_watch_value || (bytes == 8 && (uint32_t)(v >> 32) == g_watch_value)), 0)) watch_hit(c, ea, v, bytes);
 }
@@ -243,8 +255,26 @@ inline void st16r(Context& c, uint8_t* m, uint32_t ea, uint32_t v) { st16(c, m, 
 void dcbz(Context& c, uint8_t* m, uint32_t ea);
 void lswi(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t nb);
 void stswi(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t nb);
-void psq_load(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint32_t i);
-void psq_store(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w, uint32_t i);
+void psq_load_slow(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint32_t i);
+void psq_store_slow(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w, uint32_t i);
+// Paired-single loads and stores: the float case (GQR type 0, what Melee's matrix and vector code
+// uses almost exclusively) is inlined; the quantised integer types take the out-of-line path.
+[[gnu::always_inline]] inline void psq_load(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint32_t i) {
+  if (((c.gqr[i] >> 16) & 7) == 0) {
+    c.f[rd].ps0 = float_bits_to_double(ld32(c, m, ea));
+    c.f[rd].ps1 = w ? 1.0 : float_bits_to_double(ld32(c, m, ea + 4));
+    return;
+  }
+  psq_load_slow(c, m, ea, rd, w, i);
+}
+[[gnu::always_inline]] inline void psq_store(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w, uint32_t i) {
+  if ((c.gqr[i] & 7) == 0) {
+    st32(c, m, ea, double_to_float_bits_ftz(c.f[rs].ps0));
+    if (!w) st32(c, m, ea + 4, double_to_float_bits_ftz(c.f[rs].ps1));
+    return;
+  }
+  psq_store_slow(c, m, ea, rs, w, i);
+}
 
 // ---- condition register ----
 inline void cr_set_s(Context& c, int field, int32_t a, int32_t b) {

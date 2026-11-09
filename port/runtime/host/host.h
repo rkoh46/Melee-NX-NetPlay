@@ -41,6 +41,7 @@ extern ppc::Context* cpu;
 // ---- logging ----
 void log(const char* fmt, ...);
 void close_log_file();  // finalizes the explicit log before artifact identity is recorded
+void card_flush();      // writes memory card files the game changed but has not closed (hle_card.cpp)
 void log_guest_text(const char* data, size_t len);  // OSReport output
 using FatalObserver = std::function<void(const std::string&)>;
 void set_fatal_observer(FatalObserver observer);   // diagnostic artifact hook; never controls the exit

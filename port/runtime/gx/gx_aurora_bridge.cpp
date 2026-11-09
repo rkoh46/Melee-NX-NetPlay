@@ -11,12 +11,16 @@
 namespace gx::aurora_bridge {
 namespace {
 using Bytes = std::vector<uint8_t>;
-void u16(Bytes& out, uint16_t value) {
+inline void u16(Bytes& out, uint16_t value) {
   out.push_back(uint8_t(value >> 8)); out.push_back(uint8_t(value));
 }
-void u32(Bytes& out, uint32_t value) {
-  out.push_back(uint8_t(value >> 24)); out.push_back(uint8_t(value >> 16));
-  out.push_back(uint8_t(value >> 8)); out.push_back(uint8_t(value));
+// One big-endian word appended with a single size change: four push_backs here were a tenth of the
+// render thread (every register, matrix element and vertex component passes through this).
+inline void u32(Bytes& out, uint32_t value) {
+  const size_t at = out.size();
+  out.resize(at + 4);
+  const uint32_t be = __builtin_bswap32(value);
+  std::memcpy(out.data() + at, &be, 4);
 }
 void f32(Bytes& out, float value) { u32(out, std::bit_cast<uint32_t>(value)); }
 void bp(Bytes& out, uint8_t reg, uint32_t value) {
@@ -323,9 +327,11 @@ void validate_copy(const Frame& frame, size_t index, Extent extent) {
       warn(frame, where, "XFB copy is not a full-size unscaled copy with full color/alpha/depth clear");
   } else {
     if (c.half_scale) warn(frame, where, "half-scale texture copy is copied at full size");
-    const auto stride = ((c.src_w + 3) / 4) * 64;
-    if (c.dest_stride != stride) warn(frame, where, "strided texture-copy destination is copied as if packed");
-    if (c.destination_before_copy.size() != uint64_t(stride) * ((c.src_h + 3) / 4))
+    const auto expected = texture_chain_bytes(c.src_w, c.src_h, efb_copy_texture_format(c), 1);
+    const auto packed_stride = texture_level_bytes(c.src_w, 4, efb_copy_texture_format(c));   // one tile row in RAM
+    if (c.dest_stride != packed_stride && c.dest_stride != packed_stride * 2)
+      warn(frame, where, "strided texture-copy destination is copied as if packed");
+    if (c.destination_before_copy.size() != expected)
       fail(frame, where, "copy-time destination bytes were not captured");
     if (c.dstalpha & 0x100) warn(frame, where, "destination-alpha copy override is not fidelity-validated");
   }

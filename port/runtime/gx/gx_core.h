@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <type_traits>
+#include <utility>
 #include "gx_regs.h"
 #include "texture_snapshot.h"
 
@@ -24,6 +26,17 @@ struct Vertex {
 };
 #pragma pack(pop)
 static_assert(sizeof(Vertex) == 108, "vertex layout");
+
+// std::vector that default-initialises (does not zero) trivial elements on resize: the decoder
+// writes every field a draw's components use, and zeroing 108 bytes per vertex for tens of
+// thousands of vertices a frame was a measurable share of the simulation thread.
+template <class T> struct default_init_allocator : std::allocator<T> {
+  template <class U> struct rebind { using other = default_init_allocator<U>; };
+  using std::allocator<T>::allocator;
+  template <class U> void construct(U* p) noexcept(std::is_nothrow_default_constructible_v<U>) { ::new (static_cast<void*>(p)) U; }
+  template <class U, class... A> void construct(U* p, A&&... a) { ::new (static_cast<void*>(p)) U(std::forward<A>(a)...); }
+};
+using VertexVector = std::vector<Vertex, default_init_allocator<Vertex>>;
 
 // Components present in the vertex stream (VB_HAS_* in Dolphin).
 enum : uint32_t {
@@ -111,6 +124,20 @@ struct EfbCopy {
   std::vector<uint8_t> destination_before_copy;
   bool has_copy_state = false;
 };
+// The GX texture format whose tiling and bit depth match what this copy writes to RAM (GX_TF_* for
+// the colour and intensity formats; the single/dual-channel CTF formats map to the TF format of the
+// same bit depth). Sizes the destination snapshot for every copy format, not just RGBA8.
+inline uint32_t efb_copy_texture_format(const EfbCopy& c) {
+  if (c.intensity) switch (c.format) { case 0: return 0; case 2: return 2; case 3: return 3; default: return 1; }   // I4 IA4 IA8 I8
+  switch (c.format) {
+    case 0: return 0;                                   // R4: 4 bpp like I4
+    case 2: return 2;                                   // RA4: 8 bpp like IA4
+    case 3: case 11: case 12: return 3;                 // RA8 RG8 GB8: 16 bpp like IA8
+    case 4: return 4; case 5: return 5; case 6: return 6;   // RGB565 RGB5A3 RGBA8
+    case 7: case 8: case 9: case 10: return 1;          // A8 R8 G8 B8: 8 bpp like I8
+    default: return 6;
+  }
+}
 
 inline void capture_copy_state(EfbCopy& copy, const BPMemory& bp) {
   copy.zmode = bp.zmode();
@@ -130,7 +157,7 @@ struct FrameCommand {
 };
 
 struct Frame {
-  std::vector<Vertex> vertices;
+  VertexVector vertices;
   std::vector<DrawCall> draws;
   std::vector<EfbCopy> copies;
   std::vector<FrameCommand> commands;

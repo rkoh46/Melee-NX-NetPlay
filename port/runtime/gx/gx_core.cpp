@@ -157,7 +157,9 @@ struct AttrPlan {
     return indexed(index);
   }
   inline const uint8_t* indexed(uint32_t index) const {
-    return host::ptr(0x80000000u | ((array_base + stride * index) & 0x01FFFFFFu));
+    // array_ptr's arithmetic without the call: an index outside RAM yields nullptr (the caller skips it).
+    const uint32_t off = (array_base + stride * index) & 0x01FFFFFFu;
+    return off < ppc::RAM_SIZE ? host::ram + off : nullptr;
   }
   inline float component(const uint8_t* q, uint32_t k) const {
     const uint8_t* c = q + k * cb;
@@ -211,33 +213,50 @@ uint32_t decode_vertices(const VertexDesc& d, const uint8_t* src, uint32_t count
     plan_set(tex[i], d.tex[i], d.tex[i].count ? 2 : 1);
     components |= VB_HAS_UV0 << i;
   }
-  // ---- vertices, written in place (resize value-initialises, matching the old zeroed `Vertex out{}`)
+  // ---- vertices, written in place. The vector does not zero new elements (VertexVector), so every
+  // field a consumer may read for this draw's components is written here: the third position
+  // component of XY draws, the second coordinate of S-only texgens, missing array entries.
+  // Only the attributes this format carries are visited per vertex (compact lists), and the
+  // matrix-index bytes are handled by count rather than eight tests a vertex.
+  uint8_t texmtx_slots[8]; unsigned texmtx_count = 0;
+  for (int i = 0; i < 8; ++i) if (d.texmtx[i]) texmtx_slots[texmtx_count++] = uint8_t(i);
+  uint8_t col_slots[2]; unsigned col_count = 0;
+  for (int i = 0; i < 2; ++i) if (d.col[i].type) col_slots[col_count++] = uint8_t(i);
+  uint8_t tex_slots[8]; unsigned tex_count = 0;
+  for (int i = 0; i < 8; ++i) if (d.tex[i].type) tex_slots[tex_count++] = uint8_t(i);
   const size_t first = g_frame.vertices.size();
   g_frame.vertices.resize(first + count);
   Vertex* outv = g_frame.vertices.data() + first;
-  for (uint32_t v = 0; v < count; ++v) {
+  const uint8_t* p = src;
+  for (uint32_t v = 0; v < count; ++v, p = src + (size_t)(v) * d.size) {
     Vertex& out = outv[v];
-    const uint8_t* p = src + (size_t)v * d.size;
     out.posmtx = d.posmtx ? *p++ : posmtx_default;
-    for (int i = 0; i < 8; ++i) out.texmtx[i] = d.texmtx[i] ? *p++ : texmtx_default[i];
+    std::memcpy(out.texmtx, texmtx_default, 8);
+    for (unsigned j = 0; j < texmtx_count; ++j) out.texmtx[texmtx_slots[j]] = *p++;
+    out.pos[2] = 0.f;
     if (const uint8_t* q = pos.fetch(p)) for (uint32_t k = 0; k < pos.n; ++k) out.pos[k] = pos.component(q, k);
+    else out.pos[0] = out.pos[1] = 0.f;
     if (d.nrm.type) {
       const uint8_t* q;
       if (d.nrm.type == 1) { q = p; p += nrm_direct_bytes; }
       else if (d.nrm.type == 2) { q = nrm.indexed(*p); p += nrm_index_bytes; }
       else { q = nrm.indexed(be16(p)); p += nrm_index_bytes; }
       if (q) for (int k = 0; k < 3; ++k) out.nrm[k] = nrm.component(q, k);
+      else out.nrm[0] = out.nrm[1] = out.nrm[2] = 0.f;
     }
-    for (int i = 0; i < 2; ++i) {
-      if (!d.col[i].type) continue;
+    for (unsigned j = 0; j < col_count; ++j) {
+      const unsigned i = col_slots[j];
       const uint8_t* q = col[i].fetch(p);
       uint8_t* dst = i ? out.col1 : out.col0;
       if (q) read_color(q, d.col[i].format, dst);
+      else dst[0] = dst[1] = dst[2] = dst[3] = 0;
       if (!d.col[i].count) dst[3] = 255;
     }
-    for (int i = 0; i < 8; ++i) {
-      if (!d.tex[i].type) continue;
+    for (unsigned j = 0; j < tex_count; ++j) {
+      const unsigned i = tex_slots[j];
+      out.uv[i][1] = 0.f;
       if (const uint8_t* q = tex[i].fetch(p)) for (uint32_t k = 0; k < tex[i].n; ++k) out.uv[i][k] = tex[i].component(q, k);
+      else out.uv[i][0] = 0.f;
     }
   }
   (void)fmt;
@@ -299,9 +318,10 @@ void snapshot_textures(DrawCall& dc) {
 
 void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t components) {
   host::SimCostScope record_cost(host::SIM_RECORD);
-  // Built on the stack (hot in cache), then moved in: filling the vector element directly measured
-  // worse, because each field write lands in cold memory instead of one sequential copy.
-  DrawCall dc{DrawCall::SkipInit{}};
+  // Filled in place: the recycled frame buffers keep their storage warm between frames, and the
+  // 5 KB move of a stack copy was a measurable share of the simulation thread on the console.
+  g_frame.draws.emplace_back(DrawCall::SkipInit{});
+  DrawCall& dc = g_frame.draws.back();
   dc.primitive = primitive;
   dc.first_vertex = first;
   dc.vertex_count = count;
@@ -334,7 +354,6 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
     dc.owner_player = observed_owner();   // SkipInit above means this has to be written every draw
     dc.skinned = observed_skinned();
     dc.authored_pose = capture_authored_pose(); }
-  g_frame.draws.push_back(std::move(dc));
   g_frame.commands.push_back({FrameCommand::Draw, (uint32_t)g_frame.draws.size() - 1});
   ++g_draws;
   g_vertices += count;
@@ -394,8 +413,12 @@ void bp_write(uint32_t value) {
       c.clear_z = g_bp.reg[BP_CLEAR_Z] & 0xFFFFFF;
       uint32_t yscale = g_bp.reg[BP_COPYYSCALE];
       c.y_scale = bits(masked, 10, 1) ? 256.0f / (float)yscale : (float)yscale / 256.0f;
-      if (!c.to_xfb && !c.is_depth && c.format == 6 && !c.half_scale) {
-        const uint64_t size = uint64_t(c.dest_stride) * ((c.src_h + 3) / 4);
+      // Every texture copy's destination is captured (the renderer compares later snapshots of the
+      // same bytes to detect CPU writes). This used to be RGBA8 copies only, and the Aurora bridge
+      // refused copies without the capture: Melee's I4 shadow maps and RGB5A3/RGB565 copies (the
+      // off-screen magnifier, Pokémon Stadium's screen) were never copied and sampled stale RAM.
+      if (!c.to_xfb && !c.is_depth && !c.half_scale) {
+        const uint64_t size = texture_chain_bytes(c.src_w, c.src_h, efb_copy_texture_format(c), 1);
         const uint32_t offset = c.dest_addr & 0x3fffffffu;
         if (offset < ppc::RAM_SIZE && size <= ppc::RAM_SIZE - offset)
           c.destination_before_copy.assign(host::ram + offset, host::ram + offset + size);

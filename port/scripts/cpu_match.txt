@@ -33,8 +33,10 @@
 # VS character select: nudge each hand up and press A (picks a character for each port), then START.
 # Character select, driven by port 2 (port 1 is the keyboard placeholder and stays N/A). The
 # hand starts just under P2's tag: A grabs P2's token; a diagonal up-left drops it on a portrait;
-# back onto the tag, A turns P2 into a CPU that keeps that character; right to P3's tag, A makes
-# a second CPU with a default character; START.
+# back onto the tag, A turns P2 into a CPU that keeps that character; right to P3's tag, A twice
+# takes the unused port from N/A through HMN to CPU (a second CPU with a default character); START.
+# P3's tag cycles from whatever the save holds, so tools/nx-cycle.sh restores the same save
+# (build/golden-card, in which P3 is N/A) before every run.
 @scene 0x02 0x00
 165 p=2 A
 171 p=2
@@ -50,8 +52,10 @@
 276 p=2
 290 p=2 A
 296 p=2
-360 p=2 START
-370 p=2
+310 p=2 A
+316 p=2
+380 p=2 START
+390 p=2
 
 # Stage select: slam the cursor up-right into the corner (Kongo Jungle N64, bottom row, deterministic),
 # then left along the bottom row past Final Destination to Battlefield, and A. Battlefield is the

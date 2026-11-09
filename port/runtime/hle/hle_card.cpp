@@ -20,6 +20,7 @@ struct File {
   uint8_t dir[64] = {};        // CARDDir, big-endian as on the card
   std::vector<uint8_t> data;   // blocks * SECTOR
   std::string path;            // .gci on disk
+  bool dirty = false;          // data changed since the .gci was last written (flushed at CARDClose)
   std::string name() const { return std::string((const char*)dir + 8, strnlen((const char*)dir + 8, 32)); }
   uint16_t blocks() const { return (uint16_t)((dir[0x38] << 8) | dir[0x39]); }
 };
@@ -140,7 +141,12 @@ void icon_offsets(const File& f, uint8_t* stat) {
   if (tlut) { put32(stat + 0x64, off); off += 512; } else put32(stat + 0x64, none);
   put32(stat + 0x68, off);
 }
+void flush_dirty() {
+  for (File* f : g_files) if (f && f->dirty) { save(*f); f->dirty = false; }
+}
 }  // namespace
+
+namespace host { void card_flush() { flush_dirty(); } }   // exit path: write saves the game has not closed yet
 
 HLE(CARDInit) { host::pump_completions(); }
 HLE(CARDProbe) { host::pump_completions(); RET(ARG0 == 0 ? 1 : 0); }
@@ -153,7 +159,7 @@ HLE(CARDProbeEx) {
 }
 HLE(CARDMountAsync) { if (ARG0 != 0) { RET(NOCARD); return; } mount(); complete(ARG3, 0, READY); RET(READY); }
 HLE(CARDMount) { if (ARG0 != 0) { RET(NOCARD); return; } mount(); RET(READY); }
-HLE(CARDUnmount) { RET(ARG0 == 0 ? READY : NOCARD); }
+HLE(CARDUnmount) { if (ARG0 == 0) flush_dirty(); RET(ARG0 == 0 ? READY : NOCARD); }
 HLE(CARDCheckAsync) { if (ARG0 != 0 || !g_mounted) { RET(NOCARD); return; } complete(ARG1, 0, READY); RET(READY); }
 HLE(CARDCheck) { RET(ARG0 == 0 && g_mounted ? READY : NOCARD); }
 HLE(CARDGetResultCode) { RET(ARG0 == 0 ? READY : NOCARD); }
@@ -190,7 +196,7 @@ HLE(CARDFastOpen) {
   fill_info(ARG2, no, *g_files[no]);
   RET(READY);
 }
-HLE(CARDClose) { host::wr32(ARG0 + 4, (uint32_t)-1); RET(READY); }
+HLE(CARDClose) { if (File* f = file_of(ARG0)) { if (f->dirty) { save(*f); f->dirty = false; } } host::wr32(ARG0 + 4, (uint32_t)-1); RET(READY); }
 
 static int32_t do_read(uint32_t info, uint32_t buf, int32_t length, int32_t offset) {
   int32_t chan; File* f = file_of(info, &chan);
@@ -206,7 +212,10 @@ static int32_t do_write(uint32_t info, uint32_t buf, int32_t length, int32_t off
   if (length < 0 || offset < 0 || (uint64_t)offset + (uint64_t)length > f->data.size()) return -11;
   std::memcpy(f->data.data() + offset, host::ptr(buf, (uint32_t)length), (size_t)length);
   g_xferred = length;
-  save(*f);
+  // The game writes a save one 8 KB sector at a time; rewriting the whole .gci (create, write,
+  // remove, rename: five file-system round trips and 90 KB to the SD card) on every sector was a
+  // measurable share of the simulation thread. The file is written once, when the game closes it.
+  f->dirty = true;
   return READY;
 }
 HLE(CARDReadAsync) { int32_t r = do_read(ARG0, ARG1, (int32_t)ARG2, (int32_t)ARG3); TRACE("CARDReadAsync len=%u off=%u -> %d", ARG2, ARG3, r); if (r == READY) complete(ARG4, 0, READY); RET(r); }

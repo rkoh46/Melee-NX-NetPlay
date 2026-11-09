@@ -415,7 +415,7 @@ static T scale_clamp(Context& c, double ps, uint32_t st_scale) {
 }
 
 // GQR layout: st_type bits 0-2, st_scale bits 8-13, ld_type bits 16-18, ld_scale bits 24-29.
-void psq_load(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint32_t i) {
+void psq_load_slow(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint32_t i) {
   uint32_t gqr = c.gqr[i];
   uint32_t type = (gqr >> 16) & 7, scale = (gqr >> 24) & 63;
   float ps0, ps1;
@@ -447,7 +447,7 @@ void psq_load(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint
   c.f[rd].ps1 = ps1;
 }
 
-void psq_store(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w, uint32_t i) {
+void psq_store_slow(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w, uint32_t i) {
   uint32_t gqr = c.gqr[i];
   uint32_t type = gqr & 7, scale = (gqr >> 8) & 63;
   double ps0 = c.f[rs].ps0, ps1 = c.f[rs].ps1;
