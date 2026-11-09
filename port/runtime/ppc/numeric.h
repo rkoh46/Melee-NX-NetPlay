@@ -121,22 +121,27 @@ inline thread_local FpProfile current_profile = FpProfile::ReferenceSlippi;
     return bits_to_double(double_to_bits(d) & sign_bit);
   return d;
 }
+// The NaN and denormal paths below are rare and out of line ([[gnu::cold]], noinline): inlined, they
+// were copied into every translated float operation (a 49-instruction guest function compiled to
+// 3,000 ARM instructions), which kept the game code far larger than the instruction cache.
+[[gnu::cold, gnu::noinline]] inline double nan_binary(double a, double b) {
+  if (is_nan(a)) return quiet(a);
+  if (is_nan(b)) return quiet(b);
+  return bits_to_double(exp_mask | quiet_bit);
+}
+[[gnu::cold, gnu::noinline]] inline double nan_fused(double a, double c, double b) {
+  // PowerPC operand priority is A, B, C even though the operation is A*C+B.
+  if (is_nan(a)) return quiet(a);
+  if (is_nan(b)) return quiet(b);
+  if (is_nan(c)) return quiet(c);
+  return bits_to_double(exp_mask | quiet_bit);
+}
 [[gnu::always_inline]] inline double binary_result(double result, double a, double b) {
-  if (reference() && is_nan(result)) {
-    if (is_nan(a)) return quiet(a);
-    if (is_nan(b)) return quiet(b);
-    return bits_to_double(exp_mask | quiet_bit);
-  }
+  if (reference() && __builtin_expect(is_nan(result), 0)) return nan_binary(a, b);
   return finish(result);
 }
 [[gnu::always_inline]] inline double fused_result(double result, double a, double c, double b) {
-  if (reference() && is_nan(result)) {
-    // PowerPC operand priority is A, B, C even though the operation is A*C+B.
-    if (is_nan(a)) return quiet(a);
-    if (is_nan(b)) return quiet(b);
-    if (is_nan(c)) return quiet(c);
-    return bits_to_double(exp_mask | quiet_bit);
-  }
+  if (reference() && __builtin_expect(is_nan(result), 0)) return nan_fused(a, c, b);
   return finish(result);
 }
 [[gnu::always_inline]] inline double negate_result(double d) {
@@ -186,18 +191,23 @@ inline double legacy_nmsub(double a, double c, double b) {
     return bits_to_double(double_to_bits(d) & sign_bit);
   return double(float(d));
 }
-[[gnu::always_inline]] inline double f25(double d) {
-  using namespace detail;
-  uint64_t bits = double_to_bits(d);
+namespace detail {
+[[gnu::cold, gnu::noinline]] inline double f25_denormal(uint64_t bits) {
   uint64_t keep = UINT64_C(0xfffffffff8000000), round = UINT64_C(0x8000000);
   uint64_t fraction = bits & fraction_mask;
-  if (reference() && !(bits & exp_mask) && fraction) {
-    unsigned shift = 0;
-    while (!(fraction & (UINT64_C(1) << 52))) { fraction <<= 1; ++shift; }
-    // Arithmetic right shift of the signed keep mask, expressed unsigned.
-    keep = ~(~keep >> shift);
-    round >>= shift;
-  }
+  unsigned shift = 0;
+  while (!(fraction & (UINT64_C(1) << 52))) { fraction <<= 1; ++shift; }
+  // Arithmetic right shift of the signed keep mask, expressed unsigned.
+  keep = ~(~keep >> shift);
+  round >>= shift;
+  return bits_to_double((bits & keep) + (bits & round));
+}
+}  // namespace detail
+[[gnu::always_inline]] inline double f25(double d) {
+  using namespace detail;
+  const uint64_t bits = double_to_bits(d);
+  if (reference() && __builtin_expect(!(bits & exp_mask) && (bits & fraction_mask), 0)) return f25_denormal(bits);
+  const uint64_t keep = UINT64_C(0xfffffffff8000000), round = UINT64_C(0x8000000);
   return bits_to_double((bits & keep) + (bits & round));
 }
 [[gnu::always_inline]] inline double fadd(double a, double b) { return detail::binary_result(a + b, a, b); }
@@ -237,8 +247,8 @@ inline uint64_t fctiw(double b, bool truncate) {
   if (reference() && v == 0 && (double_to_bits(b) & sign_bit)) result |= UINT64_C(0x100000000);
   return result;
 }
-[[gnu::always_inline]] inline double float_bits_to_double(uint32_t value) {
-  if (!detail::reference()) { float f; std::memcpy(&f, &value, 4); return double(f); }
+namespace detail {
+[[gnu::cold, gnu::noinline]] inline double float_bits_to_double_special(uint32_t value) {
   uint64_t x = value, exp = (x >> 23) & 255, frac = x & 0x7fffff;
   if (!exp && frac) {
     exp = 1023 - 126;
@@ -248,6 +258,16 @@ inline uint64_t fctiw(double b, bool truncate) {
   const uint64_t y = (exp && exp < 255) ? !(exp >> 7) : exp >> 7;
   return bits_to_double(((x & 0xc0000000) << 32) | (y << 61) | (y << 60) | (y << 59) |
                         ((x & 0x3fffffff) << 29));
+}
+}  // namespace detail
+// lfs: every single except a NaN converts exactly in hardware (FPCR.FZ is clear, so denormals too),
+// which is what the bit construction in the special path computes; only NaNs differ, since the host
+// conversion quiets a signalling NaN and the Gekko keeps its payload.
+[[gnu::always_inline]] inline double float_bits_to_double(uint32_t value) {
+  if (!detail::reference() || __builtin_expect((value & 0x7f800000u) != 0x7f800000u || !(value & 0x7fffffu), 1)) {
+    float f; std::memcpy(&f, &value, 4); return double(f);
+  }
+  return detail::float_bits_to_double_special(value);
 }
 [[gnu::always_inline]] inline uint32_t double_to_float_bits(double d) {
   using namespace detail;

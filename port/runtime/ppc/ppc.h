@@ -195,25 +195,50 @@ inline uint8_t* slowptr(uint32_t ea) {
   if ((ea & 0xFFFFC000u) == LC_BASE) return locked_cache() + (ea & (LC_SIZE - 1));
   return nullptr;
 }
-inline uint32_t ld8(Context& c, uint8_t* m, uint32_t ea) {
-  if (uint8_t* p = fast(m, ea)) return *p;
-  if (uint8_t* p = slowptr(ea)) return *p;
-  return mmio_read(c, ea, 1);
+// Guest RAM is the hot path: one mask, one compare, then the access. Everything else (the locked
+// cache, MMIO, the FIFO's slower forms) goes through the cold out-of-line functions below; inlined,
+// those fallbacks and a null test of the RAM pointer were copied into every translated load and
+// store, which made the game code several times larger than its hot paths.
+[[gnu::cold, gnu::noinline]] inline uint32_t ld_slow(Context& c, uint32_t ea, int bytes) {
+  if (uint8_t* p = slowptr(ea)) {
+    if (bytes == 1) return *p;
+    if (bytes == 2) { uint16_t v; std::memcpy(&v, p, 2); return bswap16(v); }
+    uint32_t v; std::memcpy(&v, p, 4); return bswap32(v);
+  }
+  return mmio_read(c, ea, bytes);
 }
-inline uint32_t ld16(Context& c, uint8_t* m, uint32_t ea) {
-  if (uint8_t* p = fast(m, ea)) { uint16_t v; std::memcpy(&v, p, 2); return bswap16(v); }
-  if (uint8_t* p = slowptr(ea)) { uint16_t v; std::memcpy(&v, p, 2); return bswap16(v); }
-  return mmio_read(c, ea, 2);
-}
-inline uint32_t ld32(Context& c, uint8_t* m, uint32_t ea) {
-  if (uint8_t* p = fast(m, ea)) { uint32_t v; std::memcpy(&v, p, 4); return bswap32(v); }
-  if (uint8_t* p = slowptr(ea)) { uint32_t v; std::memcpy(&v, p, 4); return bswap32(v); }
-  return mmio_read(c, ea, 4);
-}
-inline uint64_t ld64(Context& c, uint8_t* m, uint32_t ea) {
-  if (uint8_t* p = fast(m, ea)) { uint64_t v; std::memcpy(&v, p, 8); return bswap64(v); }
+[[gnu::cold, gnu::noinline]] inline uint64_t ld64_slow(Context& c, uint32_t ea) {
   if (uint8_t* p = slowptr(ea)) { uint64_t v; std::memcpy(&v, p, 8); return bswap64(v); }
   return mmio_read64(c, ea);
+}
+[[gnu::cold, gnu::noinline]] inline void st_slow(Context& c, uint32_t ea, uint32_t v, int bytes) {
+  if (uint8_t* p = slowptr(ea)) {
+    if (bytes == 1) { *p = (uint8_t)v; return; }
+    if (bytes == 2) { const uint16_t s = bswap16((uint16_t)v); std::memcpy(p, &s, 2); return; }
+    const uint32_t s = bswap32(v); std::memcpy(p, &s, 4); return;
+  }
+  mmio_write(c, ea, bytes == 1 ? (v & 0xFF) : bytes == 2 ? (v & 0xFFFF) : v, bytes);
+}
+[[gnu::cold, gnu::noinline]] inline void st64_slow(Context& c, uint32_t ea, uint64_t v) {
+  if (uint8_t* p = slowptr(ea)) { const uint64_t s = bswap64(v); std::memcpy(p, &s, 8); return; }
+  mmio_write64(c, ea, v);
+}
+[[gnu::always_inline]] inline bool in_ram(uint32_t ea, uint32_t& off) { off = ea & 0x3FFFFFFFu; return __builtin_expect(off < RAM_SIZE, 1); }
+inline uint32_t ld8(Context& c, uint8_t* m, uint32_t ea) {
+  uint32_t off; if (in_ram(ea, off)) return m[off];
+  return ld_slow(c, ea, 1);
+}
+inline uint32_t ld16(Context& c, uint8_t* m, uint32_t ea) {
+  uint32_t off; if (in_ram(ea, off)) { uint16_t v; std::memcpy(&v, m + off, 2); return bswap16(v); }
+  return ld_slow(c, ea, 2);
+}
+inline uint32_t ld32(Context& c, uint8_t* m, uint32_t ea) {
+  uint32_t off; if (in_ram(ea, off)) { uint32_t v; std::memcpy(&v, m + off, 4); return bswap32(v); }
+  return ld_slow(c, ea, 4);
+}
+inline uint64_t ld64(Context& c, uint8_t* m, uint32_t ea) {
+  uint32_t off; if (in_ram(ea, off)) { uint64_t v; std::memcpy(&v, m + off, 8); return bswap64(v); }
+  return ld64_slow(c, ea);
 }
 // Store watchpoint (MELEE_WATCH_ADDR / MELEE_WATCH_LEN): one compare on the store path.
 extern uint32_t g_watch_lo, g_watch_len, g_watch_value;
@@ -231,31 +256,24 @@ inline void watch(Context& c, uint32_t ea, uint64_t v, int bytes) {
 }
 inline void st8(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
   watch(c, ea, v, 1);
-  if (uint8_t* p = fast(m, ea)) { *p = (uint8_t)v; return; }
-  if (uint8_t* p = slowptr(ea)) { *p = (uint8_t)v; return; }
-  mmio_write(c, ea, v & 0xFF, 1);
+  uint32_t off; if (in_ram(ea, off)) { m[off] = (uint8_t)v; return; }
+  st_slow(c, ea, v, 1);
 }
 inline void st16(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
   watch(c, ea, v, 2);
-  uint16_t s = bswap16((uint16_t)v);
-  if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 2); return; }
-  if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 2); return; }
-  mmio_write(c, ea, v & 0xFFFF, 2);
+  uint32_t off; if (in_ram(ea, off)) { const uint16_t s = bswap16((uint16_t)v); std::memcpy(m + off, &s, 2); return; }
+  st_slow(c, ea, v, 2);
 }
 inline void st32(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
   watch(c, ea, v, 4);
-  uint32_t s = bswap32(v);
-  if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 4); return; }
-  if (__builtin_expect((ea & 0xFFFFC000u) == 0xCC008000u, 1)) { fifo_write32(s); return; }   // write-gather pipe: most non-RAM stores
-  if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 4); return; }
-  mmio_write(c, ea, v, 4);
+  uint32_t off; if (in_ram(ea, off)) { const uint32_t s = bswap32(v); std::memcpy(m + off, &s, 4); return; }
+  if (__builtin_expect((ea & 0xFFFFC000u) == 0xCC008000u, 1)) { fifo_write32(bswap32(v)); return; }   // write-gather pipe: most non-RAM stores
+  st_slow(c, ea, v, 4);
 }
 inline void st64(Context& c, uint8_t* m, uint32_t ea, uint64_t v) {
   watch(c, ea, v, 8);
-  uint64_t s = bswap64(v);
-  if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 8); return; }
-  if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 8); return; }
-  mmio_write64(c, ea, v);
+  uint32_t off; if (in_ram(ea, off)) { const uint64_t s = bswap64(v); std::memcpy(m + off, &s, 8); return; }
+  st64_slow(c, ea, v);
 }
 // Byte-reversed forms read the guest bytes in host (little-endian) order.
 inline uint32_t ld32r(Context& c, uint8_t* m, uint32_t ea) { return bswap32(ld32(c, m, ea)); }
