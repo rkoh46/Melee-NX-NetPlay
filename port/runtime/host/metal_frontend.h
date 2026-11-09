@@ -74,6 +74,7 @@ public:
   void submit_frame(const gx::Frame& frame, const gx::DrawMatrices* overrides) override;
   void set_skip_present(bool skip) override;
   bool pump_events();
+  bool on_owner_thread() const noexcept { return std::this_thread::get_id() == owner_thread_; }
   bool close_requested() const noexcept;
   MetalWindowSize window_size() const noexcept;
   void resize(uint32_t width, uint32_t height);
@@ -109,5 +110,6 @@ std::unique_ptr<MetalFrontend> create_aurora_metal_frontend(const AuroraMetalCon
 std::unique_ptr<MetalFrontend> create_aurora_switch_frontend(const AuroraMetalConfig& config);
 // Overlay callback run inside each presented frame of the Switch frontend (ImGui drawing).
 void switch_frontend_set_overlay(std::function<void()> draw);
+void switch_frontend_set_draw_dump(const std::string& path, uint8_t scene_major, uint8_t scene_minor, unsigned after);
 
 } // namespace host

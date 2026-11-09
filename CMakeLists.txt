@@ -54,7 +54,10 @@ set(CMAKE_CXX_STANDARD_LIBRARIES
 # ---- Shared compile options: exact GameCube float semantics in the recompiled code ----
 add_library(port_build_options INTERFACE)
 target_compile_features(port_build_options INTERFACE cxx_std_17)
-target_compile_options(port_build_options INTERFACE
+# -fPIE after the toolchain's -fPIC: the NRO is one position-independent executable, so globals
+# (guest RAM base, dispatch table, CPU context) can be addressed PC-relative instead of through
+# the GOT on every access.
+target_compile_options(port_build_options INTERFACE -fPIE
   $<$<COMPILE_LANGUAGE:CXX>:-fno-fast-math -ffp-model=strict -ffp-contract=off -fexceptions>)
 target_compile_definitions(port_build_options INTERFACE __SWITCH__=1 MELEE_NX=1)
 

@@ -4,6 +4,7 @@
 #include "gx_core.h"
 #include "host.h"
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <unordered_map>
 
@@ -22,7 +23,8 @@ Frame g_frame;
 TextureSnapshotCache g_texture_snapshots;
 uint64_t g_frame_sequence = 0;
 bool g_discontinuity = false;   // simulation thread only, like the rest of this file's state
-std::vector<uint8_t> g_buf;
+std::vector<uint8_t> g_buf;   // storage only: g_buf_len bytes are valid (the vector is never shrunk per write)
+size_t g_buf_len = 0;
 size_t g_buf_pos = 0;   // parsed prefix of g_buf
 // Bytes the pending (incomplete) command at g_buf_pos needs before it can parse. The game writes the
 // FIFO a few bytes at a time, so retrying a large vertex primitive on every write was quadratic.
@@ -512,24 +514,29 @@ void init(Backend* backend) {
   std::memset(&g_xf, 0, sizeof g_xf);
   std::memset(g_tmem, 0, sizeof g_tmem);
   g_frame.clear();
-  g_buf.clear(); g_buf_pos = 0; g_parse_need = 0; ++g_cp_version;
+  g_buf_len = 0; g_buf_pos = 0; g_parse_need = 0; ++g_cp_version;
+  if (g_buf.size() < (1u << 20)) g_buf.resize(1u << 20);
 }
 
 void write_fifo(uint32_t value, int bytes) {
-  const size_t at = g_buf.size();
-  g_buf.resize(at + (size_t)bytes);   // one size update per write instead of a push_back per byte
-  for (int i = 0; i < bytes; ++i) g_buf[at + i] = (uint8_t)(value >> (8 * (bytes - 1 - i)));
-  if (g_buf.size() - g_buf_pos < g_parse_need) return;   // the pending command is still incomplete
+  // The game writes the FIFO a word (or less) at a time, tens of thousands of times a frame:
+  // the buffer keeps its storage and only a length moves; growth is rare and geometric.
+  const size_t at = g_buf_len;
+  if (at + 4 > g_buf.size()) g_buf.resize(std::max<size_t>(g_buf.size() * 2, 1u << 20));
+  uint8_t* out = g_buf.data() + at;
+  for (int i = 0; i < bytes; ++i) out[i] = (uint8_t)(value >> (8 * (bytes - 1 - i)));
+  g_buf_len = at + (size_t)bytes;
+  if (g_buf_len - g_buf_pos < g_parse_need) return;   // the pending command is still incomplete
   g_parse_need = 0;
-  while (g_buf_pos < g_buf.size()) {
-    size_t n = parse_command(g_buf.data() + g_buf_pos, g_buf.size() - g_buf_pos);
+  while (g_buf_pos < g_buf_len) {
+    size_t n = parse_command(g_buf.data() + g_buf_pos, g_buf_len - g_buf_pos);
     if (!n) break;               // parse_command recorded how many bytes it needs
     g_buf_pos += n;
     g_parse_need = 0;            // a display list inside the command may have left a stale need
     ++g_commands;
   }
-  if (g_buf_pos == g_buf.size()) { g_buf.clear(); g_buf_pos = 0; }
-  else if (g_buf_pos >= 1 << 16) { g_buf.erase(g_buf.begin(), g_buf.begin() + g_buf_pos); g_buf_pos = 0; }
+  if (g_buf_pos == g_buf_len) { g_buf_len = 0; g_buf_pos = 0; }
+  else if (g_buf_pos >= 1 << 16) { std::memmove(g_buf.data(), g_buf.data() + g_buf_pos, g_buf_len - g_buf_pos); g_buf_len -= g_buf_pos; g_buf_pos = 0; }
 }
 
 void stats(uint64_t* commands, uint64_t* draws, uint64_t* vertices, uint32_t* efb_copies) {

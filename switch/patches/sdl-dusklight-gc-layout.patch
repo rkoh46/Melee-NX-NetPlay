@@ -1,0 +1,29 @@
+--- a/src/joystick/switch/SDL_sysjoystick.c
++++ b/src/joystick/switch/SDL_sysjoystick.c
+@@ -277,11 +277,13 @@
+     SDL_SendJoystickAxis(timestamp, joystick, 2, clamp_axis(r.x));
+     SDL_SendJoystickAxis(timestamp, joystick, 3, clamp_axis(-r.y));
+ 
++    /* Analog triggers exist only on a GameCube controller through the adapter (NpadGc
++     * style). The system presents GC L/R as ZL/ZR and GC Z as R, so deriving the trigger
++     * axes from the L/R buttons would turn GC Z into a shoulder pull; without the GC
++     * style the axes stay released and the buttons carry the mapping (misc3/misc4). */
+     const bool has_gc_triggers = (padGetStyleSet(pad) & HidNpadStyleTag_NpadGc) != 0;
+-    const int trigger_l = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 0) * 2 - 32768)
+-                                          : ((held & HidNpadButton_L) ? 32767 : -32768);
+-    const int trigger_r = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 1) * 2 - 32768)
+-                                          : ((held & HidNpadButton_R) ? 32767 : -32768);
++    const int trigger_l = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 0) * 2 - 32768) : -32768;
++    const int trigger_r = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 1) * 2 - 32768) : -32768;
+     SDL_SendJoystickAxis(timestamp, joystick, 4, clamp_axis(trigger_l));
+     SDL_SendJoystickAxis(timestamp, joystick, 5, clamp_axis(trigger_r));
+ }
+@@ -304,6 +306,8 @@
+     out->y = (SDL_InputMapping){ EMappingKind_Button, 3 };
+     out->leftshoulder = (SDL_InputMapping){ EMappingKind_Button, 6 };
+     out->rightshoulder = (SDL_InputMapping){ EMappingKind_Button, 7 };
++    out->misc3 = (SDL_InputMapping){ EMappingKind_Button, 4 };   /* L  (GC adapter: unused) */
++    out->misc4 = (SDL_InputMapping){ EMappingKind_Button, 5 };   /* R  (GC adapter: the Z button) */
+     out->lefttrigger = (SDL_InputMapping){ EMappingKind_Axis, 4 };
+     out->righttrigger = (SDL_InputMapping){ EMappingKind_Axis, 5 };
+     out->back = (SDL_InputMapping){ EMappingKind_Button, 8 };

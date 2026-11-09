@@ -39,6 +39,8 @@ struct PreparedFrame {
 // an invalid or unsupported capture. Texture bytes remain shared immutable data.
 // Baseline: one final full-size, full-clear XFB; no unlocked/repeated subframes.
 PreparedFrame prepare_frame(const Frame& frame, Extent extent = {});
+// Reusing form: `out` keeps its buffers between frames (no per-draw allocation on the render thread).
+void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out);
 
 struct CopyRecord {
   uint32_t width = 0, height = 0, bytes = 0;
@@ -48,4 +50,5 @@ struct CopyRecord {
 using CopyHistory = std::map<uint32_t, CopyRecord>;
 // Side-effect-free cross-frame alias validation, used by the actual adapter.
 CopyHistory advance_copy_history(const PreparedFrame& frame, CopyHistory history);
+void advance_copy_history_in_place(const PreparedFrame& frame, CopyHistory& history);
 } // namespace gx::aurora_bridge

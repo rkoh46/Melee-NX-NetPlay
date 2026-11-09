@@ -288,7 +288,10 @@ std::vector<uint8_t> build_game_file(const std::string& name, FileLoadContext co
     }
     return out;
   }
-  host::log("slippi: game file %s not found in %s", name.c_str(), host::options.sys_dir.c_str());
+  // Files Slippi does not replace come from the disc; only a name missing from both is worth a line.
+  uint32_t disc_off = 0, disc_size = 0;
+  if (!host::disc_find_file(name, &disc_off, &disc_size))
+    host::log("slippi: game file %s not found in %s or on the disc", name.c_str(), host::options.sys_dir.c_str());
   return out;
 }
 

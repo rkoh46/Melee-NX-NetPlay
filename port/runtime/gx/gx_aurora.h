@@ -3,6 +3,7 @@
 #pragma once
 #include "gx_core.h"
 #include <functional>
+#include <string>
 #include <memory>
 
 namespace gx {
@@ -36,6 +37,9 @@ public:
   // draws and before Aurora ends the frame: the place for ImGui overlay drawing
   // (menu, HUD, sign-in), which Aurora composites over the presented image.
   void set_overlay(std::function<void()> draw);
+  // Diagnostic: write one frame's draw state (registers, textures, texgens, what the bridge
+  // skipped) to `path` the `after`-th frame after the scene (major, minor) is first submitted.
+  void set_draw_dump(std::string path, uint8_t scene_major, uint8_t scene_minor, unsigned after);
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

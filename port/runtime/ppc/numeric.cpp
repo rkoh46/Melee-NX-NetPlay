@@ -12,31 +12,16 @@
 #include "numeric.h"
 #include <cmath>
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-#define PPC_HOST_X86 1
-#include <immintrin.h>
-#elif defined(__aarch64__) || defined(_M_ARM64)
-#define PPC_HOST_ARM64 1
-#if defined(_MSC_VER)
-#include <intrin.h>
-#endif
-#else
-#error "PPC floating-point environment is only implemented for x86 and arm64"
-#endif
-
-// Strict FP flags are required for callers as well as this translation unit.
+// Host detection (PPC_HOST_X86 / PPC_HOST_ARM64) and the FENV_ACCESS pragma come
+// from numeric.h. Strict FP flags are required for callers as well as this TU.
 #if defined(__clang__)
 #pragma STDC FENV_ACCESS ON
 #endif
 
 namespace ppc {
 namespace {
-constexpr uint64_t sign_bit = UINT64_C(0x8000000000000000);
-constexpr uint64_t exp_mask = UINT64_C(0x7ff0000000000000);
-constexpr uint64_t fraction_mask = UINT64_C(0x000fffffffffffff);
-constexpr uint64_t quiet_bit = UINT64_C(0x0008000000000000);
-thread_local uint32_t current_fpscr = 0;
-thread_local FpProfile current_profile = FpProfile::ReferenceSlippi;
+using detail::current_fpscr;
+using detail::current_profile;
 
 uint64_t read_control() {
 #if defined(PPC_HOST_X86)
@@ -56,70 +41,6 @@ void write_control(uint64_t v) {
   _WriteStatusReg(ARM64_FPCR, v);
 #else
   __asm__ __volatile__("msr fpcr, %0" : : "r"(v) : "memory");
-#endif
-}
-bool is_nan(double d) {
-  return (double_to_bits(d) & ~sign_bit) > exp_mask;
-}
-double quiet(double d) { return bits_to_double(double_to_bits(d) | quiet_bit); }
-bool reference() { return current_profile == FpProfile::ReferenceSlippi; }
-double finish(double d) {
-  if (reference() && (current_fpscr & 4) && !(double_to_bits(d) & exp_mask))
-    return bits_to_double(double_to_bits(d) & sign_bit);
-  return d;
-}
-double binary_result(double result, double a, double b) {
-  if (reference() && is_nan(result)) {
-    if (is_nan(a)) return quiet(a);
-    if (is_nan(b)) return quiet(b);
-    return bits_to_double(exp_mask | quiet_bit);
-  }
-  return finish(result);
-}
-double fused_result(double result, double a, double c, double b) {
-  if (reference() && is_nan(result)) {
-    // PowerPC operand priority is A, B, C even though the operation is A*C+B.
-    if (is_nan(a)) return quiet(a);
-    if (is_nan(b)) return quiet(b);
-    if (is_nan(c)) return quiet(c);
-    return bits_to_double(exp_mask | quiet_bit);
-  }
-  return finish(result);
-}
-double negate_result(double d) {
-  return is_nan(d) ? d : bits_to_double(double_to_bits(d) ^ sign_bit);
-}
-double hardware_madd(double a, double c, double b) {
-#if defined(PPC_HOST_X86) && (defined(__FMA__) || defined(_MSC_VER))
-  return _mm_cvtsd_f64(_mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
-#elif defined(PPC_HOST_ARM64) && !defined(_MSC_VER)
-  double r;
-  __asm__ __volatile__("fmadd %d0, %d1, %d2, %d3" : "=w"(r) : "w"(a), "w"(c), "w"(b));
-  return r;
-#else
-  // Correctly fused fallback; never replace this with a*c+b.
-  return std::fma(a, c, b);
-#endif
-}
-double hardware_msub(double a, double c, double b) {
-#if defined(PPC_HOST_X86) && (defined(__FMA__) || defined(_MSC_VER))
-  return _mm_cvtsd_f64(_mm_fmsub_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
-#else
-  return hardware_madd(a, c, bits_to_double(double_to_bits(b) ^ sign_bit));
-#endif
-}
-double legacy_nmadd(double a, double c, double b) {
-#if defined(PPC_HOST_X86) && (defined(__FMA__) || defined(_MSC_VER))
-  return _mm_cvtsd_f64(_mm_fnmsub_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
-#else
-  return hardware_madd(-a, c, -b);
-#endif
-}
-double legacy_nmsub(double a, double c, double b) {
-#if defined(PPC_HOST_X86) && (defined(__FMA__) || defined(_MSC_VER))
-  return _mm_cvtsd_f64(_mm_fnmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
-#else
-  return hardware_madd(-a, c, b);
 #endif
 }
 }  // namespace
@@ -166,85 +87,6 @@ ScopedGuestFpEnvironment::~ScopedGuestFpEnvironment() {
   current_profile = previous_profile_;
 }
 
-double fs(double d) {
-  if (reference() && (current_fpscr & 4) &&
-      (double_to_bits(d) & ~sign_bit) < UINT64_C(0x3810000000000000))
-    return bits_to_double(double_to_bits(d) & sign_bit);
-  return double(float(d));
-}
-double f25(double d) {
-  uint64_t bits = double_to_bits(d);
-  uint64_t keep = UINT64_C(0xfffffffff8000000), round = UINT64_C(0x8000000);
-  uint64_t fraction = bits & fraction_mask;
-  if (reference() && !(bits & exp_mask) && fraction) {
-    unsigned shift = 0;
-    while (!(fraction & (UINT64_C(1) << 52))) { fraction <<= 1; ++shift; }
-    // Arithmetic right shift of the signed keep mask, expressed unsigned.
-    keep = ~(~keep >> shift);
-    round >>= shift;
-  }
-  return bits_to_double((bits & keep) + (bits & round));
-}
-double fadd(double a, double b) { return binary_result(a + b, a, b); }
-double fsub(double a, double b) { return binary_result(a - b, a, b); }
-double fmul(double a, double b) { return binary_result(a * b, a, b); }
-double fdiv(double a, double b) { return binary_result(a / b, a, b); }
-double fmadd(double a, double c, double b) { return fused_result(hardware_madd(a, c, b), a, c, b); }
-double fmsub(double a, double c, double b) { return fused_result(hardware_msub(a, c, b), a, c, b); }
-double fnmadd(double a, double c, double b) {
-  return reference() ? negate_result(fmadd(a, c, b)) : legacy_nmadd(a, c, b);
-}
-double fnmsub(double a, double c, double b) {
-  return reference() ? negate_result(fmsub(a, c, b)) : legacy_nmsub(a, c, b);
-}
-double fmadds(double a, double c, double b) { return fs(fmadd(a, c, b)); }
-double fmsubs(double a, double c, double b) { return fs(fmsub(a, c, b)); }
-double fnmadds(double a, double c, double b) {
-  return reference() ? negate_result(fmadds(a, c, b)) : fs(legacy_nmadd(a, c, b));
-}
-double fnmsubs(double a, double c, double b) {
-  return reference() ? negate_result(fmsubs(a, c, b)) : fs(legacy_nmsub(a, c, b));
-}
-uint64_t fctiw(double b, bool truncate) {
-  const double rounded = truncate ? std::trunc(b) : std::nearbyint(b);
-  uint32_t v;
-  if (is_nan(b) || rounded < -2147483648.0) v = 0x80000000u;
-  else if (rounded >= 2147483648.0) v = 0x7fffffffu;
-  else v = uint32_t(int32_t(rounded));
-  uint64_t result = UINT64_C(0xfff8000000000000) | v;
-  if (reference() && v == 0 && (double_to_bits(b) & sign_bit)) result |= UINT64_C(0x100000000);
-  return result;
-}
-double float_bits_to_double(uint32_t value) {
-  if (!reference()) { float f; std::memcpy(&f, &value, 4); return double(f); }
-  uint64_t x = value, exp = (x >> 23) & 255, frac = x & 0x7fffff;
-  if (!exp && frac) {
-    exp = 1023 - 126;
-    do { frac <<= 1; --exp; } while (!(frac & 0x800000));
-    return bits_to_double(((x & 0x80000000) << 32) | (exp << 52) | ((frac & 0x7fffff) << 29));
-  }
-  const uint64_t y = (exp && exp < 255) ? !(exp >> 7) : exp >> 7;
-  return bits_to_double(((x & 0xc0000000) << 32) | (y << 61) | (y << 60) | (y << 59) |
-                        ((x & 0x3fffffff) << 29));
-}
-uint32_t double_to_float_bits(double d) {
-  if (!reference()) { float f = float(d); uint32_t u; std::memcpy(&u, &f, 4); return u; }
-  const uint64_t x = double_to_bits(d);
-  const uint32_t exp = uint32_t((x >> 52) & 0x7ff);
-  if (exp <= 896 && exp >= 874 && (x & ~sign_bit)) {
-    const uint32_t t = uint32_t(0x80000000u | ((x & fraction_mask) >> 21));
-    return (t >> (905 - exp)) | uint32_t((x >> 32) & 0x80000000u);
-  }
-  // The very-small/out-of-range encodings follow the pinned HW-test rule;
-  // this is a store conversion, deliberately not arithmetic float rounding.
-  return uint32_t(((x >> 32) & 0xc0000000) | ((x >> 29) & 0x3fffffff));
-}
-uint32_t double_to_float_bits_ftz(double d) {
-  if (!reference()) return double_to_float_bits(d);
-  const uint64_t x = double_to_bits(d);
-  if (((x >> 52) & 0x7ff) <= 896 && (x & ~sign_bit)) return uint32_t((x >> 32) & 0x80000000);
-  return double_to_float_bits(d);
-}
 // Table estimates, adapted from pinned Common/FloatUtils.cpp. NaNs are quieted
 // explicitly; no reciprocal/sqrt host estimate is substituted.
 static const int frsqrte_expected_base[] = {

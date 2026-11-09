@@ -6,6 +6,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <switch.h>
 #include "switch_clocks.h"
+#include "switch_profile.h"
+#include "log_switch.h"
+#if MELEE_NX_AURORA
+#include "async_backend.h"
+#endif
 #include "switch_threads.h"
 
 #include "audio.h"
@@ -56,6 +61,7 @@ std::string g_result = "running";
 int g_volume = 100;
 bool g_hud = false;
 std::string g_base;
+bool g_profiling = false;
 std::map<std::string, std::string> g_ini;
 
 void write_ini(const std::string& path, const std::map<std::string, std::string>& values) {
@@ -79,13 +85,54 @@ std::map<std::string, std::string> read_ini(const std::string& path) {
 
 void ensure_dir(const std::string& path) { mkdir(path.c_str(), 0777); }
 
-// Boots the guest. Runs on the simulation thread; exceptions thrown out of the
-// guest (ExitRequested, HostFatal, OSLoadContext at top level) end the run.
+// Names the exception in flight (call from a catch(...) block) and returns the exit code.
+int describe_current_exception(std::string& result) {
+  try { throw; }
+#if MELEE_NX_AURORA
+  catch (const gx::aurora_bridge::CoverageError& e) { host::log("unsupported render state: %s", e.what()); result = std::string("render: ") + e.what(); return 5; }
+#endif
+  catch (const host::HostFatal& e) { host::log("fatal: %s", e.what()); result = std::string("fatal: ") + e.what(); return 3; }
+  catch (const ExitRequested& stop) { result = stop.code ? "requested_exit" : "frame_bound"; return stop.code; }
+  catch (const LoadContextUnwind&) { host::log("unexpected OSLoadContext at top level"); result = "unexpected_load_context"; return 3; }
+  catch (const std::exception& e) { host::log("host exception: %s", e.what()); result = std::string("host exception: ") + e.what(); return 3; }
+  catch (...) { result = "unknown host exception"; return 3; }
+}
+
+struct GuestRun {
+  std::atomic<bool> done{false};
+  int code = 0;
+  std::string result;
+};
+
+// The guest from __start to the end of the run. On the renderer build this is its own thread
+// (core 2, the highest application priority) so the game never waits for the GPU side; the
+// frames it finishes go through gx::AsyncBackend to the thread that owns Aurora.
+void run_guest(GuestRun& run) {
+  switch_sync_clang_tls();
+  host::ScopedFatalBoundary fatal_boundary;
+  ppc::ScopedGuestFpEnvironment fp_environment(0);
+  try {
+    ppc::init_dispatch();
+    host::boot_setup();
+    host::log("boot: entering __start at 8000522C");
+    ppc::call(*host::cpu, host::ram, 0x8000522Cu);
+    host::log("guest returned from __start");
+    run.result = "guest_returned"; run.code = 4;
+  } catch (...) {
+    run.code = describe_current_exception(run.result);
+  }
+  run.done.store(true, std::memory_order_release);
+}
+void guest_thread_entry(void* arg) { run_guest(*static_cast<GuestRun*>(arg)); }
+
+// Sets the game up and, on the renderer build, owns Aurora for the whole run: the sign-in
+// screen, then the frames the guest thread hands over. Headless, it runs the guest itself.
 void simulation_thread(void*) {
   switch_sync_clang_tls();
   int code = 0;
 #if MELEE_NX_AURORA
   std::unique_ptr<host::MetalFrontend> frontend;
+  std::unique_ptr<gx::AsyncBackend> async;
   bool attached = false;
 #endif
   bool quit_before_boot = false;
@@ -98,6 +145,7 @@ void simulation_thread(void*) {
         g_result = "disc_open_failed"; code = 1;
       } else {
 #if MELEE_NX_AURORA
+        switch_set_pthread_cores(0, 0x3);   // Aurora's FIFO processor and render worker: cores 0-1, never the game's core 2
         host::AuroraMetalConfig aurora;
         aurora.app_name = "Melee-NX-NetPlay";
         aurora.user_path = host::options.profile_dir;
@@ -141,11 +189,20 @@ void simulation_thread(void*) {
             write_ini(g_base + "/launcher.ini", g_ini);
           });
         }
+        // draw_dump=MM:SS:N writes Logs/draws.txt for the N-th frame of scene MM/SS (hex), one
+        // line per draw with the registers the bridge saw: the way to find what Aurora renders wrongly.
+        if (const auto dd = g_ini.find("draw_dump"); dd != g_ini.end() && dd->second.size() >= 5) {
+          unsigned mm = 0, ss = 0, n = 120;
+          if (std::sscanf(dd->second.c_str(), "%x:%x:%u", &mm, &ss, &n) >= 2)
+            host::switch_frontend_set_draw_dump(g_base + "/Logs/draws.txt", uint8_t(mm), uint8_t(ss), n);
+        }
         host::switch_frontend_set_overlay([] {
           host::OverlayFrame overlay;
           if (host::game_overlay(overlay)) host::overlay_imgui_draw(overlay);
         });
-        gx::init(frontend.get());
+        async = std::make_unique<gx::AsyncBackend>(*frontend);
+        async->set_idle([] { host::window_pump(); });   // events are the owner thread's job
+        gx::init(async.get());
         const bool audio_ok = quit_before_boot || host::audio_open(g_volume, nullptr, true);
 #else
         gx::init(nullptr);
@@ -155,28 +212,42 @@ void simulation_thread(void*) {
         } else if (!audio_ok) {
           host::log("cannot open the audio output"); g_result = "audio_open_failed"; code = 1;
         } else {
-          ppc::init_dispatch();
-          host::boot_setup();
-          host::log("boot: entering __start at 8000522C");
-          ppc::call(*host::cpu, host::ram, 0x8000522Cu);
-          host::log("guest returned from __start");
-          g_result = "guest_returned"; code = 4;
+#if MELEE_NX_AURORA
+          GuestRun run;
+          Thread guest;
+          int guest_priority = 0x1C;
+          Result grc = threadCreate(&guest, guest_thread_entry, &run, nullptr, kSimulationStack, guest_priority, 2);
+          if (R_FAILED(grc)) { guest_priority = 0x28; grc = threadCreate(&guest, guest_thread_entry, &run, nullptr, kSimulationStack, guest_priority, 2); }
+          if (R_FAILED(grc)) throw std::runtime_error("cannot create the guest thread");
+          host::log("threads: guest on core 2 priority 0x%02X; renderer on core 1", guest_priority);
+          threadStart(&guest);
+          if (g_profiling) {
+            // The owner thread (this one) renders; sample it alongside the guest so both sides of the
+            // frame show up (pc/lr = guest, pc1/lr1 = renderer).
+            static Thread self; self.handle = threadGetCurHandle();   // a real handle: the pseudo handle means "caller" to the sampler
+            if (switch_profile_start(&guest, 2000, &self)) host::log("profile: sampling the guest and render threads at 1 kHz each (Logs/profile.txt at exit)");
+            else host::log("profile: cannot start the sampler");
+          }
+          try {
+            async->run(run.done);
+          } catch (...) {
+            code = describe_current_exception(g_result);
+            host::request_exit(code);          // the guest stops at its next retrace
+            async->finish();
+          }
+          threadWaitForExit(&guest);
+          threadClose(&guest);
+          if (code == 0) { code = run.code; g_result = run.result; }
+          host::log("renderer: %llu frames rendered, %llu stale frames dropped", (unsigned long long)async->rendered(), (unsigned long long)async->dropped());
+#else
+          GuestRun run;
+          run_guest(run);
+          code = run.code; g_result = run.result;
+#endif
         }
       }
-#if MELEE_NX_AURORA
-    } catch (const gx::aurora_bridge::CoverageError& e) {
-      host::log("unsupported render state: %s", e.what()); g_result = std::string("render: ") + e.what(); code = 5;
-#endif
-    } catch (const host::HostFatal& e) {
-      host::log("fatal: %s", e.what()); g_result = std::string("fatal: ") + e.what(); code = 3;
-    } catch (const ExitRequested& stop) {
-      code = stop.code; g_result = code ? "requested_exit" : "frame_bound";
-    } catch (const LoadContextUnwind&) {
-      host::log("unexpected OSLoadContext at top level"); g_result = "unexpected_load_context"; code = 3;
-    } catch (const std::exception& e) {
-      host::log("host exception: %s", e.what()); g_result = std::string("host exception: ") + e.what(); code = 3;
     } catch (...) {
-      g_result = "unknown host exception"; code = 3;
+      code = describe_current_exception(g_result);
     }
   }
   gx::init(nullptr);
@@ -208,6 +279,7 @@ extern "C" void userAppInit() {
   romfsInit();                 // Slippi's Sys folder ships in the NRO as romfs:/Sys
   socketInitializeDefault();
   nxlinkStdio();               // stdout to nxlink when a host is listening; harmless otherwise
+  melee_nx_log_init();         // host::log hands lines to this writer thread instead of blocking on the socket
 }
 extern "C" void userAppExit() {
   socketExit();
@@ -216,7 +288,9 @@ extern "C" void userAppExit() {
 
 int main(int argc, char** argv) {
   (void)argc; (void)argv;
-  switch_set_exit_hook([] { host::close_log_file(); });
+  // Runs on exit(), abort() and Aurora's FATAL: flush the log and, when sampling, write the profile
+  // so a crash still leaves the hot-address table behind.
+  switch_set_exit_hook([] { switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
 #if !MELEE_NX_AURORA
   // The text console and libnx pad are the headless build's only UI. With the
   // renderer, Aurora's SDL window owns the display and the controllers.
@@ -268,6 +342,9 @@ int main(int argc, char** argv) {
   o.offline = true;
 #endif
   online.offline = o.offline;
+  // Code the recompiler did not translate (Slippi's Gecko routines placed in high memory, such as
+  // 80BECFF0) runs in the interpreter, as on the Mac. strict_aot=1 makes such a call fatal instead.
+  ppc::set_interpreter_allowed(get("strict_aot", "0") != "1");
   const std::string script = get("script", "");
   if (!script.empty() && !host::input_load_script(script.c_str()))
     std::printf("cannot load input script %s\n", script.c_str());
@@ -308,13 +385,34 @@ int main(int argc, char** argv) {
 #else
   host::log("Melee-NX-NetPlay %s: headless bring-up", MELEE_PORT_VERSION);
 #endif
-  host::log("execution: frames=%u fast=%s fp_profile=%s", o.frames, o.fast ? "true" : "false", ppc::fp_profile_name(ppc::fp_profile()));
+  host::log("execution: frames=%u fast=%s %s fp_profile=%s", o.frames, o.fast ? "true" : "false",
+            ppc::interpreter_allowed() ? "interpreter fallback allowed" : "strict AOT", ppc::fp_profile_name(ppc::fp_profile()));
   host::log("paths: iso=%s sys=%s profile=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), o.profile_dir.c_str(), o.cache_dir.c_str());
 
+  // The simulation thread gets core 2 to itself at the highest priority an application may use
+  // (0x1C); the main thread stays on core 1 and Aurora's workers float over cores 0-2. Sharing a core
+  // at one priority made the kernel rotate the game out every 10 ms. 0x28 is the fallback when the
+  // title we run under does not permit 0x1C.
+  // Renderer build: this thread sets up and then owns Aurora on core 1 (the main thread there
+  // only sleeps); the guest gets core 2 at the highest application priority from run_guest.
+  // Headless build: this thread runs the guest itself.
+  g_profiling = get("profile", "0") == "1";
   Thread sim;
-  Result rc = threadCreate(&sim, simulation_thread, nullptr, nullptr, kSimulationStack, 0x28, 1);
+#if MELEE_NX_AURORA
+  const int sim_priority = 0x28, sim_core = 1;   // the same priority as Aurora's workers, so they cannot preempt the renderer
+#else
+  const int sim_priority = 0x1C, sim_core = 2;
+#endif
+  Result rc = threadCreate(&sim, simulation_thread, nullptr, nullptr, kSimulationStack, sim_priority, sim_core);
+  if (R_FAILED(rc)) rc = threadCreate(&sim, simulation_thread, nullptr, nullptr, kSimulationStack, 0x2C, sim_core);
   if (R_FAILED(rc)) { std::printf("threadCreate failed: %08X\n", rc); consoleUpdate(nullptr); svcSleepThread(3'000'000'000ULL); consoleExit(nullptr); return 1; }
   threadStart(&sim);
+#if !MELEE_NX_AURORA
+  if (g_profiling) {
+    if (switch_profile_start(&sim, 1000)) host::log("profile: sampling the simulation thread at 1 kHz (Logs/profile.txt at exit)");
+    else host::log("profile: cannot start the sampler");
+  }
+#endif
 
   uint32_t last_retraces = 0;
   while (appletMainLoop()) {
@@ -339,6 +437,7 @@ int main(int argc, char** argv) {
   } else {
     threadWaitForExit(&sim);
     threadClose(&sim);
+    if (g_profiling) { switch_profile_stop((base + "/Logs/profile.txt").c_str()); host::log("profile: written to Logs/profile.txt"); }
   }
 #if !MELEE_NX_AURORA
   std::printf("\n%s (exit %d). Press + to leave.\n", g_result.c_str(), g_exit_code.load());
@@ -352,5 +451,7 @@ int main(int argc, char** argv) {
   consoleExit(nullptr);
 #endif
   switch_clocks_exit();   // the system restores its own clock policy for the next title
+  melee_nx_log_flush();
+  melee_nx_log_shutdown();   // join the writer thread; a thread alive past main() makes hbloader report an error
   return g_exit_code < 0 ? 0 : g_exit_code.load();
 }

@@ -128,4 +128,7 @@ std::unique_ptr<MetalFrontend> create_aurora_switch_frontend(const AuroraMetalCo
 void switch_frontend_set_overlay(std::function<void()> draw) {
   if (g_switch_backend) g_switch_backend->set_overlay(std::move(draw));
 }
+void switch_frontend_set_draw_dump(const std::string& path, uint8_t scene_major, uint8_t scene_minor, unsigned after) {
+  if (g_switch_backend) g_switch_backend->set_draw_dump(path, scene_major, scene_minor, after);
+}
 }  // namespace host

@@ -69,7 +69,17 @@ inline bool interrupts_on(const Context& c) { return (c.msr & 0x8000u) != 0; }
 using Fn = void (*)(Context&, uint8_t*);
 
 // ---- runtime services implemented in ppc_runtime.cpp ----
-void call(Context& c, uint8_t* m, uint32_t addr);         // indirect call by guest address
+// Indirect call by guest address. The dispatch table (one slot per aligned RAM word, filled by
+// init_dispatch) is a raw pointer so the lookup inlines into the thousands of call sites the
+// recompiler emits; anything without a translation goes to the interpreter.
+extern Fn* g_dispatch_table;
+void call_slow(Context& c, uint8_t* m, uint32_t addr);    // interpreter path
+inline Fn lookup(uint32_t addr) {
+  const uint32_t off = addr - RAM_BASE;
+  if (off >= RAM_SIZE || (addr & 3) || !g_dispatch_table) return nullptr;
+  return g_dispatch_table[off / 4];
+}
+
 void interpret(Context& c, uint8_t* m, uint32_t addr);    // run RAM-resident code until it returns (interp.cpp)
 void interpreter_stats(uint64_t* calls, uint64_t* insns);
 void set_interpreter_allowed(bool allowed);  // false by default: missing AOT targets fail closed
@@ -132,6 +142,14 @@ struct CallDepthScope {
   CallDepthScope(const CallDepthScope&) = delete;
   CallDepthScope& operator=(const CallDepthScope&) = delete;
 };
+inline void call(Context& c, uint8_t* m, uint32_t addr) {
+  if (Fn fn = lookup(addr)) {
+    CallDepthScope depth(c, addr);   // the host stack mirrors the guest's; exceptions unwind it
+    fn(c, m);
+  } else {
+    call_slow(c, m, addr);
+  }
+}
 // __longjmp: thrown by the HLE, caught by the translated function that called __setjmp on
 // `buf` (its body is wrapped in a retry loop; see Emitter). The catch restores the registers
 // the MSL longjmp would and resumes at the setjmp return address saved in the buffer.

@@ -8,8 +8,25 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace slippi::files {
+// std::filesystem::canonical resolves through realpath(), which the Switch's C library
+// does not implement for device paths ("romfs:/Sys", "sdmc:/..."): every lookup failed
+// there and the game panicked on its first Slippi file. Names reaching this header are
+// validated (valid_name below), so on the Switch a lexical normalisation plus an
+// existence check gives the same guarantees.
+inline std::filesystem::path resolve(const std::filesystem::path& path, std::error_code& error) {
+#if defined(__SWITCH__)
+  error.clear();
+  auto normal = path.lexically_normal();
+  if (!std::filesystem::exists(normal, error) && !error) error = std::make_error_code(std::errc::no_such_file_or_directory);
+  return error ? std::filesystem::path() : normal;
+#else
+  return std::filesystem::canonical(path, error);
+#endif
+}
+
 inline bool valid_name(std::string_view name) {
   if (name.empty() || name.size() > 63 || name.front() == '.' || name.back() == '.') return false;
   for (unsigned char c : name) {
@@ -32,18 +49,18 @@ inline std::optional<std::string> guest_name(const uint8_t* payload, size_t avai
 
 class GameFileRoot {
  public:
-  // Capture the canonical Sys root once at EXI initialization. Changing host
+  // Capture the resolved Sys root once at EXI initialization. Changing host
   // options later cannot redirect a running game's resource reads.
   explicit GameFileRoot(const std::filesystem::path& sys) {
     std::error_code error;
-    auto root = std::filesystem::canonical(sys, error);
+    auto root = resolve(sys, error);
     if (!error && std::filesystem::is_directory(root, error) && !error) root_ = std::move(root);
   }
 
   std::optional<std::filesystem::path> directory() const {
     if (root_.empty()) return std::nullopt;
     std::error_code error;
-    auto dir = std::filesystem::canonical(root_ / "GameFiles" / "GALE01", error);
+    auto dir = resolve(root_ / "GameFiles" / "GALE01", error);
     if (error || !within_root(dir) || !std::filesystem::is_directory(dir, error) || error) return std::nullopt;
     return dir;
   }
@@ -53,7 +70,7 @@ class GameFileRoot {
     const auto dir = directory();
     if (!dir) return std::nullopt;
     std::error_code error;
-    auto path = std::filesystem::canonical(*dir / (std::string(name) + (diff ? ".diff" : "")), error);
+    auto path = resolve(*dir / (std::string(name) + (diff ? ".diff" : "")), error);
     if (error || path.parent_path() != *dir || !std::filesystem::is_regular_file(path, error) || error)
       return std::nullopt;
     return path;

@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
 #include "fatal_boundary.h"
+#if defined(__SWITCH__)
+#include "log_switch.h"   // Melee-NX's writer thread: stdout (nxlink) leaves the calling thread at once
+#include <chrono>
+#endif
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -58,6 +62,25 @@ void log(const char* fmt, ...) {
   std::lock_guard<std::mutex> lock(log_mutex);
   if (log_closed) return;
   open_log_file();
+#if defined(__SWITCH__)
+  // Every write here used to be a synchronous service call (socket or SD card) on the
+  // simulation thread: a tenth of each frame. The line is formatted once, handed to the
+  // writer thread for stdout, and the file is flushed at most four times a second
+  // (fatal paths flush at once).
+  char line[2048];
+  va_list args; va_start(args, fmt); int n = std::vsnprintf(line, sizeof line - 1, fmt, args); va_end(args);
+  if (n < 0) return;
+  size_t len = std::min<size_t>((size_t)n, sizeof line - 2); line[len++] = '\n';
+  melee_nx_log_write(line, len);
+  if (log_file) {
+    std::fwrite(line, 1, len, log_file);
+    static auto next_flush = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next_flush) { std::fflush(log_file); next_flush = now + std::chrono::milliseconds(250); }
+  } else if (!log_tried) {
+    keep_pending(line, len);
+  }
+#else
   va_list args; va_start(args, fmt); std::vfprintf(stdout, fmt, args); va_end(args);
   std::fputc('\n', stdout); std::fflush(stdout);
   if (log_file) {
@@ -68,10 +91,17 @@ void log(const char* fmt, ...) {
     va_list copy; va_start(copy, fmt); int n = std::vsnprintf(line, sizeof line - 1, fmt, copy); va_end(copy);
     if (n > 0) { size_t len = std::min<size_t>((size_t)n, sizeof line - 2); line[len] = '\n'; keep_pending(line, len + 1); }
   }
+#endif
 }
 void log_guest_text(const char* data, size_t size) {
   std::lock_guard<std::mutex> lock(log_mutex);
   if (log_closed) return;
+#if defined(__SWITCH__)
+  melee_nx_log_write(data, size);
+  if (log_file) std::fwrite(data, 1, size, log_file);   // flushed with the next log line
+  else keep_pending(data, size);
+  return;
+#endif
   std::fwrite(data, 1, size, stdout); std::fflush(stdout);
   if (log_file) { std::fwrite(data, 1, size, log_file); std::fflush(log_file); }
   else keep_pending(data, size);
@@ -84,6 +114,9 @@ void log_guest_text(const char* data, size_t size) {
     std::fprintf(stderr, "\nFATAL: %s\n", reason);
     if (!log_closed && log_file) { std::fprintf(log_file, "\nFATAL: %s\n", reason); std::fflush(log_file); }
     std::fflush(stderr); std::fflush(stdout);
+#if defined(__SWITCH__)
+    melee_nx_log_flush();
+#endif
   }
   if (fatal_boundary_active()) throw HostFatal(reason);
   notify_fatal_observer(reason);

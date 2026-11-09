@@ -639,9 +639,20 @@ void retrace() {
       if (g_last_sim_ms > g_sim_ms_worst) g_sim_ms_worst = g_last_sim_ms;
       if (g_last_sim_ms > 16.7) {
         if (g_retraces > 300) ++g_late_frames;   // boot warm-up (shader and texture first use) is not gameplay
-        char detail[256] = ""; size_t n = 0;
-        for (int i = 0; i < SIM_COST_COUNT; ++i) if (g_sim_costs[i] * 1000.0 >= 0.5) n += (size_t)std::snprintf(detail + n, sizeof detail - n, " %s %.1f", g_sim_cost_names[i], g_sim_costs[i] * 1000.0);
-        log("sim frame %u took %.1f ms (ms:%s%s)", g_retraces, g_last_sim_ms, detail, n ? "" : " guest code");
+#if defined(__SWITCH__)
+        // While the console is CPU-bound every frame is late: one line a second keeps the
+        // log readable and the logging itself off the frame; the 60-frame summary has the rest.
+        static double next_late_log = 0.0;
+        const bool report = now >= next_late_log;
+        if (report) next_late_log = now + 1.0;
+#else
+        const bool report = true;
+#endif
+        if (report) {
+          char detail[256] = ""; size_t n = 0;
+          for (int i = 0; i < SIM_COST_COUNT; ++i) if (g_sim_costs[i] * 1000.0 >= 0.5) n += (size_t)std::snprintf(detail + n, sizeof detail - n, " %s %.1f", g_sim_cost_names[i], g_sim_costs[i] * 1000.0);
+          log("sim frame %u took %.1f ms (ms:%s%s)", g_retraces, g_last_sim_ms, detail, n ? "" : " guest code");
+        }
       }
     }
     std::memset(g_sim_costs, 0, sizeof g_sim_costs);

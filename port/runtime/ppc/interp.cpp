@@ -9,7 +9,6 @@
 #include <atomic>
 
 namespace ppc {
-Fn lookup(uint32_t addr);
 
 namespace {
 

@@ -72,6 +72,18 @@ uint32_t gamepads(PadState out[4]) {
     if (status[port].triggerRight > p.trig_r) p.trig_r = status[port].triggerRight;
     p.analog_a = status[port].analogA;
     p.analog_b = status[port].analogB;
+#if defined(__SWITCH__)
+    // Bring-up diagnostic: what the console's controller mapping delivers for the shoulders
+    // (digital L/R/Z bits and the analog pulls), at most twice a second and only on change.
+    static uint32_t last_key[4]; static double next_log = 0.0;
+    const uint32_t key = (status[port].button & (GC_L | GC_R | GC_Z)) | (uint32_t(status[port].triggerLeft >> 4) << 8) | (uint32_t(status[port].triggerRight >> 4) << 12);
+    const double t = now_seconds();
+    if (key != last_key[port] && t >= next_log) {
+      last_key[port] = key; next_log = t + 0.5;
+      log("pad %d: L=%u R=%u Z=%u analog L=%u R=%u", port + 1, (status[port].button & GC_L) ? 1 : 0, (status[port].button & GC_R) ? 1 : 0,
+          (status[port].button & GC_Z) ? 1 : 0, status[port].triggerLeft, status[port].triggerRight);
+    }
+#endif
   }
   return connected;
 }
@@ -143,6 +155,24 @@ void input_poll(PadState out[4]) {
       out[port].stick_x = pads[port].sx; out[port].stick_y = pads[port].sy;
       out[port].sub_x = pads[port].cx; out[port].sub_y = pads[port].cy;
     }
+#if defined(__SWITCH__)
+    // Real pads add to a scripted run (buttons OR, sticks when deflected): a person or the
+    // console's remote control can step in when the script's menu path goes wrong.
+    {
+      PadState live[4];
+      for (int i = 0; i < 4; ++i) { live[i] = {}; live[i].err = -1; }
+      gamepads(live);
+      for (int port = 0; port < 4; ++port) {
+        if (live[port].err != 0) continue;
+        if (out[port].err != 0) out[port].err = 0;
+        out[port].button |= live[port].button;
+        if (live[port].stick_x || live[port].stick_y) { out[port].stick_x = live[port].stick_x; out[port].stick_y = live[port].stick_y; }
+        if (live[port].sub_x || live[port].sub_y) { out[port].sub_x = live[port].sub_x; out[port].sub_y = live[port].sub_y; }
+        if (live[port].trig_l > out[port].trig_l) out[port].trig_l = live[port].trig_l;
+        if (live[port].trig_r > out[port].trig_r) out[port].trig_r = live[port].trig_r;
+      }
+    }
+#endif
     return;
   }
   // GameCube adapter ports take precedence. Port 1 is otherwise always present so the

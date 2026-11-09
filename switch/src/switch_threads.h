@@ -10,6 +10,8 @@ void switch_sync_clang_tls(void);
 // Runs once from exit/abort/_exit before svcExitProcess; flush logs here.
 typedef void (*switch_exit_hook_fn)(void);
 void switch_set_exit_hook(switch_exit_hook_fn hook);
+// Confine threads created through pthread from now on to `mask` (bit per core; 0 = default placement).
+void switch_set_pthread_cores(int preferred, uint64_t mask);
 #ifdef __cplusplus
 }
 #endif

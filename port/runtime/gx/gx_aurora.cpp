@@ -13,6 +13,7 @@
 #include <gx/gx.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <map>
 #include <optional>
@@ -31,7 +32,11 @@ void bp(uint8_t reg, uint32_t value) {
 }
 // EFB copy format (tp_realFormat with the intensity flag) -> the GX texture format the
 // game samples it as. Aurora converts the RGBA8 framebuffer into that format itself.
+// Experiment (Switch bring-up): every texture copy is kept as RGBA8 on the GPU and sampled as
+// RGBA8. Melee's shadow maps are 256x256 I4 intensity copies and the I4 path rendered noise.
+constexpr bool kCopiesAsRgba8 = true;
 GXTexFmt copy_format(const EfbCopy& c) {
+  if (kCopiesAsRgba8) return GX_TF_RGBA8;
   if (c.intensity) {
     switch (c.format) { case 0: return GX_TF_I4; case 2: return GX_TF_IA4; case 3: return GX_TF_IA8; case 8: return GX_TF_I8; default: return GX_TF_I8; }
   }
@@ -68,6 +73,8 @@ struct AuroraBackend::Impl {
   };
   std::map<TextureKey, TextureObject> textures;
   std::function<void()> overlay;
+  aurora_bridge::PreparedFrame prepared;   // reused every frame: its draws keep their byte buffers
+  std::string dump_path; uint8_t dump_major = 0, dump_minor = 0; unsigned dump_after = 0, dump_seen = 0; bool dump_armed = false;
 
   explicit Impl(AuroraOptions o) : options(o) {
     require_owner();
@@ -99,7 +106,8 @@ struct AuroraBackend::Impl {
   }
   TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source) {
     const void* source = copy_source ? copy_source : t.data->image.data();
-    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, t.format, t.mode0, t.mode1,
+    const uint32_t format = (copy_source && kCopiesAsRgba8) ? 6u : t.format;   // 6 = GX_TF_RGBA8
+    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format, t.mode0, t.mode1,
                          t.tlut_format, t.mip_levels, unit};
     auto [it, inserted] = textures.try_emplace(key);
     auto& obj = it->second;
@@ -109,15 +117,28 @@ struct AuroraBackend::Impl {
     const auto wrap_s = static_cast<GXTexWrapMode>(bits(t.mode0, 0, 2));
     const auto wrap_t = static_cast<GXTexWrapMode>(bits(t.mode0, 2, 2));
     const auto mips = t.mip_levels > 1 ? GX_TRUE : GX_FALSE;
-    obj.has_palette = t.format == 8 || t.format == 9 || t.format == 10;
+    obj.has_palette = format == 8 || format == 9 || format == 10;
     if (obj.has_palette) {
       GXInitTlutObj(&obj.palette, t.data->palette.data(), static_cast<GXTlutFmt>(t.tlut_format),
                     uint16_t(t.format == 8 ? 16 : t.format == 9 ? 256 : 16384));
-      GXInitTexObjCI(&obj.texture, source, uint16_t(t.width), uint16_t(t.height), static_cast<GXCITexFmt>(t.format),
+      GXInitTexObjCI(&obj.texture, source, uint16_t(t.width), uint16_t(t.height), static_cast<GXCITexFmt>(format),
                      wrap_s, wrap_t, mips, unit);
     } else {
-      GXInitTexObj(&obj.texture, source, uint16_t(t.width), uint16_t(t.height), static_cast<GXTexFmt>(t.format),
+      GXInitTexObj(&obj.texture, source, uint16_t(t.width), uint16_t(t.height), static_cast<GXTexFmt>(format),
                    wrap_s, wrap_t, mips);
+    }
+    // Aurora keys its conversion caches by object identity, which it derives from the data pointer.
+    // Snapshot buffers are short-lived and their addresses recycle, so give it the content instead:
+    // the snapshot hash (image ^ palette) for the texture, a hash of the palette bytes for the TLUT.
+    {
+      const uint64_t h = t.data->hash ^ (uint64_t(t.width) << 48) ^ (uint64_t(t.height) << 32) ^ (uint64_t(t.format) << 24);
+      __GXSetTexObjIdentity(&obj.texture, uint32_t(h) ^ uint32_t(h >> 32), 1);
+      if (obj.has_palette) {
+        uint64_t ph = 1469598103934665603ull;
+        for (uint8_t b : t.data->palette) ph = (ph ^ b) * 1099511628211ull;
+        ph ^= uint64_t(t.tlut_format) << 56;
+        __GXSetTlutObjIdentity(&obj.palette, uint32_t(ph) ^ uint32_t(ph >> 32), 1);
+      }
     }
     constexpr GXTexFilter hw_filter[8]{GX_NEAR, GX_NEAR_MIP_NEAR, GX_LIN_MIP_NEAR, GX_NEAR,
                                      GX_LINEAR, GX_NEAR_MIP_LIN, GX_LIN_MIP_LIN, GX_NEAR};
@@ -127,12 +148,51 @@ struct AuroraBackend::Impl {
                     bits(t.mode0, 8, 1) ? GX_FALSE : GX_TRUE, static_cast<GXAnisotropy>(bits(t.mode0, 19, 2)));
     return obj;
   }
+  // One frame of draw state, one line per draw, for finding what the Aurora path renders wrongly.
+  void write_draw_dump(const Frame& input, const aurora_bridge::PreparedFrame& frame) {
+    FILE* f = std::fopen(dump_path.c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "# frame seq=%llu scene %02X/%02X draws=%zu copies=%zu commands=%zu\n", (unsigned long long)input.sequence,
+                 input.scene_major, input.scene_minor, input.draws.size(), input.copies.size(), input.commands.size());
+    size_t draw_index = 0;
+    for (const auto& cmd : input.commands) {
+      if (cmd.kind != FrameCommand::Draw) { std::fprintf(f, "copy %u\n", unsigned(cmd.index)); continue; }
+      const auto& d = input.draws[cmd.index];
+      const bool skipped = cmd.index < frame.draws.size() && frame.draws[cmd.index].vertex_count == 0;
+      std::fprintf(f, "draw %zu%s prim=%02X verts=%u comps=%08X genmode=%08X texgens=%u tevstages=%u indstages=%u mtxidx=%08X/%08X zmode=%06X blend=%06X owner=%u\n",
+                   draw_index++, skipped ? " SKIPPED" : "", d.primitive, d.vertex_count, d.components, d.bp.reg[0], d.bp.numtexgens(),
+                   d.bp.numtevstages() + 1, d.bp.numindstages(), d.matrix_index_a, d.matrix_index_b, d.bp.reg[0x40] & 0xffffff,
+                   d.bp.reg[0x41] & 0xffffff, d.owner_player);
+      std::fprintf(f, "  xf: numtexgens=%u", d.xf_regs[0x3f]);
+      for (unsigned i = 0; i < 8; ++i) std::fprintf(f, " tg%u=%08X/post%08X", i, d.xf_regs[0x40 + i], d.xf_regs[0x50 + i]);
+      std::fprintf(f, " dualtex=%u colorchans=%u\n", d.xf_regs[0x12] & 1, d.xf_regs[0x09]);
+      std::fprintf(f, "  tev:");
+      for (unsigned s2 = 0; s2 <= d.bp.numtevstages(); ++s2)
+        std::fprintf(f, " [%u map=%d coord=%d en=%d c=%08X a=%08X ind=%08X]", s2, d.bp.order_texmap(int(s2)), d.bp.order_texcoord(int(s2)),
+                     d.bp.order_enable(int(s2)), d.bp.reg[0xC0 + s2 * 2] & 0xffffff, d.bp.reg[0xC1 + s2 * 2] & 0xffffff, d.bp.tevind(int(s2)) & 0xffffff);
+      std::fprintf(f, " ztex=%06X/%06X alpha=%06X\n", d.bp.reg[0x74] & 0xffffff, d.bp.reg[0x75] & 0xffffff, d.bp.reg[0xF3] & 0xffffff);
+      for (unsigned i = 0; i < 8; ++i) {
+        const auto& t = d.textures[i];
+        if (!t.used) continue;
+        std::fprintf(f, "  tex%u: addr=%08X %ux%u fmt=%u tlut=%08X/%u mode0=%08X mode1=%08X mips=%u image0=%08X\n", i, t.addr, t.width, t.height, t.format,
+                     t.tlut_addr, t.tlut_format, t.mode0, t.mode1, t.mip_levels, d.bp.teximage0(int(i)) & 0xffffff);
+      }
+    }
+    for (const auto& c : input.copies)
+      std::fprintf(f, "efbcopy: dest=%08X src=%u,%u %ux%u fmt=%08X clear=%d xfb=%d\n", c.dest_addr, c.src_x, c.src_y, c.src_w, c.src_h, c.format, c.clear ? 1 : 0, c.to_xfb ? 1 : 0);
+    std::fclose(f);
+  }
   void submit(const Frame& input) {
     require_owner();
     if (last_sequence && input.sequence <= *last_sequence)
       throw CoverageError("Aurora coverage: repeated/reversed source frame; reset_epoch is required after rollback");
-    const auto frame = aurora_bridge::prepare_frame(input, {options.logical_width, options.logical_height});
-    auto next_history = aurora_bridge::advance_copy_history(frame, copy_history); // Atomic validation before GPU recording.
+    aurora_bridge::prepare_frame(input, {options.logical_width, options.logical_height}, prepared);
+    const auto& frame = prepared;
+    if (dump_armed && input.scene_major == dump_major && input.scene_minor == dump_minor && ++dump_seen == dump_after) {
+      dump_armed = false;
+      write_draw_dump(input, frame);
+    }
+    aurora_bridge::advance_copy_history_in_place(frame, copy_history);   // warns only: nothing to roll back
     if (!aurora_begin_frame()) throw std::runtime_error("Aurora frame unavailable; owner must service the window before submission");
     for (const auto& cmd : frame.commands) {
       if (cmd.kind == FrameCommand::Draw) {
@@ -175,7 +235,6 @@ struct AuroraBackend::Impl {
     }
     if (overlay) overlay();
     aurora_end_frame(); // Drains FIFO; uploaded texture source bytes are now safe.
-    copy_history = std::move(next_history);
     last_sequence = input.sequence;
     ++counters.frames;
     for (auto it = textures.begin(); it != textures.end();) {
@@ -209,4 +268,8 @@ void AuroraBackend::reset_epoch(uint64_t epoch) {
 }
 AuroraStats AuroraBackend::stats() const { impl_->require_owner(); return impl_->counters; }
 void AuroraBackend::set_overlay(std::function<void()> draw) { impl_->require_owner(); impl_->overlay = std::move(draw); }
+void AuroraBackend::set_draw_dump(std::string path, uint8_t scene_major, uint8_t scene_minor, unsigned after) {
+  impl_->dump_path = std::move(path); impl_->dump_major = scene_major; impl_->dump_minor = scene_minor;
+  impl_->dump_after = after ? after : 1; impl_->dump_seen = 0; impl_->dump_armed = true;
+}
 } // namespace gx

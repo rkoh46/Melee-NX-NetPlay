@@ -115,7 +115,12 @@ void SDLCALL stream_callback(void*, SDL_AudioStream* stream, int additional_amou
 // frame, so the ring must hold at least one frame (16.7 ms) plus scheduling jitter: 20 ms measured
 // underrun-free; 12 ms starved several times a second. MELEE_AUDIO_SLACK_MS overrides. Underruns are
 // logged as they happen.
-int ring_slack_ms() { const char* e = std::getenv("MELEE_AUDIO_SLACK_MS"); int v = e ? std::atoi(e) : 20; return std::clamp(v, 4, 200); }
+#if defined(__SWITCH__)
+constexpr int kDefaultSlackMs = 40;   // the Switch build is still CPU-bound; a longer cushion hides single long frames
+#else
+constexpr int kDefaultSlackMs = 20;
+#endif
+int ring_slack_ms() { const char* e = std::getenv("MELEE_AUDIO_SLACK_MS"); int v = e ? std::atoi(e) : kDefaultSlackMs; return std::clamp(v, 4, 200); }
 bool device_open() {
   if (!SDL_WasInit(SDL_INIT_AUDIO)) {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { log("audio: SDL audio init failed: %s", SDL_GetError()); return false; }

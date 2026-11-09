@@ -39,7 +39,8 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
   third_party/slippilib/SlippiGame.cpp)
 
 set(PORT_SWITCH_SOURCES
-  "${PROJECT_SOURCE_DIR}/switch/src/switch_threads.c" "${PROJECT_SOURCE_DIR}/switch/src/switch_clocks.cpp")
+  "${PROJECT_SOURCE_DIR}/switch/src/switch_threads.c" "${PROJECT_SOURCE_DIR}/switch/src/switch_clocks.cpp"
+  "${PROJECT_SOURCE_DIR}/switch/src/switch_profile.cpp" "${PROJECT_SOURCE_DIR}/switch/src/log_switch.cpp")
 
 if(MELEE_NX_FRONTEND STREQUAL "headless")
   set(PORT_FRONTEND_SOURCES runtime/host/input_headless.cpp runtime/host/window_headless.cpp runtime/host/audio_headless.cpp)
@@ -52,7 +53,7 @@ else()
     runtime/host/input_sdl.cpp runtime/host/gc_adapter_none.cpp runtime/host/audio_sdl.cpp
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/switch_frontend_aurora.cpp
     runtime/host/game_menu.cpp runtime/host/input_config.cpp runtime/host/overlay_imgui.cpp runtime/host/switch_signin.cpp
-    runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp)
+    runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp runtime/gx/async_backend.cpp)
   option(MELEE_NX_ONLINE "Build the Slippi online services (ENet netplay, matchmaking, login, reports) into the renderer frontend" ON)
   set(PORT_ONLINE ${MELEE_NX_ONLINE})
   if(PORT_ONLINE)

@@ -16,6 +16,7 @@ port="${NX_FTP_PORT:-5000}"
 base="ftp://$ip:$port"
 app="switch/melee-nx-netplay"
 ftp() { curl -sS --connect-timeout 10 --ftp-method nocwd "$@"; }
+mkd() { curl -sS --connect-timeout 10 -Q "MKD /$1" "$base/" -o /dev/null 2>/dev/null || true; }  # ftpd answers 553 instead of creating parents
 
 case "$cmd" in
   ls)
@@ -41,10 +42,12 @@ case "$cmd" in
     nro="$repo/build/switch-$frontend/port/melee-nx-netplay.nro"
     [[ -f "$nro" ]] || { echo "no $nro" >&2; exit 66; }
     ini="$repo/dist/sd/$app/launcher.ini"
+    mkd "switch"; mkd "$app"; mkd "$app/Logs"
     ftp --ftp-create-dirs -T "$nro" "$base/$app/melee-nx-netplay.nro" && echo "  $app/melee-nx-netplay.nro ($(du -h "$nro" | cut -f1))"
     [[ -f "$ini" ]] && ftp --ftp-create-dirs -T "$ini" "$base/$app/launcher.ini" && echo "  $app/launcher.ini" ;;
   iso)
     iso="${1:?path to GALE01.iso}"
+    mkd "switch"; mkd "$app"
     ftp --ftp-create-dirs --progress-bar -T "$iso" "$base/$app/GALE01.iso" && echo "  $app/GALE01.iso" ;;
   *) echo "unknown command $cmd" >&2; exit 64 ;;
 esac

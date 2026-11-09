@@ -1,0 +1,37 @@
+--- a/lib/dolphin/gx/GXTexture.cpp
++++ b/lib/dolphin/gx/GXTexture.cpp
+@@ -348,6 +348,21 @@
+   SET_REG_FIELD(0, obj->loadTlut0, 8, 24, 0x64);
+ }
+ 
++// A host that keeps texture and palette bytes in its own short-lived buffers cannot rely on the
++// pointer-derived identities above: a freed buffer's address is reused by different content
++// within the object caches' lifetime, and the stale conversion is served. Such a host sets an
++// identity from the content instead (any hash; version distinguishes revisions).
++void __GXSetTexObjIdentity(GXTexObj* obj_, u32 id, u32 version) {
++  auto* obj = reinterpret_cast<GXTexObj_*>(obj_);
++  obj->texObjId = id ? id : 1;
++  obj->texDataVersion = version;
++}
++void __GXSetTlutObjIdentity(GXTlutObj* obj_, u32 id, u32 version) {
++  auto* obj = reinterpret_cast<GXTlutObj_*>(obj_);
++  obj->tlutObjId = id ? id : 1;
++  obj->tlutDataVersion = version;
++}
++
+ void GXInitTlutObjData(GXTlutObj* obj_, const void* data) {
+   auto* obj = reinterpret_cast<GXTlutObj_*>(obj_);
+   obj->data = data;
+--- a/include/dolphin/gx/GXExtra.h
++++ b/include/dolphin/gx/GXExtra.h
+@@ -22,6 +22,10 @@
+ 
+ void GXColor4f32(float r, float g, float b, float a);
+ 
++
++// Content-based identities for texture and palette objects (see GXTexture.cpp).
++void __GXSetTexObjIdentity(GXTexObj* obj, u32 id, u32 version);
++void __GXSetTlutObjIdentity(GXTlutObj* obj, u32 id, u32 version);
+ #ifdef __cplusplus
+ }
+ #endif

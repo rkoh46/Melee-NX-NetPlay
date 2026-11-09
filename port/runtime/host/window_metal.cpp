@@ -43,6 +43,9 @@ void window_pump() {
   if (!g_frontend) return;
   static const bool diag_no_pump = std::getenv("MELEE_DIAG_NO_PUMP") != nullptr;   // isolation aid
   if (diag_no_pump) return;
+  // With the renderer on its own thread (gx::AsyncBackend), that thread pumps between frames;
+  // the guest's per-retrace call is then a no-op.
+  if (!g_frontend->on_owner_thread()) return;
   if (!g_frontend->pump_events()) request_exit(0);
   const auto size = g_frontend->window_size();
   if ((size.width != g_last_size.width || size.height != g_last_size.height) &&

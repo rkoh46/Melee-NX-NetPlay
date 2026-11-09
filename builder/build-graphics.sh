@@ -73,7 +73,8 @@ prepare() {
   apply_patch_once "$dawn"                        "$repo/switch/patches/dawn-switch-renderdoc.patch"
   if [[ "$sdl_variant" == dusklight ]]; then
     apply_sdl_stack "$sdl" "$repo/switch/patches/sdl-dusklight-switch.patch" \
-                           "$repo/switch/patches/sdl-dusklight-melee-nx.patch"
+                           "$repo/switch/patches/sdl-dusklight-melee-nx.patch" \
+                           "$repo/switch/patches/sdl-dusklight-gc-layout.patch"
   else
     apply_patch_once "$sdl"                       "$repo/switch/patches/sdl-switch-external-graphics.patch"
   fi
@@ -95,6 +96,9 @@ prepare() {
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-runtime-fixes.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-io-atomic.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-pad-trigger-bind.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-texgen-fallback.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-system-pad-layout.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-object-identity.patch"
 }
 
 build_dawn() {

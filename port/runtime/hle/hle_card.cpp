@@ -58,8 +58,14 @@ void save(File& f) {
   bool ok = std::fwrite(f.dir, 1, 64, out) == 64 && std::fwrite(f.data.data(), 1, f.data.size(), out) == f.data.size();
   std::fclose(out);
   std::error_code ec;
+#if defined(__SWITCH__)
+  // The SD card's FAT rename does not replace an existing file (EEXIST), which left every save
+  // after the first on disk as .tmp and the game reporting a corrupted card at the next boot.
+  if (ok) std::filesystem::remove(f.path, ec);
+  ec.clear();
+#endif
   if (ok) std::filesystem::rename(tmp, f.path, ec);
-  if (!ok || ec) host::log("card: failed to save %s", f.path.c_str());
+  if (!ok || ec) host::log("card: failed to save %s (%s)", f.path.c_str(), ec ? ec.message().c_str() : "write error");
 }
 
 void mount() {

@@ -128,8 +128,19 @@ typedef struct {
     ThreadRec* rec;
 } TrampolineCtx;
 
+// Cores the wrapped pthreads may run on (0 = the kernel's default placement). The game thread
+// owns core 2 at the highest application priority; a helper thread placed there by the
+// scheduler waits behind it for seconds, so the renderer's helpers are confined to cores 0-1.
+static uint64_t pthread_core_mask = 0;
+static int pthread_core_preferred = -1;
+void switch_set_pthread_cores(int preferred, uint64_t mask) {
+    pthread_core_preferred = preferred;
+    pthread_core_mask = mask;
+}
+
 static void* thread_trampoline(void* raw) {
     switch_sync_clang_tls();
+    if (pthread_core_mask) svcSetThreadCoreMask(CUR_THREAD_HANDLE, pthread_core_preferred, pthread_core_mask);
     TrampolineCtx ctx = *(TrampolineCtx*)raw;
     free(raw);
     void* result = ctx.start(ctx.arg);
@@ -154,7 +165,16 @@ __attribute__((noreturn)) static void fast_exit(void) {
     __builtin_unreachable();
 }
 
-__attribute__((noreturn)) void __wrap_exit(int code) { (void)code; fast_exit(); }
+extern void __real_exit(int code);
+// A normal exit must go back through libnx so nx-hbloader regains control and returns to the
+// Homebrew Menu; svcExitProcess from an NRO ends hbloader itself, which the system reports as
+// "The software was closed because an error occurred". abort/_exit keep the fast path.
+__attribute__((noreturn)) void __wrap_exit(int code) {
+    if (exit_hook) exit_hook();
+    fflush(NULL);
+    __real_exit(code);
+    __builtin_unreachable();
+}
 __attribute__((noreturn)) void __wrap__exit(int code) { (void)code; fast_exit(); }
 __attribute__((noreturn)) void __wrap_abort(void) { fast_exit(); }
 

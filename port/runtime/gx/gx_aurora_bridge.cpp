@@ -69,7 +69,7 @@ void validate_texture(const Frame& frame, const std::string& where, const Textur
     fail(frame, where, "palette format or immutable palette bytes are incomplete");
 }
 
-Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCall* prev) {
+void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCall* prev, Draw& out) {
   const auto& d = frame.draws[index];
   const std::string where = "draw " + std::to_string(index);
   const auto check = [&](bool ok, const char* reason) { if (!ok) fail(frame, where, reason); };
@@ -150,7 +150,7 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
     check(d.textures[bits(d.bp.iref(), s * 6, 3)].used && bits(d.bp.iref(), s * 6 + 3, 3) < texgens,
           "indirect stage source was not captured");
 
-  Draw out;
+  out.state.clear(); out.vertices.clear();   // the caller's Draw keeps its buffers between frames
   out.primitive = uint8_t(d.primitive); out.vertex_count = uint16_t(d.vertex_count);
   std::copy(std::begin(d.textures), std::end(d.textures), out.textures.begin());
   auto& state = out.state;
@@ -291,7 +291,6 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
       for (float x : v.uv[t]) { check(std::isfinite(x), "non-finite texture coordinate"); f32(out.vertices, x); }
   }
   out.vertex_stride = uint32_t(out.vertices.size() / d.vertex_count);
-  return out;
 }
 
 void validate_copy(const Frame& frame, size_t index, Extent extent) {
@@ -334,9 +333,15 @@ void validate_copy(const Frame& frame, size_t index, Extent extent) {
 } // namespace
 
 PreparedFrame prepare_frame(const Frame& frame, Extent extent) {
+  PreparedFrame out;
+  prepare_frame(frame, extent, out);
+  return out;
+}
+
+void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
+  out.skipped_copies.clear();
   if (!extent.width || !extent.height || extent.width > EFB_WIDTH || extent.height > EFB_HEIGHT)
     fail(frame, "extent", "invalid logical framebuffer dimensions");
-  PreparedFrame out;
   out.sequence = frame.sequence;
   std::vector<bool> seen_draw(frame.draws.size()), seen_copy(frame.copies.size());
   unsigned xfb_count = 0;
@@ -362,24 +367,23 @@ PreparedFrame prepare_frame(const Frame& frame, Extent extent) {
   if (xfb_count != 1 || std::find(seen_draw.begin(), seen_draw.end(), false) != seen_draw.end() ||
       std::find(seen_copy.begin(), seen_copy.end(), false) != seen_copy.end())
     fail(frame, "commands", "missing final XFB or unreferenced captured work");
-  out.draws.reserve(frame.draws.size());
-  out.draws.resize(frame.draws.size());
+  if (out.draws.size() < frame.draws.size()) out.draws.resize(frame.draws.size());   // grows only; buffers persist
   const DrawCall* previous = nullptr;   // last emitted draw since the frame start or the last copy
   for (const auto& cmd : frame.commands) {
     if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
     try {
-      out.draws[i] = convert_draw(frame, i, extent, previous);
+      convert_draw(frame, i, extent, previous, out.draws[i]);
       previous = &frame.draws[i];
     } catch (const CoverageError& error) {
       // One draw the bridge cannot represent must not take the frame down.
       warn(frame, "draw " + std::to_string(i), error.what());
-      out.draws[i] = Draw{};   // vertex_count 0: the renderer skips it
+      out.draws[i].vertex_count = 0;   // the renderer skips it
+      out.draws[i].state.clear(); out.draws[i].vertices.clear();
     }
   }
   out.copies = frame.copies;
   out.commands = frame.commands;
-  return out;
 }
 
 namespace {
@@ -389,6 +393,12 @@ void warn_history(const char* reason) {
 }
 }  // namespace
 CopyHistory advance_copy_history(const PreparedFrame& frame, CopyHistory history) {
+  advance_copy_history_in_place(frame, history);
+  return history;
+}
+// The in-place form: this pass only warns, so there is nothing to roll back, and copying the
+// history map (up to 4096 nodes) every frame was most of the render thread's allocation.
+void advance_copy_history_in_place(const PreparedFrame& frame, CopyHistory& history) {
   for (const auto& cmd : frame.commands) {
     if (cmd.kind == FrameCommand::Copy) {
       const auto& c = frame.copies.at(cmd.index);
@@ -418,6 +428,5 @@ CopyHistory advance_copy_history(const PreparedFrame& frame, CopyHistory history
       }
     }
   }
-  return history;
 }
 } // namespace gx::aurora_bridge

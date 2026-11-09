@@ -18,6 +18,7 @@
 namespace ppc {
 
 static std::vector<Fn> g_dispatch;   // indexed by (addr - RAM_BASE) / 4
+Fn* g_dispatch_table = nullptr;      // g_dispatch.data() once init_dispatch has run (inline lookup in ppc.h)
 static uint8_t g_locked_cache[LC_SIZE];
 static std::atomic<bool> g_interpreter_allowed{false};
 static std::mutex g_fallback_mutex;
@@ -176,19 +177,12 @@ void init_dispatch() {
     uint32_t off = e.addr - RAM_BASE;
     if (off < RAM_SIZE) g_dispatch[off / 4] = e.fn;
   }
+  g_dispatch_table = g_dispatch.data();
 }
 
-Fn lookup(uint32_t addr) {
-  uint32_t off = addr - RAM_BASE;
-  if (off >= RAM_SIZE || (addr & 3) || off / 4 >= g_dispatch.size()) return nullptr;
-  return g_dispatch[off / 4];
-}
-
-void call(Context& c, uint8_t* m, uint32_t addr) {
-  Fn fn = lookup(addr);
+void call_slow(Context& c, uint8_t* m, uint32_t addr) {
   CallDepthScope depth(c, addr);
-  if (fn) fn(c, m);
-  else interpret(c, m, addr);   // code that only exists in RAM (dat-loaded routines)
+  interpret(c, m, addr);   // code that only exists in RAM (dat-loaded routines)
 }
 
 uint64_t g_enter_count = 0;
