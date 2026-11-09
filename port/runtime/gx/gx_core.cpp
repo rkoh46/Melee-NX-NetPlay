@@ -335,7 +335,8 @@ void capture_raw_vertices(const VertexDesc& d, uint32_t fmt, const uint8_t* src,
   auto& out = g_frame.raw_vertices;
   const size_t at = out.size(), bytes = size_t(count) * d.size;
   out.insert(out.end(), src, src + bytes);   // one copy (resize then memcpy zero-filled the bytes first)
-  g_raw_pending = RawPending{};
+  // Reset in place (a temporary RawPending built and destroyed 12 shared_ptrs per draw).
+  for (auto& a : g_raw_pending.arrays) { a.data.reset(); a.stride = a.first_index = a.count = a.bytes = 0; }
   g_raw_pending.fmt = fmt; g_raw_pending.offset = uint32_t(at); g_raw_pending.size = uint32_t(bytes); g_raw_pending.desc = &d; g_raw_pending.valid = true;
   const uint8_t* verts = out.data() + at;
   for (uint32_t k = 0; k < d.indexed_count; ++k) {
@@ -511,7 +512,9 @@ void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t co
     uint32_t ordinal = g_immediate_draws[k]++;
     dc.identity = hash_bytes(&k, 8) ^ ((uint64_t)ordinal << 44) ^ 2;
   }
-  { host::SimCostScope cost(host::SIM_OBSERVE);
+  if (g_state_deltas) {   // observation is off for Aurora (set_render_observe): nothing to ask
+    dc.object_generation = 0; dc.owner_player = 0xFF; dc.skinned = false;
+  } else { host::SimCostScope cost(host::SIM_OBSERVE);
     dc.identity = observed_draw_identity(dc.identity, dc.object_generation);
     dc.owner_player = observed_owner();   // SkipInit above means this has to be written every draw
     dc.skinned = observed_skinned();
@@ -708,6 +711,7 @@ void init(Backend* backend) {
   g_backend = backend;
   g_raw_vertices = backend && backend->wants_raw_vertices();
   g_state_deltas = backend && backend->wants_state_deltas();
+  set_render_observe(!g_state_deltas);   // Aurora uses no draw identities, authored poses or owner tints
   std::memset(&g_bp, 0, sizeof g_bp);
   std::memset(&g_cp, 0, sizeof g_cp);
   std::memset(&g_xf, 0, sizeof g_xf);

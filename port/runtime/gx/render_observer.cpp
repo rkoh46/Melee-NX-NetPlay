@@ -292,7 +292,10 @@ std::shared_ptr<const AuthoredPose> capture_envelope(Reader& r) {
   return pose;
 }
 }
+namespace { bool g_observe = true; }
+void set_render_observe(bool enabled) { g_observe = enabled; }
 RenderObserver::RenderObserver(ppc::Context& cpu, Observe kind, uint8_t* memory) : cpu_(cpu), kind_(kind) {
+  if (!g_observe) { active_ = false; return; }
   if (kind == Observe::LoadJoint) loaded_joint_ = cpu.r[3];
   if (kind == Observe::ReleaseJoint) joints.erase(cpu.r[3]);
   if (kind == Observe::RigidMatrix) { rigid = true; envelope = false; rigid_vmtx = cpu.r[4]; }
@@ -314,6 +317,7 @@ RenderObserver::RenderObserver(ppc::Context& cpu, Observe kind, uint8_t* memory)
   current_pass = hash_bytes(pass, sizeof pass); current_draw = 0;
 }
 RenderObserver::~RenderObserver() {
+  if (!active_) return;
   if (kind_ == Observe::AllocateJoint && cpu_.r[3]) joints[cpu_.r[3]] = next_generation++;
   // JObjLoad takes the joint in r3 and returns a status, so the pointer has to come from entry.
   if (kind_ == Observe::LoadJoint && loaded_joint_ && !joints.count(loaded_joint_)) joints[loaded_joint_] = next_generation++;

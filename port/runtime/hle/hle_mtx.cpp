@@ -44,9 +44,9 @@ static void concat_body(ppc::Context& c, uint8_t* m) {
       const double a0 = A[r][0], a1 = A[r][1], a2 = A[r][2], a3 = A[r][3];
       for (int col = 0; col < 4; ++col) {
         double t = double(float(B[0][col] * a0));
-        t = double(float(std::fma(B[1][col], a1, t)));
-        t = double(float(std::fma(B[2][col], a2, t)));
-        if (col >= 2) t = double(float(std::fma(col == 3 ? 1.0 : 0.0, a3, t)));   // Unit01 lane
+        t = double(float(ppc::detail::hardware_madd(B[1][col], a1, t)));
+        t = double(float(ppc::detail::hardware_madd(B[2][col], a2, t)));
+        if (col >= 2) t = double(float(ppc::detail::hardware_madd(col == 3 ? 1.0 : 0.0, a3, t)));   // Unit01 lane
         R[r][col] = t;
         nan |= std::isnan(t);
       }
@@ -135,13 +135,13 @@ static bool inverse_transpose_plain(ppc::Context& c, uint8_t* m, uint32_t src, u
   double f2 = r(m00 * m11);
   f1 = r(m20 * f1);
   const double f3 = r(m02 * m10);
-  f1 = r(std::fma(m22, f2, f1));
+  f1 = r(ppc::detail::hardware_madd(m22, f2, f1));
   f2 = r(m20 * m11);
   const double f5 = r(m00 * m21);
-  f1 = r(std::fma(m21, f3, f1));
-  f1 = -r(std::fma(m02, f2, -f1));
-  f1 = -r(std::fma(m22, f4, -f1));
-  const double det = -r(std::fma(m12, f5, -f1));
+  f1 = r(ppc::detail::hardware_madd(m21, f3, f1));
+  f1 = -r(ppc::detail::hardware_madd(m02, f2, -f1));
+  f1 = -r(ppc::detail::hardware_madd(m22, f4, -f1));
+  const double det = -r(ppc::detail::hardware_madd(m12, f5, -f1));
   if (!std::isfinite(det)) return false;
   const double eps = ppc::float_bits_to_double(ppc::ld32(c, m, c.r[2] - 5000u));
   if (std::fabs(float(det)) < eps) return false;   // singular: the exact path copies (rare)
@@ -154,7 +154,7 @@ static bool inverse_transpose_plain(ppc::Context& c, uint8_t* m, uint32_t src, u
   }
   const auto E = [&](double a, double b, double cc, double d, bool negate) {
     const double t = r(a * b);
-    const double u = negate ? -r(std::fma(cc, d, -t)) : r(std::fma(cc, d, -t));
+    const double u = negate ? -r(ppc::detail::hardware_madd(cc, d, -t)) : r(ppc::detail::hardware_madd(cc, d, -t));
     return r(inv * u);
   };
   const double out[9] = {E(e21, e12, e11, e22, false), E(e21, e02, e01, e22, true), E(e11, e02, e01, e12, false),

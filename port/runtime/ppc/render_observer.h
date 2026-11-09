@@ -16,6 +16,7 @@ class RenderObserver {
   uint8_t saved_owner_ = 0xFF;
   uint32_t loaded_joint_ = 0;   // JObjLoad: the joint, taken at entry
   bool saved_rigid_ = false, saved_envelope_ = false;
+  bool active_ = true;            // false when observation is off (set_render_observe): constructor and destructor do nothing
   std::shared_ptr<const AuthoredPose> saved_pose_;
  public:
   RenderObserver(ppc::Context& cpu, Observe kind, uint8_t* memory = nullptr);
@@ -23,6 +24,8 @@ class RenderObserver {
   RenderObserver(const RenderObserver&) = delete;
   RenderObserver& operator=(const RenderObserver&) = delete;
 };
+// Off for renderers that use none of it (draw identities, authored poses, owner tint): Aurora.
+void set_render_observe(bool enabled);
 uint64_t observed_draw_identity(uint64_t fallback, uint64_t& generation);
 void finish_observed_frame();
 void set_authored_capture(bool enabled);
