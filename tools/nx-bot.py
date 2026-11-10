@@ -36,7 +36,8 @@ class Bot:
             buf += chunk
         return buf.decode(errors="replace").strip()
 
-    def click(self, b): self.send(f"click {b}")
+    # A held press: sys-botbase's own "click" is sometimes too short for the system to register.
+    def click(self, b): self.send(f"press {b}"); time.sleep(0.12); self.send(f"release {b}")
     def press(self, b): self.send(f"press {b}")
     def release(self, b): self.send(f"release {b}")
     def stick(self, which, x, y): self.send(f"setStick {which} {int(x):#x} {int(y):#x}")
@@ -93,8 +94,7 @@ def quit_app(bot, shots_dir):
         state = classify(path)
         print(f"[quit] step {step}: {state}", flush=True)
         if state == "hbmenu": return True
-        if state == "error":   # the system's error dialog ignores a quick click: hold A
-            bot.press("A"); time.sleep(0.4); bot.release("A"); time.sleep(2.5); continue
+        if state == "error": bot.click("A"); time.sleep(2.5); continue
         if state == "home": return True
         if state == "home-playing":
             bot.click("X"); time.sleep(1.2)          # "Close the software?"
@@ -108,6 +108,9 @@ def launch_hbmenu(bot, shots_dir):
     (hold R while the first game tile launches) and arm the netloader with Y."""
     import os
     os.makedirs(shots_dir, exist_ok=True)
+    # Re-attach sys-botbase's virtual controller: Change Grip/Order (or a reconnect) drops it, and
+    # every press is then silently ignored. The next input after a detach attaches it afresh.
+    bot.send("detachController"); time.sleep(1.5)
     held_r = False
     for step in range(30):
         path = os.path.join(shots_dir, f"launch-{step}.jpg")
