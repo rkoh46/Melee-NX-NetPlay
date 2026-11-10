@@ -39,12 +39,15 @@ does not match (MWCC contraction choices) stay translated. Anything whose result
 (joint matrices read by hitboxes, physics) must match exactly or stays translated, because Slippi
 peers run the original code.
 
-## Status (2026-11-09)
+## Status (2026-11-10)
 
-The pipeline works end to end: state.c, tev.c, tobj.c, mobj.c, dobj.c and pobj.c lower into 182
-native functions (137 hooked) and the game runs on them, Battlefield 10.2 -> 9.4 ms. It is off
-(`port/recomp/gml_files.txt` is empty) because the match diverges from the translation and stock
-icons draw with the wrong palette. Found and fixed on the way:
+On: state.c, tev.c, tobj.c, mobj.c, dobj.c and pobj.c run natively (134 hooked functions). The CPU
+matches play identically to the translation (same fingerprints on Battlefield 2p and 4p and Mute
+City; Fountain of Dreams identical frame for frame after loading one frame later, which is disc
+timing). Battlefield 10.1 -> 9.6 ms, Mute City 18.2 -> 16.2, Fountain of Dreams 12.9 -> 11.4,
+4-player Battlefield 17.0 -> 16.4. The divergence came from header-inline memcpy/memset/memmove
+being compiled and hooked over the game's own; C library routines now stay the game's. Found and
+fixed on the way:
 
 * globals must be externalised before optimisation (a `static` the file never reads was deleted;
   const tables could be folded although Slippi patches data at run time);
@@ -54,6 +57,9 @@ icons draw with the wrong palette. Found and fixed on the way:
   unused register bits): native frames leave different leftovers, which only changes channels and
   bits the GPU ignores; `gml_verify` masks those.
 
-Next: a verifier that checks every call (not one in 512) by recording only the bytes each side
-writes, to find the first call that diverges; and matching the original frame sizes so translated
-callees see the same stack.
+* by-value struct arguments reuse one scratch area per call (they had accumulated past the frame);
+* finding a divergence: frame_trace=1 logs GX counters every frame (diff two builds' logs), then
+  gml_verify_frames=A:B compares every native call in that window (audio buffers excluded: audio
+  callbacks run inside the translation's loops, not inside native code).
+
+Next: jobj.c, fobj.c, aobj.c (joints and animation, the per-character cost), then the rest of HSD.

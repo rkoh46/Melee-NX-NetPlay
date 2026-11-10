@@ -48,7 +48,8 @@ namespace {
   exit(1);
 }
 
-constexpr unsigned kOutArgWords = 8;   // outgoing stack-argument words reserved at 8(r1) of every frame
+constexpr unsigned kOutArgWords = 8;
+constexpr uint64_t kScratch = 256;     // by-value copies of one call (checked at each call)   // outgoing stack-argument words reserved at 8(r1) of every frame
 struct Lowerer {
   Module& M;
   const DataLayout GDL;          // the guest (PowerPC) layout the IR was built for
@@ -247,6 +248,7 @@ struct Lowerer {
     std::map<AllocaInst*, uint64_t> allocaOffset;
     DenseMap<Value*, Value*> host;   // pointers into host constants (hostConst)
     uint64_t byvalOffset = 0;    // scratch for by-value copies, after the allocas
+    uint64_t scratchBase = 0;    // where that scratch starts: each call reuses it (copies live only for the call)
   };
 
   Value* constAddr(Constant* c, IRBuilder<>& b) {
@@ -320,6 +322,7 @@ struct Lowerer {
   Value* guestCall(FnState& s, CallBase& cb, Value* target, IRBuilder<>& b) {
     unsigned gi = 3, fi = 1, stackWords = 0;
     bool anyFloat = false;
+    s.byvalOffset = s.scratchBase;   // this call's by-value copies (previous calls' are dead)
     auto setR = helper("gml_set_r", Type::getVoidTy(C), {I32, I32});
     auto setF = helper("gml_set_f", Type::getVoidTy(C), {I32, Type::getDoubleTy(C)});
     for (unsigned i = 0; i < cb.arg_size(); ++i) {
@@ -330,6 +333,7 @@ struct Lowerer {
         Type* bt = cb.getParamByValType(i);
         uint64_t size = GDL.getTypeAllocSize(bt);
         uint64_t off = (s.byvalOffset + 7) & ~7ull; s.byvalOffset = off + size;
+        if (s.byvalOffset > s.scratchBase + kScratch) fail("by-value arguments of one call exceed the frame scratch in " + s.oldF->getName());
         Value* dst = b.CreateAdd(s.frameBase, ConstantInt::get(I32, off));
         b.CreateCall(helper("gml_memcpy", Type::getVoidTy(C), {I32, I32, I32}), {dst, m, ConstantInt::get(I32, size)});
         m = dst; t = PointerType::getUnqual(C);
@@ -515,11 +519,13 @@ struct Lowerer {
     }
     if (callee && !callee->isDeclaration()) {
       std::vector<Value*> args;
+      s.byvalOffset = s.scratchBase;
       for (unsigned i = 0; i < cb.arg_size(); ++i) {
         Value* a = V(s, cb.getArgOperand(i), b);
         if (cb.isByValArgument(i)) {   // the callee owns a copy: made in this frame's scratch
           uint64_t size = GDL.getTypeAllocSize(cb.getParamByValType(i));
           uint64_t off = (s.byvalOffset + 7) & ~7ull; s.byvalOffset = off + size;
+        if (s.byvalOffset > s.scratchBase + kScratch) fail("by-value arguments of one call exceed the frame scratch in " + s.oldF->getName());
           Value* dst = b.CreateAdd(s.frameBase, ConstantInt::get(I32, off));
           b.CreateCall(helper("gml_memcpy", Type::getVoidTy(C), {I32, I32, I32}), {dst, a, ConstantInt::get(I32, size)});
           a = dst;
@@ -535,11 +541,13 @@ struct Lowerer {
       for (Type* t : callee->getFunctionType()->params()) pts.push_back(mapType(t));
       FunctionCallee nf = M.getOrInsertFunction("gml_" + callee->getName().str(), FunctionType::get(mapType(callee->getReturnType()), pts, false));
       std::vector<Value*> args;
+      s.byvalOffset = s.scratchBase;
       for (unsigned i = 0; i < cb.arg_size(); ++i) {
         Value* a = V(s, cb.getArgOperand(i), b);
         if (cb.isByValArgument(i)) {
           uint64_t size = GDL.getTypeAllocSize(cb.getParamByValType(i));
           uint64_t off = (s.byvalOffset + 7) & ~7ull; s.byvalOffset = off + size;
+        if (s.byvalOffset > s.scratchBase + kScratch) fail("by-value arguments of one call exceed the frame scratch in " + s.oldF->getName());
           Value* dst = b.CreateAdd(s.frameBase, ConstantInt::get(I32, off));
           b.CreateCall(helper("gml_memcpy", Type::getVoidTy(C), {I32, I32, I32}), {dst, a, ConstantInt::get(I32, size)});
           a = dst;
@@ -588,7 +596,7 @@ struct Lowerer {
       }
     IRBuilder<> b(s.bmap[&oldF->getEntryBlock()]);
     if (any || calls) {
-      uint64_t scratch = 256;   // by-value argument copies for guest calls
+      uint64_t scratch = kScratch;   // by-value argument copies, reused by every call
       uint64_t frame = (off + scratch + 15) & ~15ull;
       auto getR = helper("gml_get_r", I32, {I32});
       s.savedSp = b.CreateCall(getR, {ConstantInt::get(I32, 1)}, "sp");
@@ -597,6 +605,7 @@ struct Lowerer {
       b.CreateCall(helper("gml_set_r", Type::getVoidTy(C), {I32, I32}), {ConstantInt::get(I32, 1), nsp});
       s.frameBase = nsp;
       s.byvalOffset = off;
+      s.scratchBase = off;
     }
     ReversePostOrderTraversal<Function*> rpot(oldF);
     for (BasicBlock* bb : rpot) {
@@ -621,6 +630,10 @@ struct Lowerer {
     loadSymbols();
     loadDol();
     findHostConstants();
+    // C library routines a header defines inline (memcpy, memset, ...) stay the game's own: native
+    // code calls Melee's copies, so even overlapping or odd uses behave exactly as on the GameCube.
+    for (const char* n : {"memcpy", "memmove", "memset", "memcmp", "strlen", "strcpy", "strncpy", "strcmp", "strncmp", "strcat"})
+      if (Function* f = M.getFunction(n); f && !f->isDeclaration()) { f->deleteBody(); f->setLinkage(GlobalValue::ExternalLinkage); }
     std::vector<Function*> defined;
     for (auto& F : M) if (!F.isDeclaration()) defined.push_back(&F);
     for (Function* F : defined) {

@@ -1,4 +1,7 @@
 # Decomp files compiled natively by guest-memory lowering (docs/NATIVE_C.md), one per line.
-# Off for now: with state/tev/tobj/mobj/dobj/pobj native, Battlefield ran 10.2 -> 9.4 ms but the
-# match diverged and stock icons drew with wrong palettes; the sampled gml_verify did not catch it.
-# src/sysdolphin/baselib/state.c
+src/sysdolphin/baselib/state.c
+src/sysdolphin/baselib/tev.c
+src/sysdolphin/baselib/tobj.c
+src/sysdolphin/baselib/mobj.c
+src/sysdolphin/baselib/dobj.c
+src/sysdolphin/baselib/pobj.c

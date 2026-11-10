@@ -1,6 +1,7 @@
 // Host services: memory, disc, boot, event delivery, time, MMIO, logging.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
+#include "audio.h"
 #include "memory_range.h"
 #include "platform_file.h"
 #include "sha1.h"
@@ -708,6 +709,25 @@ void retrace() {
   deliver_interrupt(24);  // __OS_INTERRUPT_PI_VI
   observe_scene();
   trace_state();
+  // MELEE_FRAME_TRACE=1: the GX counters every frame, so two builds' logs show the first frame where
+  // their output differs (the CPU match is deterministic).
+  static const bool frame_trace = [] { const char* v = std::getenv("MELEE_FRAME_TRACE"); return v && v[0] == '1'; }();
+  if (frame_trace) {
+    uint64_t commands, draws, vertices; uint32_t copies;
+    gx_stats(&commands, &draws, &vertices, &copies);
+    log("ftrace %u %llu %llu %llu", g_retraces, (unsigned long long)commands, (unsigned long long)draws, (unsigned long long)vertices);
+  }
+  if (g_retraces % 600 == 0) {   // the audio path, every 10 s: what the game made, what was dropped or starved
+    static uint64_t last_frames = 0; static double last_t = 0;
+    const double t = now_seconds(); const uint64_t f = audio_pushed_frames();
+    uint64_t silent_ms = 0; const uint64_t under = audio_underruns(&silent_ms);
+    double lo = 1, hi = 1; audio_rate_range(&lo, &hi);
+    if (last_t > 0)
+      log("audio: game made %.0f samples/s (32000 expected), dropped blocks %llu, underruns %llu (%llu ms), output speed %.4f..%.4f",
+          double(f - last_frames) / (t - last_t), (unsigned long long)audio_dropped_blocks(), (unsigned long long)under,
+          (unsigned long long)silent_ms, lo, hi);
+    last_frames = f; last_t = t;
+  }
   if (g_retraces % 60 == 0 || (options.frames && g_retraces >= options.frames)) {
     uint64_t commands, draws, vertices; uint32_t copies;
     gx_stats(&commands, &draws, &vertices, &copies);

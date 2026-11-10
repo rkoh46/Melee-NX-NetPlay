@@ -214,7 +214,7 @@ void simulation_thread(void*) {
         async = std::make_unique<gx::AsyncBackend>(*frontend);
         async->set_idle([] { host::window_pump(); });   // events are the owner thread's job
         gx::init(async.get());
-        const bool audio_ok = quit_before_boot || host::audio_open(g_volume, nullptr, true);
+        const bool audio_ok = quit_before_boot || host::audio_open(g_volume, host::options.audio_dump.c_str(), true);
 #else
         gx::init(nullptr);
         const bool audio_ok = host::audio_open(0, host::options.audio_dump.c_str(), false);
@@ -352,6 +352,8 @@ int main(int argc, char** argv) {
   o.fast = get("fast", "0") == "1";
   o.volume = 0;
   g_volume = static_cast<int>(std::strtol(get("volume", "100").c_str(), nullptr, 10));
+  // audio_dump=1: everything the game plays also goes to Logs/audio.wav (32 kHz stereo).
+  if (get("audio_dump", "0") == "1") host::options.audio_dump = std::string(kBaseDir) + "/Logs/audio.wav";
   g_hud = get("hud", "0") == "1";
   // Slippi identity: user.json (connect code, play key) in User/Slippi, the Slippi
   // Launcher's own layout, until the console has a sign-in screen. The online
@@ -384,6 +386,10 @@ int main(int argc, char** argv) {
   if (get("gxn_verify", "0") == "1") setenv("MELEE_GXN_VERIFY", "1", 1);
   // gml_verify=1: sampled whole-RAM comparison of natively compiled decomp C against the translation.
   if (get("gml_verify", "0") == "1") setenv("MELEE_GML_VERIFY", "1", 1);
+  // gml_verify_frames=A:B: every native call in frames A..B is compared (not one in 512).
+  if (const std::string v = get("gml_verify_frames", ""); !v.empty()) { setenv("MELEE_GML_VERIFY", "1", 1); setenv("MELEE_GML_VERIFY_FRAMES", v.c_str(), 1); }
+  // frame_trace=1: GX counters every frame (first-divergence search between builds).
+  if (get("frame_trace", "0") == "1") setenv("MELEE_FRAME_TRACE", "1", 1);
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
   if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
   if (get("shader_warmup", "1") == "0") setenv("AURORA_LAUNCH_WARM_SECONDS", "0", 1);

@@ -17,7 +17,17 @@ for line in symmap.read_text().splitlines():
 # The recompiler hooks by name: a name several files use (their statics) would redirect all of them.
 for n in [n for n, k in count.items() if k > 1]:
     syms.pop(n)
-skip = {n.strip() for n in sys.argv[4:]}   # names that must stay translated
+skip = set()
+# Only functions the listed decomp files define are hooked (not header inlines such as memcpy).
+sources = ""
+files_list = Path(__file__).resolve().parents[2] / "port/recomp/gml_files.txt"
+decomp = Path(__file__).resolve().parents[2] / "ref/melee"
+for f in files_list.read_text().splitlines():
+    f = f.strip()
+    if f and not f.startswith("#"):
+        sources += (decomp / f).read_text(errors="replace")
+def defined_in_sources(name):
+    return re.search(r"^[^\n;#]*\b%s\s*\([^;]*\)\s*\{" % re.escape(name), sources, re.M) is not None
 CT = {"i8": "uint8_t", "i16": "uint16_t", "i32": "uint32_t", "i64": "uint64_t", "float": "float", "double": "double", "void": "void"}
 protos, bodies, hooked = [], [], []
 for m in re.finditer(r"^define (?!internal|private|linkonce|weak|available_externally)(.*?)@([\w.$]+)\((.*?)\)", ll.read_text(), re.M):
@@ -25,7 +35,7 @@ for m in re.finditer(r"^define (?!internal|private|linkonce|weak|available_exter
     if not name.startswith("gml_"):
         continue
     native, name = name, name[4:]
-    if name.startswith("gml_") or name not in syms or name in skip:
+    if name.startswith("gml_") or name not in syms or name in skip or not defined_in_sources(name):
         continue
     rt = re.findall(r"\b(void|i8|i16|i32|i64|float|double)\b", pre)[-1]
     rext = "s" if "signext" in pre else "z"

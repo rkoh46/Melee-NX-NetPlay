@@ -57,7 +57,16 @@ void gml::verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)
   static uint64_t checked = 0, mismatches = 0;
   static std::vector<uint8_t> before, after_native;
   uint64_t& n = counts[name];
-  if (depth || (++n > 32 && n % 512)) { thunk(native); return; }
+  // A frame window (gml_verify_frames=A:B) checks every call in it; otherwise a sample.
+  static const auto window = [] {
+    std::pair<uint32_t, uint32_t> w{0, 0};
+    if (const char* v = std::getenv("MELEE_GML_VERIFY_FRAMES")) std::sscanf(v, "%u:%u", &w.first, &w.second);
+    return w;
+  }();
+  ++n;
+  const uint32_t frame = host::retrace_count();
+  const bool in_window = window.second && frame >= window.first && frame <= window.second;
+  if (depth || (window.second ? !in_window : (n > 32 && n % 512))) { thunk(native); return; }
   struct Guard { Guard() { ++depth; } ~Guard() { --depth; } } guard;
   const uint32_t sp = c.r[1] & 0x01FFFFFFu;
   before.assign(m, m + ppc::RAM_SIZE);
@@ -77,8 +86,12 @@ void gml::verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)
   // (sp+4), which a non-leaf PowerPC callee writes and native code does not.
   const uint32_t lo = sp > 0x10000 ? sp - 0x10000 : 0, hi = sp + 8;
   uint32_t first = UINT32_MAX, count = 0;
+  // lbaudio_ax.c's buffers: audio callbacks run inside the translation (its loops poll for events)
+  // and not inside native code, so they change between the two runs; not part of what is compared.
+  constexpr uint32_t audio_lo = 0x00433700, audio_hi = 0x00452C80;
   for (uint32_t a = 0; a < ppc::RAM_SIZE; a += 64) {
     if (a + 64 > lo && a < hi) continue;
+    if (a + 64 > audio_lo && a < audio_hi) continue;
     if (std::memcmp(m + a, after_native.data() + a, 64)) {
       for (uint32_t k = a; k < a + 64; ++k) if (m[k] != after_native[k]) { if (first == UINT32_MAX) first = k; ++count; }
     }
@@ -103,7 +116,7 @@ void gml::verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)
         }
         host::log("gml-verify %s pipe differs at byte %zu of %zu: native %s / original %s", name, k, pipe_native.size(), a, b2);
       }
-      host::log("gml-verify %s MISMATCH (call %llu, r3=%08X r4=%08X lr=%08X): %u bytes differ, first at %08X (%s), pipe %s (%zu/%zu)%s", name,
+      host::log("gml-verify %s MISMATCH (frame %u, call %llu, r3=%08X r4=%08X lr=%08X): %u bytes differ, first at %08X (%s), pipe %s (%zu/%zu)%s", name, frame,
                 (unsigned long long)n, saved.r[3], saved.r[4], saved.lr, count, first == UINT32_MAX ? 0u : first | 0x80000000u, bytes,
                 pipe_native == pipe_orig ? "same" : "DIFFERS", pipe_native.size(), pipe_orig.size(), ret_differs ? ", return differs" : "");
     }
