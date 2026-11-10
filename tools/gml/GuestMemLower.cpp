@@ -550,7 +550,9 @@ struct Lowerer {
       if (!cb.getType()->isVoidTy()) def(r);
       return;
     }
-    if (callee && natives.count(callee->getName().str())) {   // defined natively in another module
+    // Defined natively in another module. A variadic callee always goes through the guest EABI
+    // (its body reads the PowerPC va_list save area, so it stays translated).
+    if (callee && !callee->isVarArg() && natives.count(callee->getName().str())) {
       std::vector<Type*> pts;
       for (Type* t : callee->getFunctionType()->params()) pts.push_back(mapType(t));
       FunctionCallee nf = M.getOrInsertFunction("gml_" + callee->getName().str(), FunctionType::get(mapType(callee->getReturnType()), pts, false));
@@ -732,6 +734,48 @@ struct Lowerer {
   }
 };
 
+// MWCC contracts c - a*b into fnmsubs, which computes -(a*b - c), and -(a*b) - c into fnmadds,
+// -(a*b + c). Clang's IR has fma(-a, b, c) and fma(-a, b, -c): the same values except the sign
+// of an exact zero result (+0 where the GameCube gets -0; seen in fighter knockback speeds).
+// Every fused multiply-add with one negated factor becomes the negated form, and fmuladd
+// becomes fma (MWCC always fuses what it contracts; fmuladd would let the backend choose).
+static void matchMwccFusedSigns(Module& M) {
+  std::vector<CallInst*> calls;
+  for (auto& F : M)
+    for (auto& I : instructions(F))
+      if (auto* ci = dyn_cast<CallInst>(&I))
+        if (Function* cf = ci->getCalledFunction())
+          if (cf->getIntrinsicID() == Intrinsic::fmuladd || cf->getIntrinsicID() == Intrinsic::fma) calls.push_back(ci);
+  unsigned rewritten = 0;
+  for (CallInst* ci : calls) {
+    IRBuilder<> b(ci);
+    Value *x = ci->getArgOperand(0), *y = ci->getArgOperand(1), *z = ci->getArgOperand(2);
+    auto negOf = [](Value* v) -> Value* {
+      if (auto* u = dyn_cast<UnaryOperator>(v); u && u->getOpcode() == Instruction::FNeg) return u->getOperand(0);
+      return nullptr;
+    };
+    Value *nx = negOf(x), *ny = negOf(y);
+    Function* fma = Intrinsic::getDeclaration(&M, Intrinsic::fma, {ci->getType()});
+    Value* r;
+    if ((nx != nullptr) != (ny != nullptr)) {
+      Value* a = nx ? nx : x;
+      Value* m = nx ? y : ny;
+      Value* nz = negOf(z);
+      Value* c = nz ? nz : b.CreateFNeg(z);
+      r = b.CreateFNeg(b.CreateCall(fma, {a, m, c}));
+      ++rewritten;
+    } else if (nx && ny) {
+      r = b.CreateCall(fma, {nx, ny, z});
+    } else {
+      r = b.CreateCall(fma, {x, y, z});
+    }
+    ci->replaceAllUsesWith(r);
+    ci->eraseFromParent();
+  }
+  if (rewritten && getenv("GML_DEBUG")) errs() << "gml-lower: " << rewritten << " negated multiply-adds in MWCC form\n";
+}
+
+
 // Before optimisation: every global is the game's memory, shared with the translated code and with
 // Slippi's patches. A `static` the file never reads is still read elsewhere in the game, and a const
 // table may be patched at run time, so none may be removed, localised or folded.
@@ -746,6 +790,7 @@ struct GuestExternalizePass : PassInfoMixin<GuestExternalizePass> {
     return false;
   }
   PreservedAnalyses run(Module& M, ModuleAnalysisManager&) {
+    matchMwccFusedSigns(M);   // before the optimiser folds negations into constants
     // Functions Slippi's Gecko codes patch stay translated: their bodies go before the inliner can
     // copy them into native callers, so every call reaches the patched translation.
     if (!KeepGuest.empty()) {
