@@ -396,6 +396,8 @@ int main(int argc, char** argv) {
   if (const std::string v = get("audio_slack_ms", ""); !v.empty()) setenv("MELEE_AUDIO_SLACK_MS", v.c_str(), 1);
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
   if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
+  // Core 2 belongs to the simulation thread: Aurora's shader compilers must never pin there.
+  setenv("AURORA_RESERVED_CORE_MASK", "0x4", 0);
   if (get("shader_warmup", "1") == "0") setenv("AURORA_LAUNCH_WARM_SECONDS", "0", 1);
   // shader_warmup_all=1: one long warm-up session that compiles every pipeline in the seed
   // (sdmc:/switch/melee-nx/initial_pipeline_cache.db) with every core before the game starts.

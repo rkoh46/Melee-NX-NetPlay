@@ -1,0 +1,38 @@
+--- a/src/joystick/switch/SDL_sysjoystick.c
++++ b/src/joystick/switch/SDL_sysjoystick.c
+@@ -219,6 +219,24 @@
+ static bool SWITCH_JoystickSetSensorsEnabled(SDL_Joystick *joystick, bool enabled)
+ {
+     return SDL_Unsupported();
++}
++
++/* The system reports a GameCube trigger as 0..0xFFF (the controller's 8-bit value shifted
++ * left by 4), not the 0..0x7FFF libnx documents: a full pull read as 1/8 of the axis, so the
++ * game never saw a light-shield press. Scale 12-bit values to the full axis; if a value above
++ * 12 bits ever arrives the system is using the documented range and it is passed through. */
++static Uint32 g_gc_trigger_max[SWITCH_MAX_PLAYERS];
++
++static int gc_trigger_axis(int slot, Uint32 pos)
++{
++    if (pos > g_gc_trigger_max[slot]) {
++        g_gc_trigger_max[slot] = pos;
++    }
++    int full = g_gc_trigger_max[slot] > 0xFFF ? (int)pos : (int)pos * 8;
++    if (full > 32767) {
++        full = 32767;
++    }
++    return full * 2 - 32768;
+ }
+ 
+ static Sint16 clamp_axis(int v)
+@@ -282,8 +300,8 @@
+      * axes from the L/R buttons would turn GC Z into a shoulder pull; without the GC
+      * style the axes stay released and the buttons carry the mapping (misc3/misc4). */
+     const bool has_gc_triggers = (padGetStyleSet(pad) & HidNpadStyleTag_NpadGc) != 0;
+-    const int trigger_l = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 0) * 2 - 32768) : -32768;
+-    const int trigger_r = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 1) * 2 - 32768) : -32768;
++    const int trigger_l = has_gc_triggers ? gc_trigger_axis(slot, padGetGcTriggerPos(pad, 0)) : -32768;
++    const int trigger_r = has_gc_triggers ? gc_trigger_axis(slot, padGetGcTriggerPos(pad, 1)) : -32768;
+     SDL_SendJoystickAxis(timestamp, joystick, 4, clamp_axis(trigger_l));
+     SDL_SendJoystickAxis(timestamp, joystick, 5, clamp_axis(trigger_r));
+ }

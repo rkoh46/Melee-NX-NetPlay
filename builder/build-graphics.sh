@@ -75,6 +75,7 @@ prepare() {
     apply_sdl_stack "$sdl" "$repo/switch/patches/sdl-dusklight-switch.patch" \
                            "$repo/switch/patches/sdl-dusklight-melee-nx.patch" \
                            "$repo/switch/patches/sdl-dusklight-gc-layout.patch"
+    apply_patch_once "$sdl"                       "$repo/switch/patches/sdl-dusklight-gc-trigger-range.patch"
   else
     apply_patch_once "$sdl"                       "$repo/switch/patches/sdl-switch-external-graphics.patch"
   fi
@@ -101,6 +102,7 @@ prepare() {
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-system-pad-layout.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-object-identity.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-launch-warm-all.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-compiler-cores.patch"
 }
 
 build_dawn() {

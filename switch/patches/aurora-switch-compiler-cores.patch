@@ -1,0 +1,51 @@
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -37,6 +37,7 @@
+ #include <absl/container/flat_hash_map.h>
+ #include <absl/container/flat_hash_set.h>
+ #include <fmt/format.h>
++#include <cstdlib>
+ #include <tracy/Tracy.hpp>
+ 
+ #include "../thread.hpp"
+@@ -68,11 +69,27 @@
+ // Number of cores this process is allowed to run on (Switch homebrew: usually 3,
+ // mask 0x7). Used to refuse a second compile worker when there is no spare core
+ // for it beyond the game core (0) and the primary compiler's core.
+-int allowed_core_count() {
++// AURORA_RESERVED_CORE_MASK: cores the compilers must never use (the application's
++// simulation core). The pinning below assumed the game on core 0 and took the top
++// core; Melee-NX runs the game alone on core 2, so a compiler there stole the
++// simulation's core for the whole background seed drain (20-300 ms "guest code"
++// frames during play). Reserved cores are removed from the mask the compilers see.
++uint64_t compiler_core_mask() {
+   uint64_t mask = 0;
+-  if (svcGetInfo(&mask, kInfoCoreMask, kCurProcessHandle, 0) != 0 || mask == 0) {
++  if (svcGetInfo(&mask, kInfoCoreMask, kCurProcessHandle, 0) != 0) {
+     return 0;
+   }
++  if (const char* reserved = std::getenv("AURORA_RESERVED_CORE_MASK")) {
++    mask &= ~std::strtoull(reserved, nullptr, 0);
++  }
++  return mask;
++}
++
++int allowed_core_count() {
++  const uint64_t mask = compiler_core_mask();
++  if (mask == 0) {
++    return 0;
++  }
+   int n = 0;
+   for (int i = 0; i < 32; ++i) {
+     if (((mask >> i) & 1u) != 0) {
+@@ -87,8 +104,8 @@
+ // secondary compiler takes rank 1 so the two never share a core with each other,
+ // and neither shares the game thread's core (0).
+ bool pin_compiler_to_spare_core(int rank = 0) {
+-  uint64_t mask = 0;
+-  if (svcGetInfo(&mask, kInfoCoreMask, kCurProcessHandle, 0) != 0 || mask == 0) {
++  const uint64_t mask = compiler_core_mask();
++  if (mask == 0) {
+     return false;
+   }
+   int core = 31, seen = 0;
