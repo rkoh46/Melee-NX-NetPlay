@@ -300,8 +300,16 @@ namespace {
 // Read at the first call, not at static initialisation: main sets the variable from launcher.ini.
 bool verify_enabled() { static const bool on = [] { const char* v = std::getenv("MELEE_HLE_VERIFY"); return v && v[0] == '1'; }(); return on; }
 template <class Body>
-void verified(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), uint32_t src_a, uint32_t src_b, uint32_t dest, Body body) {
-  if (!verify_enabled()) { body(c, m); return; }
+void verified_slow(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), uint32_t src_a, uint32_t src_b, uint32_t dest, Body body);
+// The comparison copies the whole guest Context (kilobytes of stack); kept out of line so the normal
+// call is the body alone, without that frame (the wrappers were ~1% of a 4-player match).
+template <class Body>
+[[gnu::always_inline]] inline void verified(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), uint32_t src_a, uint32_t src_b, uint32_t dest, Body body) {
+  if (__builtin_expect(!verify_enabled(), 1)) { body(c, m); return; }
+  verified_slow(c, m, name, orig, src_a, src_b, dest, body);
+}
+template <class Body>
+[[gnu::noinline, gnu::cold]] void verified_slow(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), uint32_t src_a, uint32_t src_b, uint32_t dest, Body body) {
   static uint64_t calls = 0, mismatches = 0;
   uint8_t* d = host::ram + (dest & 0x01FFFFFF);
   uint8_t* a = host::ram + (src_a & 0x01FFFFFF);
@@ -453,8 +461,14 @@ namespace {
 // original writes (its frame and the caller's LR slot) against the original translation (<name>_orig,
 // kept by the recompiler for hooked functions; no interpreter, so it works inside interpreted code too).
 template <class Body>
-void verified_f1(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), Body body) {
-  if (!verify_enabled() || c.r[1] - 0x80000040u >= ppc::RAM_SIZE - 0x80u) { body(c, m); return; }
+void verified_f1_slow(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), Body body);
+template <class Body>
+[[gnu::always_inline]] inline void verified_f1(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), Body body) {
+  if (__builtin_expect(!verify_enabled() || c.r[1] - 0x80000040u >= ppc::RAM_SIZE - 0x80u, 1)) { body(c, m); return; }
+  verified_f1_slow(c, m, name, orig, body);
+}
+template <class Body>
+[[gnu::noinline, gnu::cold]] void verified_f1_slow(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), Body body) {
   static uint64_t calls = 0, mismatches = 0;
   const uint32_t lo = c.r[1] - 40u;
   uint8_t* s = host::ram + (lo & 0x01FFFFFF);

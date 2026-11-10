@@ -931,7 +931,7 @@ void gpu_stop() {
 }
 }  // namespace
 
-void fifo_store32(uint32_t be) {   // the word is already in big-endian byte order
+[[gnu::noinline]] static void fifo_store32_slow(uint32_t be) {   // the word is already in big-endian byte order
   if (g_gpu_threaded) {
     prod_room(4);
     std::memcpy(g_prod.data() + g_prod_len, &be, 4); g_prod_len += 4;
@@ -956,7 +956,7 @@ void fifo_store_words(const uint32_t* be, size_t n) {
   }
   direct_fifo_store_words(be, n);
 }
-void fifo_store8(uint32_t v) {
+[[gnu::noinline]] static void fifo_store8_slow(uint32_t v) {
   if (g_gpu_threaded) {
     prod_room(1);
     g_prod[g_prod_len++] = uint8_t(v);
@@ -966,7 +966,7 @@ void fifo_store8(uint32_t v) {
   }
   direct_fifo_store8(v);
 }
-void fifo_store16(uint32_t v) {
+[[gnu::noinline]] static void fifo_store16_slow(uint32_t v) {
   if (g_gpu_threaded) {
     prod_room(2);
     g_prod[g_prod_len] = uint8_t(v >> 8); g_prod[g_prod_len + 1] = uint8_t(v); g_prod_len += 2;
@@ -975,6 +975,31 @@ void fifo_store16(uint32_t v) {
     return;
   }
   direct_fifo_store16(v);
+}
+// The common case of every pipe store: the GPU thread is on, the byte before was not a BP opcode,
+// and the chunk stays under its hand-off size, so the store is an append. Everything else (hand-off,
+// PE marker detection, the direct mode) is in the *_slow forms; keeping it out of these functions
+// spares them the register saves the slow paths needed on every call.
+void fifo_store32(uint32_t be) {
+  const size_t len = g_prod_len;
+  if (__builtin_expect(g_gpu_threaded && !g_bp_opcode && len + 4 < kChunkFlush, 1)) {
+    std::memcpy(g_prod.data() + len, &be, 4); g_prod_len = len + 4; return;
+  }
+  fifo_store32_slow(be);
+}
+void fifo_store8(uint32_t v) {
+  const size_t len = g_prod_len;
+  if (__builtin_expect(g_gpu_threaded && len + 1 < kChunkFlush, 1)) {
+    g_prod.data()[len] = uint8_t(v); g_prod_len = len + 1; g_bp_opcode = uint8_t(v) == 0x61; return;
+  }
+  fifo_store8_slow(v);
+}
+void fifo_store16(uint32_t v) {
+  const size_t len = g_prod_len;
+  if (__builtin_expect(g_gpu_threaded && len + 2 < kChunkFlush, 1)) {
+    uint8_t* p = g_prod.data() + len; p[0] = uint8_t(v >> 8); p[1] = uint8_t(v); g_prod_len = len + 2; g_bp_opcode = false; return;
+  }
+  fifo_store16_slow(v);
 }
 void write_fifo(uint32_t value, int bytes) {
   if (g_gpu_threaded) {
