@@ -66,7 +66,7 @@ std::vector<uint8_t> mask_tev_alpha(std::vector<uint8_t> p) {
 // gml_verify=1 (sampled): the first 32 calls of every native entry and then one in 512 run natively,
 // all of guest RAM and the pipe are recorded and rewound, the original translation runs, and the two
 // results are compared outside the stack area (both write frames there, differently).
-bool gml::verify_on() { static const bool on = [] { const char* v = std::getenv("MELEE_GML_VERIFY"); return v && v[0] == '1'; }(); return on; }
+bool gml::g_verify = false;
 void gml::verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), void (*thunk)(void*), void* native) {
   static int depth = 0;
   static std::map<std::string, uint64_t> counts;

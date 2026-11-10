@@ -15,7 +15,8 @@ extern "C" uint8_t* gxn_gx;   // __GXData in guest RAM (the C code's `gx`)
 namespace gxn {
 extern ppc::Context* g_ctx;   // the guest context of the outermost native GX call (for callbacks)
 extern uint8_t* g_m;
-bool verify_on();             // MELEE_GXN_VERIFY=1 (launcher.ini gxn_verify=1)
+extern bool g_verify;         // launcher.ini gxn_verify=1 (set by main_switch)
+inline bool verify_on() { return g_verify; }   // one load on every native GX call
 void verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*),
                 void (*thunk)(void*), void* native);
 }  // namespace gxn

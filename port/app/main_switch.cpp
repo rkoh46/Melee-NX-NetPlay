@@ -6,6 +6,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <switch.h>
 #include "switch_clocks.h"
+#include "gxn_glue_host.h"
+#include "gml_glue.h"
 #include "switch_profile.h"
 #include "log_switch.h"
 #if MELEE_NX_AURORA
@@ -383,11 +385,11 @@ int main(int argc, char** argv) {
   // hle_verify=1: hooked matrix routines also run the original code in the interpreter and log differences.
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
   // gxn_verify=1: every native GX call (decomp source compiled for the console) is compared with the translation.
-  if (get("gxn_verify", "0") == "1") setenv("MELEE_GXN_VERIFY", "1", 1);
+  if (get("gxn_verify", "0") == "1") gxn::g_verify = true;
   // gml_verify=1: sampled whole-RAM comparison of natively compiled decomp C against the translation.
-  if (get("gml_verify", "0") == "1") setenv("MELEE_GML_VERIFY", "1", 1);
+  if (get("gml_verify", "0") == "1") gml::g_verify = true;
   // gml_verify_frames=A:B: every native call in frames A..B is compared (not one in 512).
-  if (const std::string v = get("gml_verify_frames", ""); !v.empty()) { setenv("MELEE_GML_VERIFY", "1", 1); setenv("MELEE_GML_VERIFY_FRAMES", v.c_str(), 1); }
+  if (const std::string v = get("gml_verify_frames", ""); !v.empty()) { gml::g_verify = true; setenv("MELEE_GML_VERIFY_FRAMES", v.c_str(), 1); }
   // frame_trace=1: GX counters every frame (first-divergence search between builds).
   if (get("frame_trace", "0") == "1") setenv("MELEE_FRAME_TRACE", "1", 1);
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.

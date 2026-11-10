@@ -12,7 +12,8 @@ extern double* gml_fregs;
 extern uint8_t* gml_cr;
 }
 namespace gml {
-bool verify_on();
+extern bool g_verify;         // launcher.ini gml_verify=1 / gml_verify_frames (set by main_switch)
+inline bool verify_on() { return g_verify; }
 void verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)(ppc::Context&, uint8_t*), void (*thunk)(void*), void* native);
 }
 inline void gml_enter(ppc::Context& c, uint8_t* m) {

@@ -93,7 +93,7 @@ else()
   target_link_libraries(runtime_switch PUBLIC port_enet)
 endif()
 target_link_libraries(runtime_switch PUBLIC native_animation port_build_options Threads::Threads gx_native)
-target_include_directories(runtime_switch PRIVATE runtime/gx/gxnative runtime/gml)
+target_include_directories(runtime_switch PUBLIC runtime/gx/gxnative runtime/gml)
 # Line tables only (no code change): console profiles of the render thread resolve to source lines.
 target_compile_options(runtime_switch PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-gline-tables-only> $<$<COMPILE_LANGUAGE:C>:-g1>)
 

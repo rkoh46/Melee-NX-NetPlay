@@ -13,7 +13,7 @@ extern "C" uint8_t* gxn_gx = nullptr;
 namespace gxn {
 ppc::Context* g_ctx = nullptr;
 uint8_t* g_m = nullptr;
-bool verify_on() { static const bool on = [] { const char* v = std::getenv("MELEE_GXN_VERIFY"); return v && v[0] == '1'; }(); return on; }
+bool g_verify = false;   // set by main_switch from launcher.ini (gxn_verify=1) before the game runs
 }  // namespace gxn
 
 namespace {

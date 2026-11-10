@@ -684,7 +684,12 @@ struct Lowerer {
       std::string name = F->getName().str();
       F->setName(name + ".gml_old");
       // gml_<name>: the game's C names may also exist elsewhere in the program (Aurora, host code).
-      Function* nf = Function::Create(ft, F->getLinkage(), "gml_" + name, &M);
+      // A static with a unique symbol in the game stays visible: the translation also reaches it
+      // through function pointers (class methods), so it needs a hookable native version, which
+      // inlining would otherwise leave unused and the optimiser would drop.
+      auto linkage = F->getLinkage();
+      if (F->hasLocalLinkage() && syms.count(name) == 1) linkage = GlobalValue::ExternalLinkage;
+      Function* nf = Function::Create(ft, linkage, "gml_" + name, &M);
       // Integer extension attributes say how narrow values sit in a 32-bit register (the wrappers
       // read them from the lowered IR to extend a returned u8/s8 the way the PowerPC caller expects).
       for (auto k : {Attribute::ZExt, Attribute::SExt}) {
