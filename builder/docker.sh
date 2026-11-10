@@ -122,6 +122,7 @@ run_in_container() {
     -e MELEE_BUILD_JOBS="$jobs" \
     -e MELEE_SDL_VARIANT="$sdl_variant" \
     -e MELEE_NX_FRONTEND="$frontend" \
+    -e MELEE_NX_BUILD_SUFFIX="${MELEE_NX_BUILD_SUFFIX:-}" \
     -e MESA_NVK_ROOT=/mesa-nvk \
     "$image" bash -c '
       if [[ "$1" == required && ! -f /mesa-nvk/src/nouveau/vulkan/rust_switch_stubs.c ]]; then

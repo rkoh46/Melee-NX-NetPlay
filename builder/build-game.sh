@@ -14,7 +14,7 @@ case "$frontend" in headless|aurora) ;;
   *) echo "MELEE_NX_FRONTEND must be headless or aurora" >&2; exit 64;; esac
 
 game="$repo/build/game"
-build_dir="$repo/build/switch-$frontend"
+build_dir="$repo/build/switch-$frontend${MELEE_NX_BUILD_SUFFIX:-}"   # suffix: a second tree for experiments while a sweep uses the main NRO
 require_file() { [[ -f "$1" ]] || { echo "Required file missing: $1 ($2)" >&2; exit 66; }; }
 
 do_configure() {
