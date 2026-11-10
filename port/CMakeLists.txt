@@ -9,7 +9,7 @@ add_library(guest STATIC ${GUEST_SOURCES} "${PORT_GEN}/function_names.cpp" "${PO
 target_include_directories(guest PUBLIC "${PORT_GEN}" runtime/ppc)
 target_include_directories(guest PRIVATE runtime/hle)
 target_link_libraries(guest PUBLIC port_build_options)
-target_compile_options(guest PRIVATE -Wno-unused-label -Wno-unused-variable)
+target_compile_options(guest PRIVATE -Wno-unused-label -Wno-unused-variable -Os)
 target_compile_definitions(guest PRIVATE NOMINMAX)
 
 # ---- ENet 1.3.13 (IPv4 peer transport for Slippi netplay) ----
