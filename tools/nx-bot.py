@@ -93,7 +93,8 @@ def quit_app(bot, shots_dir):
         state = classify(path)
         print(f"[quit] step {step}: {state}", flush=True)
         if state == "hbmenu": return True
-        if state == "error": bot.click("A"); time.sleep(2.5); continue
+        if state == "error":   # the system's error dialog ignores a quick click: hold A
+            bot.press("A"); time.sleep(0.4); bot.release("A"); time.sleep(2.5); continue
         if state == "home": return True
         if state == "home-playing":
             bot.click("X"); time.sleep(1.2)          # "Close the software?"
