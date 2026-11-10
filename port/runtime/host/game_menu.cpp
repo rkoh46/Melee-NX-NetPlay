@@ -489,7 +489,7 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   out.shapes.push_back({x0, y0, x1, y1, 0.04f, 0.06f, 0.16f, 1.0f, unit * 0.5f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.shapes.push_back({x0, y0, x1, y1, 0.55f, 0.65f, 1.0f, 0.6f, unit * 0.5f, std::max(2.0f, unit * 0.08f), 0.0f, 0, 0.0f, 0.0f});
   // Title bar in Melee's angled yellow.
-  const std::string title = g_page == Page::Main ? "DASHDANCE  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
+  const std::string title = g_page == Page::Main ? "MELEE-NX-NETPLAY  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
   out.shapes.push_back({x0 + pad, y0 + pad, x0 + pad + panel_w * 0.72f, y0 + pad + title_h, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.15f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.14f, title_h * 0.72f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title, panel_w * 0.72f - unit * 1.0f});
 #ifdef MELEE_PORT_VERSION

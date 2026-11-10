@@ -117,7 +117,7 @@ static bool dashboard_load_profile_unsafe(const std::string& slippi_dir, Dashboa
 }
 bool dashboard_load_network(Dashboard& d) {
   int status = 0; std::string body, error;
-  if (!slippi::report::http_request("GET", "https://api4.ipify.org", "", "", "Dashdance", &status, &body, &error)) { d.ipv4_error = error.empty() ? "no connection" : error; return false; }
+  if (!slippi::report::http_request("GET", "https://api4.ipify.org", "", "", "Melee-NX-NetPlay", &status, &body, &error)) { d.ipv4_error = error.empty() ? "no connection" : error; return false; }
   if (status != 200) { d.ipv4_error = "HTTP " + std::to_string(status); return false; }
   while (!body.empty() && (body.back() == '\n' || body.back() == '\r' || body.back() == ' ')) body.pop_back();
   if (body.empty() || body.find('.') == std::string::npos || body.size() > 15) { d.ipv4_error = "unexpected answer"; return false; }

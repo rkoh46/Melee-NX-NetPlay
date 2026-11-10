@@ -15,7 +15,7 @@ using json = nlohmann::json;
 constexpr const char* kFirebaseKey = "AIzaSyAuQqc_wgqcUu3FqrICEPZ9Av_hPxMR_i4";
 constexpr const char* kIdentityToolkit = "https://identitytoolkit.googleapis.com/v1/accounts:";
 constexpr const char* kGraphQL = "https://internal.slippi.gg/graphql";
-constexpr const char* kUserAgent = "Dashdance";
+constexpr const char* kUserAgent = "Melee-NX-NetPlay";
 constexpr const char* kUserQuery =
     "query getUserKeyQuery($fbUid: String) { getUser(fbUid: $fbUid) { fbUid displayName connectCode { code } private { playKey } } "
     "getLatestDolphin { version } }";
