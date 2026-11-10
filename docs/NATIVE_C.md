@@ -57,9 +57,23 @@ fixed on the way:
   unused register bits): native frames leave different leftovers, which only changes channels and
   bits the GPU ignores; `gml_verify` masks those.
 
+* Slippi's Gecko codes patch instructions inside some of these functions (TObj's texture
+  animation id widened from a byte to a word at +0x70 in four functions, a call removed in
+  GObj_SetupGXLinkMaxSorted, a hook in CObjLoad). Native C would not see those patches, so
+  `tools/gml/gecko_patched.py` lists every function a code touches and the GML build drops their
+  bodies before optimisation (calls go to the patched translation); recomp.py refuses a build that
+  hooks one anyway. The first native builds ran the four TObj functions unpatched.
 * by-value struct arguments reuse one scratch area per call (they had accumulated past the frame);
 * finding a divergence: frame_trace=1 logs GX counters every frame (diff two builds' logs), then
   gml_verify_frames=A:B compares every native call in that window (audio buffers excluded: audio
   callbacks run inside the translation's loops, not inside native code).
 
-Next: jobj.c, fobj.c, aobj.c (joints and animation, the per-character cost), then the rest of HSD.
+36 files (all of HSD's scene graph, joints, animation, lights, cameras, GObj; 610 hooked functions)
+since 2026-11-10: per-frame GX traces equal the pure translation for the whole match (1490 frames
+in a row on Battlefield; the only difference is one menu frame drawn while the disc loads). Match
+averages against the pure translation: Battlefield 10.1 -> 8.3 ms, Mute City 17.8 -> 13.3 (late
+frames 1254 -> 17), Fountain of Dreams 12.3 -> 10.2, 4-player Battlefield 17.0 -> 12.6 (981 -> 8).
+The match fingerprint counts from the frame the match scene starts on the retrace clock, so a build
+that is faster or slower can shift it by a frame; compare per-frame traces aligned by content.
+
+Next: the fighter, item and stage code (ft, it, gr, lb).

@@ -235,12 +235,27 @@ def main():
     hle = set()
     # Extra hook lists written by earlier generation steps: natively compiled decomp C (tools/gml).
     extra = [Path(args.out).parent / "gml" / "gml_hooked.txt"]
+    native = set()
     for path in [Path(args.hle)] + [e for e in extra if e.exists()]:
         with open(path, encoding="utf-8") as hle_source:
             for line in hle_source:
                 line = line.split("#", 1)[0].strip()
                 if line:
-                    hle.add(line)
+                    (hle if path == Path(args.hle) else native).add(line)
+    # Natively compiled C cannot see Slippi's patches: a function containing a Gecko hook or an
+    # instruction write must stay translated.
+    if gs is not None and native:
+        patched = {h.hook for h in gs.hooks}
+        for p in [gs.boot, gs.main] + ([gs.extra] if gs.extra else []):
+            for addr, blob in p.writes:
+                if dol.in_text(addr):
+                    patched.update(range(addr & ~3, addr + len(blob), 4))
+        patched.update(gs.optional_text)
+        owners = {symbols.containing(a).name for a in patched if symbols.containing(a) is not None}
+        dropped = sorted(native & owners)
+        if dropped:   # tools/gml/gecko_patched.py feeds build.sh the same list; a mismatch is a stale build
+            ap.error("natively compiled functions that Slippi patches (rerun builder/generate-game.sh): " + ", ".join(dropped))
+    hle |= native
     missing = sorted(n for n in hle if n not in symbols.by_name)
     if missing:
         print("warning: HLE names not in symbol map (they will be recompiled instead of hooked):", ", ".join(missing))

@@ -25,6 +25,8 @@ for f in "$@"; do
 done
 : > "$out/natives.txt"
 for f in "$@"; do llvm-nm-19 --defined-only "$out/$(basename "${f%.c}").ppc.bc" | awk '$2=="T" {print $3}' >> "$out/natives.txt"; done
+keep="$out/keep_translated.txt"; [[ -f "$keep" ]] || : > "$keep"   # written by generate-game.sh
+if [[ -s "$keep" ]]; then grep -vxF -f "$keep" "$out/natives.txt" > "$out/natives.tmp" || true; mv "$out/natives.tmp" "$out/natives.txt"; fi
 lower() {   # $1 = file, $2 = output
   local n="$out/$(basename "${1%.c}")"
   opt-19 -load-pass-plugin="$plugin" -passes=gml-lower -gml-symbols="$out/symbols.map" -gml-dol="$repo/build/disc/main.dol" \
@@ -33,11 +35,13 @@ lower() {   # $1 = file, $2 = output
 }
 for f in "$@"; do
   n="$out/$(basename "${f%.c}")"
-  opt-19 -load-pass-plugin="$plugin" -passes='gml-externalize,default<O2>' "$n.ppc.bc" -o "$n.opt.bc"
+  opt-19 -load-pass-plugin="$plugin" -passes='gml-externalize,default<O2>' -gml-keep-guest="$keep" "$n.ppc.bc" -o "$n.opt.bc"
 done
 # First pass: which functions stay translated (they must not be called directly from other files).
 : > "$out/guest.txt"
-for f in "$@"; do lower "$f" /dev/null 2>/dev/null; done
+for f in "$@"; do
+  if ! lower "$f" /dev/null 2>"$out/first.err"; then echo "gml: lowering $f failed:" >&2; grep -v "stays translated" "$out/first.err" >&2; exit 1; fi
+done
 if [[ -s "$out/guest.txt" ]]; then grep -vxF -f "$out/guest.txt" "$out/natives.txt" > "$out/natives.tmp"; mv "$out/natives.tmp" "$out/natives.txt"; fi
 : > "$out/guest.txt"
 lows=()

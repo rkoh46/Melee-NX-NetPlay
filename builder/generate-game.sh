@@ -25,6 +25,8 @@ gml_files=$(grep -v '^#' "$repo/port/recomp/gml_files.txt" 2>/dev/null | tr '\n'
 if [[ -n "${gml_files// /}" ]]; then
   phys="$(cd "$repo" && pwd -P)"
   rm -f "$gml_out/gml_native.o"   # a failed lowering must not leave the previous object behind
+  # Functions Slippi patches stay translated (native C would not see the patch).
+  python3 "$repo/tools/gml/gecko_patched.py" "$dol" "$decomp/config/GALE01/symbols.txt" 0x8065CC80 > "$gml_out/keep_translated.txt"
   docker run --rm -v "$phys:/project" "${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}" \
     bash /project/tools/gml/build.sh /project/build/game/generated/gml $gml_files </dev/null
   python3 "$repo/tools/gml/gen_wrappers.py" "$gml_out/gml_native.ll" "$gml_out/symbols.map" "$gml_out"

@@ -41,6 +41,7 @@ static cl::opt<std::string> DolPath("gml-dol", cl::desc("main.dol: constant data
 static cl::opt<std::string> SplitsPath("gml-splits", cl::desc("the decomp's splits.txt (per-file address ranges)"), cl::init(""));
 static cl::opt<std::string> TranslationUnit("gml-tu", cl::desc("this module's source file as splits.txt names it"), cl::init(""));
 static cl::opt<std::string> NativeList("gml-native", cl::desc("functions defined natively in any module (direct calls)"), cl::init(""));
+static cl::opt<std::string> KeepGuest("gml-keep-guest", cl::desc("functions that stay translated (Slippi patches them)"), cl::init(""));
 static cl::opt<std::string> GuestReport("gml-report-guest", cl::desc("append the functions that stay translated to this file"), cl::init(""));
 
 namespace {
@@ -340,8 +341,16 @@ struct Lowerer {
         m = dst; t = PointerType::getUnqual(C);
       }
       if (t->isFloatingPointTy()) {
-        if (fi > 8) fail("more than 8 float arguments to a guest call");
-        b.CreateCall(setF, {ConstantInt::get(I32, fi++), t->isFloatTy() ? b.CreateFPExt(m, Type::getDoubleTy(C)) : m});
+        Value* d = t->isFloatTy() ? b.CreateFPExt(m, Type::getDoubleTy(C)) : m;
+        if (fi > 8) {   // EABI: past f8, doubles (8-byte aligned) in the caller's parameter area
+          stackWords = (stackWords + 1) & ~1u;
+          if (stackWords + 2 > kOutArgWords) fail("too many stack arguments to a guest call");
+          b.CreateCall(helper("gml_stf64", Type::getVoidTy(C), {I32, Type::getDoubleTy(C)}),
+                       {b.CreateAdd(s.frameBase, ConstantInt::get(I32, 8 + 4 * stackWords)), d});
+          stackWords += 2;
+        } else {
+          b.CreateCall(setF, {ConstantInt::get(I32, fi++), d});
+        }
         anyFloat = true;
       } else if (t->isIntegerTy(64)) {
         if (gi % 2 == 0) ++gi;
@@ -737,6 +746,13 @@ struct GuestExternalizePass : PassInfoMixin<GuestExternalizePass> {
     return false;
   }
   PreservedAnalyses run(Module& M, ModuleAnalysisManager&) {
+    // Functions Slippi's Gecko codes patch stay translated: their bodies go before the inliner can
+    // copy them into native callers, so every call reaches the patched translation.
+    if (!KeepGuest.empty()) {
+      std::ifstream in(KeepGuest); std::string n;
+      while (std::getline(in, n))
+        if (Function* f = M.getFunction(n); f && !f->isDeclaration()) { f->deleteBody(); f->setLinkage(GlobalValue::ExternalLinkage); }
+    }
     for (auto& g : M.globals()) {
       if (g.isDeclaration() || g.getName().starts_with("llvm.")) continue;
       const bool local = g.hasLocalLinkage();

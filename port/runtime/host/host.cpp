@@ -712,6 +712,20 @@ void retrace() {
   // MELEE_FRAME_TRACE=1: the GX counters every frame, so two builds' logs show the first frame where
   // their output differs (the CPU match is deterministic).
   static const bool frame_trace = [] { const char* v = std::getenv("MELEE_FRAME_TRACE"); return v && v[0] == '1'; }();
+  // Match fingerprint: the GX counts of the first 1200 frames of a VS match (from the frame the
+  // match scene starts), so a build that loads a frame faster or slower still compares equal when
+  // it plays the same match. The CPU test match is deterministic.
+  {
+    static uint32_t match_start = 0; static uint64_t c0 = 0, d0 = 0, v0 = 0;
+    const bool in_match = rd8(SCENE_MODE_ADDRESS) == 0x02 && rd8(SCENE_STATE_ADDRESS) == 0x02;
+    uint64_t commands, draws, vertices; uint32_t copies;
+    if (in_match && !match_start) { gx_stats(&c0, &d0, &v0, &copies); match_start = g_retraces; }
+    if (match_start && g_retraces == match_start + 1200) {
+      gx_stats(&commands, &draws, &vertices, &copies);
+      log("match fingerprint: %llu/%llu/%llu (GX commands/draws/vertices in the first 1200 frames of the match)",
+          (unsigned long long)(commands - c0), (unsigned long long)(draws - d0), (unsigned long long)(vertices - v0));
+    }
+  }
   if (frame_trace) {
     uint64_t commands, draws, vertices; uint32_t copies;
     gx_stats(&commands, &draws, &vertices, &copies);
