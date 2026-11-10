@@ -161,7 +161,11 @@ void input_poll(PadState out[4]) {
     {
       PadState live[4];
       for (int i = 0; i < 4; ++i) { live[i] = {}; live[i].err = -1; }
-      gamepads(live);
+      const uint32_t adapter = gcadapter_poll(live);   // the GameCube adapter too (and its report-rate log)
+      PadState sdl[4];
+      for (int i = 0; i < 4; ++i) { sdl[i] = {}; sdl[i].err = -1; }
+      gamepads(sdl);
+      for (int i = 0; i < 4; ++i) if (!(adapter & (1u << i))) live[i] = sdl[i];
       for (int port = 0; port < 4; ++port) {
         if (live[port].err != 0) continue;
         if (out[port].err != 0) out[port].err = 0;

@@ -59,7 +59,7 @@ else()
   # decoded GX frames reach it through gx_aurora. Pads come from Aurora PAD over
   # SDL3 gamepads (Joy-Con, Pro Controller, the official GameCube adapter).
   set(PORT_FRONTEND_SOURCES
-    runtime/host/input_sdl.cpp runtime/host/gc_adapter_none.cpp runtime/host/audio_sdl.cpp
+    runtime/host/input_sdl.cpp runtime/host/gc_adapter_usbhs.cpp runtime/host/audio_sdl.cpp
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/switch_frontend_aurora.cpp
     runtime/host/game_menu.cpp runtime/host/input_config.cpp runtime/host/overlay_imgui.cpp runtime/host/switch_signin.cpp
     runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp runtime/gx/async_backend.cpp)
