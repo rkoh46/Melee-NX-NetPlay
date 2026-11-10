@@ -94,6 +94,7 @@ struct Dirty {
   }
   void reset() { *this = Dirty{}; all = false; }
   bool rows(uint64_t m, unsigned first, unsigned n) const { return all || ((m >> first) & ((1ull << n) - 1)) != 0; }
+  bool bp_reg(unsigned r) const { return all || ((bp[r >> 6] >> (r & 63)) & 1); }
   bool xf_range(unsigned lo, unsigned n) const {
     if (all) return true;
     for (unsigned r = lo; r < lo + n; ++r) if ((xf[r >> 6] >> (r & 63)) & 1) return true;
@@ -119,7 +120,15 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
   const auto& d = frame.draws[index];
   const auto where = [&] { return "draw " + std::to_string(index); };   // built only on failure
   const auto check = [&](bool ok, const char* reason) { if (!ok) fail(frame, where(), reason); };
-  const auto soft = [&](bool ok, const char* reason) { if (!ok) warn(frame, where(), reason); };
+  // Soft checks fail on most draws (Melee leaves dithering on everywhere): after the first report of a
+  // reason, return before building the location string and searching warn's set of reported reasons.
+  const auto soft = [&](bool ok, const char* reason) {
+    if (ok) return;
+    static thread_local const char* reported[32] = {};
+    for (const char* r : reported) { if (r == reason) return; if (!r) break; }
+    for (auto& r : reported) if (!r) { r = reason; break; }
+    warn(frame, where(), reason);
+  };
   check(d.vertex_count > 0 && d.vertex_count <= 65535 &&
         (d.raw_size || (d.first_vertex <= frame.vertices.size() && d.vertex_count <= frame.vertices.size() - d.first_vertex)),
         "invalid vertex range");
@@ -207,7 +216,8 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
   // and matrix blocks that changed since the previous emitted draw are written.
   // Texture mode registers are always written because texture loads between
   // draws go through the SDK and may touch them.
-  const auto bp_changed = [&](unsigned r) { return !prev || pst->bp.reg[r] != st.bp.reg[r]; };
+  // A register outside the dirty set equals the emitted one (Dirty), so only marked ones are compared.
+  const auto bp_changed = [&](unsigned r) { return !prev || (dirty.bp_reg(r) && pst->bp.reg[r] != st.bp.reg[r]); };
   const auto bp_delta = [&](unsigned r) { if (bp_changed(r)) bp(state, uint8_t(r), st.bp.reg[r]); };
   const auto block_changed = [&](const void* a, const void* b, size_t bytes) { return !prev || std::memcmp(a, b, bytes) != 0; };
   // A snapshot has already applied the guest BP mask. Do not replay masks,
@@ -453,9 +463,18 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
   DrawState& emitted = *emitted_storage;
   const DrawCall* previous = nullptr;   // last emitted draw since the frame start or the last copy
   Dirty dirty;                          // state parts written since `emitted` was last brought up to date
-  for (const auto& cmd : frame.commands) {
+  const auto prefetch_draw = [&](size_t k) {   // records are ~5 KB apart: their headers miss the cache
+    if (k >= frame.draws.size()) return;
+    const DrawCall& n = frame.draws[k];
+    __builtin_prefetch(&n.primitive); __builtin_prefetch(&n.arrays[0]); __builtin_prefetch(&n.arrays[6]);
+    __builtin_prefetch(&n.delta); __builtin_prefetch(&n.textures[0]); __builtin_prefetch(&n.textures[4]);
+  };
+  for (size_t c = 0; c < frame.commands.size(); ++c) {
+    const auto& cmd = frame.commands[c];
     if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
+    for (size_t look = c + 1; look < frame.commands.size() && look <= c + 2; ++look)
+      if (frame.commands[look].kind == FrameCommand::Draw) { prefetch_draw(frame.commands[look].index); break; }
     apply_state(state, frame.draws[i], frame);   // every draw, converted or not: the deltas chain through all of them
     dirty.add(frame.draws[i].delta);
     if (!previous) dirty.all = true;     // everything is emitted again: compare nothing, copy everything

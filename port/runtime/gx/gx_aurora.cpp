@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <cstdlib>
 #include "gx_aurora.h"
 #include "gx_aurora_bridge.h"
 
@@ -407,7 +408,10 @@ struct AuroraBackend::Impl {
       write_draw_dump(input, frame);
       dump_path = saved;
     }
-    aurora_bridge::advance_copy_history_in_place(frame, copy_history);   // warns only: nothing to roll back
+    // Copy-history coverage warnings (MELEE_COPY_HISTORY=1 / copy_history=1). Diagnostic only: it compares
+    // every copy-sampling draw's texture bytes with the copy, ~15% of a 4-player frame on the render thread.
+    static const bool copy_history_on = [] { const char* v = std::getenv("MELEE_COPY_HISTORY"); return v && v[0] == '1'; }();
+    if (copy_history_on) aurora_bridge::advance_copy_history_in_place(frame, copy_history);
     if (!aurora_begin_frame()) throw std::runtime_error("Aurora frame unavailable; owner must service the window before submission");
     for (const auto& cmd : frame.commands) {
       if (cmd.kind == FrameCommand::Draw) {

@@ -106,6 +106,8 @@ extern "C" void melee_nx_perf_init(void) {
         affinity_name, compile_workers, monolithic_cache, launch_warm, gx_skip_unready);
 }
 
+extern "C" void switch_profile_second_thread_here(void);   // switch_profile.cpp
+
 extern "C" void melee_nx_perf_thread(const char* name) {
     int role;
     if (std::strcmp(name, "Main thread") == 0)
@@ -116,6 +118,11 @@ extern "C" void melee_nx_perf_thread(const char* name) {
         role = 2;
     else
         return;
+    if (const char* want = std::getenv("MELEE_PROFILE_THREAD")) {
+        if ((role == 1 && std::strcmp(want, "fifo") == 0) || (role == 2 && std::strcmp(want, "worker") == 0)) {
+            switch_profile_second_thread_here();
+        }
+    }
 
     u64 allowed = 0, actual = 0;
     s32 preferred = -1;

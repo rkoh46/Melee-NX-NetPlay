@@ -98,10 +98,17 @@ void switch_profile_watch_range(uint64_t elf_lo, uint64_t elf_hi, uint64_t elf_a
   g_range_lo = elf_lo + slide; g_range_hi = elf_hi + slide;
 }
 
+// profile_thread=fifo|worker: an Aurora thread registers itself (melee_nx_perf_thread) and is
+// sampled as the second thread instead of the renderer.
+static Handle g_second_override = INVALID_HANDLE;
+extern "C" void switch_profile_second_thread_here(void) {
+  g_second_override = threadGetCurHandle();
+  if (g_started) g_target[1] = g_second_override;
+}
 bool switch_profile_start(Thread* target, unsigned hz, Thread* second) {
   if (g_started || !target) return false;
   g_target[0] = target->handle;
-  g_target[1] = second ? second->handle : INVALID_HANDLE;
+  g_target[1] = g_second_override != INVALID_HANDLE ? g_second_override : second ? second->handle : INVALID_HANDLE;
   g_hz = hz ? hz : 1000;
   g_run.store(true);
   Result rc = threadCreate(&g_sampler, sampler, nullptr, nullptr, 64 * 1024, 0x1C, 0);

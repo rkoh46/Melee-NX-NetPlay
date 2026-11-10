@@ -388,6 +388,10 @@ int main(int argc, char** argv) {
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
   // bridge_verify=1: the Aurora bridge also converts every draw with full state comparison and logs any difference.
   if (get("bridge_verify", "0") == "1") setenv("MELEE_BRIDGE_VERIFY", "1", 1);
+  // copy_history=1: the Aurora bridge's EFB-copy coverage warnings (diagnostic; costs render-thread time).
+  if (get("copy_history", "0") == "1") setenv("MELEE_COPY_HISTORY", "1", 1);
+  // profile_thread=fifo|worker: with profile=1, sample that Aurora thread instead of the renderer (pc1).
+  if (const std::string t = get("profile_thread", ""); !t.empty()) setenv("MELEE_PROFILE_THREAD", t.c_str(), 1);
   // gxn_verify=1: every native GX call (decomp source compiled for the console) is compared with the translation.
   if (get("gxn_verify", "0") == "1") gxn::g_verify = true;
   // gml_verify=1: sampled whole-RAM comparison of natively compiled decomp C against the translation.
