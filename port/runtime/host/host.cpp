@@ -41,6 +41,8 @@ namespace hle { void audio_tick(bool force); }
 namespace host {
 
 Options options;
+extern "C" __attribute__((weak)) void aurora_pipeline_background_pause(bool paused);   // Aurora (console)
+extern "C" __attribute__((weak)) double switch_thread_cpu_ms(void);                  // switch_threads.c
 uint8_t* ram = nullptr;
 uint8_t* aram = nullptr;
 ppc::Context* cpu = nullptr;
@@ -582,6 +584,13 @@ static std::string sim_cost_line(uint32_t frames) {
   const uint64_t late_total = late_frame_count();
   size_t n = (size_t)std::snprintf(buf, sizeof buf, "sim: %.1f ms/frame (worst %.1f, late %llu, %llu so far)", g_sim_ms_window / std::max(1u, frames),
                                    g_sim_ms_worst, (unsigned long long)(late_total - late_reported), (unsigned long long)late_total);
+  // On the console: the simulation thread's own running time per frame (wall time includes being preempted).
+  if (switch_thread_cpu_ms) {
+    static double last_cpu = -1;
+    const double cpu = switch_thread_cpu_ms();
+    if (last_cpu >= 0) n += (size_t)std::snprintf(buf + n, sizeof buf - n, " cpu %.1f ms/frame", (cpu - last_cpu) / std::max(1u, frames));
+    last_cpu = cpu;
+  }
   late_reported = late_total;
   bool first = true;
   for (int i = 0; i < SIM_COST_COUNT; ++i) {
@@ -752,6 +761,14 @@ void retrace() {
     const bool in_match = rd8(SCENE_MODE_ADDRESS) == 0x02 && rd8(SCENE_STATE_ADDRESS) == 0x02;
     uint64_t commands, draws, vertices; uint32_t copies;
     if (in_match && !match_start) { gx_stats(&c0, &d0, &v0, &copies); match_start = g_retraces; }
+    // Background pipeline pre-warm (Aurora) runs only outside a match: in one it competed with the
+    // renderer for its core and the game waited on the graphics threads (4-player stages).
+    static bool prewarm_paused = false;
+    if (in_match != prewarm_paused && aurora_pipeline_background_pause) {
+      prewarm_paused = in_match;
+      aurora_pipeline_background_pause(in_match);
+      log("pipelines: background pre-warm %s", in_match ? "paused for the match" : "resumed");
+    }
     if (match_start && g_retraces == match_start + 1200) {
       gx_stats(&commands, &draws, &vertices, &copies);
       log("match fingerprint: %llu/%llu/%llu (GX commands/draws/vertices in the first 1200 frames of the match)",

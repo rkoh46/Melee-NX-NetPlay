@@ -103,6 +103,7 @@ prepare() {
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-object-identity.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-launch-warm-all.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-compiler-cores.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-background-pause.patch"
 }
 
 build_dawn() {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <cstdlib>
 #include "gx_aurora_bridge.h"
 #include <memory>
 #include <cstdio>
@@ -76,7 +77,43 @@ void validate_texture(const Frame& frame, size_t index, unsigned unit, const Tex
     fail(frame, where(), "palette format or immutable palette bytes are incomplete");
 }
 
-void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawState& st, const DrawCall* prev, const DrawState* pst, Draw& out) {
+// Which DrawState parts may differ from the last emitted draw's: the union of the deltas recorded
+// since then (apply_state's records). Matrix blocks, lights and XF ranges outside it are equal by
+// construction, so convert_draw compares only the marked ones and prepare_frame copies only those
+// into `emitted`; a 4-player frame compared and copied ~2.5 KB and 4.4 KB per draw, 1400 draws.
+struct Dirty {
+  bool all = true;
+  uint64_t bp[4] = {}, pos = 0, post = 0, xf[2] = {};
+  uint32_t nrm = 0;
+  uint8_t lights = 0;
+  bool tev = false;
+  void add(const StateDelta& d) {
+    if (d.full) { all = true; return; }
+    for (unsigned i = 0; i < 4; ++i) bp[i] |= d.bp[i];
+    pos |= d.pos; post |= d.post; xf[0] |= d.xf[0]; xf[1] |= d.xf[1]; nrm |= d.nrm; lights |= d.lights; tev |= d.tev;
+  }
+  void reset() { *this = Dirty{}; all = false; }
+  bool rows(uint64_t m, unsigned first, unsigned n) const { return all || ((m >> first) & ((1ull << n) - 1)) != 0; }
+  bool xf_range(unsigned lo, unsigned n) const {
+    if (all) return true;
+    for (unsigned r = lo; r < lo + n; ++r) if ((xf[r >> 6] >> (r & 63)) & 1) return true;
+    return false;
+  }
+  // Brings `to` up to date with `from` in the marked parts (everything when `all`).
+  void copy(DrawState& to, const DrawState& from) const {
+    if (all) { to = from; return; }
+    for (unsigned i = 0; i < 4; ++i) for (uint64_t m = bp[i]; m; m &= m - 1) { const unsigned r = i * 64 + __builtin_ctzll(m); to.bp.reg[r] = from.bp.reg[r]; }
+    for (uint64_t m = pos; m; m &= m - 1) std::memcpy(to.posMatrices + __builtin_ctzll(m) * 4, from.posMatrices + __builtin_ctzll(m) * 4, 16);
+    for (uint32_t m = nrm; m; m &= m - 1) std::memcpy(to.normalMatrices + __builtin_ctz(m) * 3, from.normalMatrices + __builtin_ctz(m) * 3, 12);
+    for (uint64_t m = post; m; m &= m - 1) std::memcpy(to.postMatrices + __builtin_ctzll(m) * 4, from.postMatrices + __builtin_ctzll(m) * 4, 16);
+    for (unsigned m = lights; m; m &= m - 1) std::memcpy(to.lights[__builtin_ctz(m)], from.lights[__builtin_ctz(m)], 64);
+    for (unsigned i = 0; i < 2; ++i) for (uint64_t m = xf[i]; m; m &= m - 1) { const unsigned r = i * 64 + __builtin_ctzll(m); to.xf_regs[r] = from.xf_regs[r]; }
+    to.matrix_index_a = from.matrix_index_a; to.matrix_index_b = from.matrix_index_b;
+    if (tev) { std::memcpy(to.tev_colors, from.tev_colors, sizeof to.tev_colors); std::memcpy(to.tev_kcolors, from.tev_kcolors, sizeof to.tev_kcolors); }
+  }
+};
+
+void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawState& st, const DrawCall* prev, const DrawState* pst, const Dirty& dirty, Draw& out) {
   // `d` holds the draw's own data (vertices, textures, formats); `st` the register and matrix state it
   // renders with, rebuilt from the frame's deltas, and `pst` that of the previous emitted draw.
   const auto& d = frame.draws[index];
@@ -216,16 +253,16 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
   // Aurora accepts complete SDK-aligned matrix blocks only, not the generic
   // hardware XF RAM image. Each float is encoded, never structure-copied.
   for (unsigned i = 0; i < 20; ++i)
-    if (block_changed(st.posMatrices + i * 12, prev ? pst->posMatrices + i * 12 : nullptr, 12 * sizeof(float)))
+    if (dirty.rows(dirty.pos, i * 3, 3) && block_changed(st.posMatrices + i * 12, prev ? pst->posMatrices + i * 12 : nullptr, 12 * sizeof(float)))
       xf_floats(state, uint16_t(i * 12), st.posMatrices + i * 12, 12);
   for (unsigned i = 0; i < 10; ++i)
-    if (block_changed(st.normalMatrices + i * 9, prev ? pst->normalMatrices + i * 9 : nullptr, 9 * sizeof(float)))
+    if (dirty.rows(dirty.nrm, i * 3, 3) && block_changed(st.normalMatrices + i * 9, prev ? pst->normalMatrices + i * 9 : nullptr, 9 * sizeof(float)))
       xf_floats(state, uint16_t(0x400 + i * 9), st.normalMatrices + i * 9, 9);
   for (unsigned i = 0; i < 20; ++i)
-    if (block_changed(st.postMatrices + i * 12, prev ? pst->postMatrices + i * 12 : nullptr, 12 * sizeof(float)))
+    if (dirty.rows(dirty.post, i * 3, 3) && block_changed(st.postMatrices + i * 12, prev ? pst->postMatrices + i * 12 : nullptr, 12 * sizeof(float)))
       xf_floats(state, uint16_t(0x500 + i * 12), st.postMatrices + i * 12, 12);
   for (unsigned i = 0; i < 8; ++i) {
-    if (!block_changed(st.lights[i], prev ? pst->lights[i] : nullptr, 64)) continue;
+    if (!dirty.rows(dirty.lights, i, 1) || !block_changed(st.lights[i], prev ? pst->lights[i] : nullptr, 64)) continue;
     xf_header(state, uint16_t(0x600 + i * 16), 16);
     for (unsigned w = 0; w < 16; ++w) {
       // lights[] is a byte view of host-endian XF words, including its color.
@@ -233,7 +270,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
       u32(state, std::bit_cast<uint32_t>(bytes));
     }
   }
-  if (block_changed(st.xf_regs + 0x09, prev ? pst->xf_regs + 0x09 : nullptr, 9 * 4)) xf_words(state, 0x1009, st.xf_regs + 0x09, 9);
+  if (dirty.xf_range(0x09, 9) && block_changed(st.xf_regs + 0x09, prev ? pst->xf_regs + 0x09 : nullptr, 9 * 4)) xf_words(state, 0x1009, st.xf_regs + 0x09, 9);
   const uint32_t indices[2]{st.matrix_index_a, st.matrix_index_b};
   const bool indices_changed = !prev || pst->matrix_index_a != st.matrix_index_a || pst->matrix_index_b != st.matrix_index_b;
   if (indices_changed) xf_words(state, 0x1018, indices, 2);
@@ -245,9 +282,9 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
   check(viewport[0] > 0 && viewport[1] < 0 && viewport[2] >= 0 && viewport[5] >= viewport[2] && viewport[5] <= 16777215.f,
         "flipped, empty or out-of-range viewport is not covered");
   viewport[3] -= 2; viewport[4] -= 2; // Aurora decoder subtracts 340; hardware uses 342.
-  if (block_changed(st.xf_regs + 0x1a, prev ? pst->xf_regs + 0x1a : nullptr, 6 * 4)) xf_floats(state, 0x101a, viewport.data(), 6);
-  if (block_changed(st.xf_regs + 0x20, prev ? pst->xf_regs + 0x20 : nullptr, 7 * 4)) xf_words(state, 0x1020, st.xf_regs + 0x20, 7);
-  if (block_changed(st.xf_regs + 0x3f, prev ? pst->xf_regs + 0x3f : nullptr, 9 * 4)) {
+  if (dirty.xf_range(0x1a, 6) && block_changed(st.xf_regs + 0x1a, prev ? pst->xf_regs + 0x1a : nullptr, 6 * 4)) xf_floats(state, 0x101a, viewport.data(), 6);
+  if (dirty.xf_range(0x20, 7) && block_changed(st.xf_regs + 0x20, prev ? pst->xf_regs + 0x20 : nullptr, 7 * 4)) xf_words(state, 0x1020, st.xf_regs + 0x20, 7);
+  if (dirty.xf_range(0x3f, 9) && block_changed(st.xf_regs + 0x3f, prev ? pst->xf_regs + 0x3f : nullptr, 9 * 4)) {
     // Aurora leaves a texgen's source unset when the XF row is outside its table and
     // then aborts shader generation if any TEV stage samples it. Rows it cannot
     // serve (binormal/tangent, out of range) are rewritten to the position row.
@@ -264,7 +301,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
   uint32_t post[8];
   for (unsigned i = 0; i < 8; ++i) post[i] = st.xf_regs[0x12] & 1 ? st.xf_regs[0x50 + i] : 61;
   if (!prev || (pst->xf_regs[0x12] & 1) != (st.xf_regs[0x12] & 1) ||
-      block_changed(st.xf_regs + 0x50, prev ? pst->xf_regs + 0x50 : nullptr, 8 * 4))
+      (dirty.xf_range(0x50, 8) && block_changed(st.xf_regs + 0x50, prev ? pst->xf_regs + 0x50 : nullptr, 8 * 4)))
     xf_words(state, 0x1050, post, 8);
 
   if (indices_changed) { cp(state, 0x30, st.matrix_index_a); cp(state, 0x40, st.matrix_index_b); }
@@ -415,17 +452,36 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
   DrawState& state = *state_storage;
   DrawState& emitted = *emitted_storage;
   const DrawCall* previous = nullptr;   // last emitted draw since the frame start or the last copy
+  Dirty dirty;                          // state parts written since `emitted` was last brought up to date
   for (const auto& cmd : frame.commands) {
     if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
     apply_state(state, frame.draws[i], frame);   // every draw, converted or not: the deltas chain through all of them
+    dirty.add(frame.draws[i].delta);
+    if (!previous) dirty.all = true;     // everything is emitted again: compare nothing, copy everything
     // Point at this frame's textures before anything can fail: the copy-history pass reads them for
     // every draw, including ones the bridge rejects below.
     for (unsigned k = 0; k < 8; ++k) out.draws[i].textures[k] = &frame.draws[i].textures[k];
     try {
-      convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, out.draws[i]);
+      convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, dirty, out.draws[i]);
+      // MELEE_BRIDGE_VERIFY=1 (bridge_verify=1): the same draw converted comparing every block, as before
+      // the dirty tracking; any difference in the bytes handed to Aurora is logged.
+      static const bool verify = [] { const char* v = std::getenv("MELEE_BRIDGE_VERIFY"); return v && v[0] == '1'; }();
+      if (verify) {
+        static thread_local Draw check_draw;
+        static uint64_t checked = 0, mismatches = 0;
+        Dirty everything;   // all = true
+        convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, everything, check_draw);
+        ++checked;
+        if (check_draw.state != out.draws[i].state && ++mismatches <= 8)
+          std::fprintf(stderr, "bridge-verify: draw %zu of frame %llu differs (%zu vs %zu state bytes)\n", i,
+                       (unsigned long long)frame.sequence, out.draws[i].state.size(), check_draw.state.size());
+        if ((checked & (checked - 1)) == 0 && checked >= 1024)
+          std::fprintf(stderr, "bridge-verify: %llu draws checked, %llu differ\n", (unsigned long long)checked, (unsigned long long)mismatches);
+      }
       previous = &frame.draws[i];
-      emitted = state;
+      dirty.copy(emitted, state);
+      dirty.reset();
     } catch (const CoverageError& error) {
       // One draw the bridge cannot represent must not take the frame down.
       warn(frame, "draw " + std::to_string(i), error.what());

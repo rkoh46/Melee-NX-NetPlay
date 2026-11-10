@@ -1,0 +1,37 @@
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -210,6 +210,10 @@
+ // it just spent compiling, so background pre-warm runs at a bounded fraction of
+ // the machine while on-demand compiles (a draw is waiting) are never throttled.
+ static std::atomic_bool g_compilerCorePinned{false};
++// Set by the application while gameplay runs (Melee-NX: during a match). Background pre-warm
++// then waits: the pipelines a match draws were compiled at launch or are compiled on demand,
++// and a seed compile on the renderer's core cost the match frames. Menus drain the seed.
++static std::atomic_bool g_backgroundPaused{false};
+ constexpr size_t PinnedBackgroundCreditsPerFrame = 1;
+ constexpr size_t PinnedBackgroundCreditCap = 4;
+ // Smoothed recent frame time (EMA), published by begin_pipeline_frame and read by
+@@ -1472,10 +1476,12 @@
+         }
+         if (g_launchWarmActive.load(std::memory_order_relaxed)) {
+           // No frames are running, so no credits are being granted: compile freely.
+-        } else if (g_backgroundCredits.load(std::memory_order_relaxed) == 0) {
++        } else if (g_backgroundCredits.load(std::memory_order_relaxed) == 0 ||
++                   g_backgroundPaused.load(std::memory_order_relaxed)) {
+           g_pipelineQueueCv.wait_for(lock, std::chrono::milliseconds(16), [] {
+             return !g_pipelineQueue.empty() || g_pipelineThreadEnd ||
+-                   g_backgroundCredits.load(std::memory_order_relaxed) > 0;
++                   (g_backgroundCredits.load(std::memory_order_relaxed) > 0 &&
++                    !g_backgroundPaused.load(std::memory_order_relaxed));
+           });
+           hasMore = true;
+           continue;
+@@ -2173,3 +2179,8 @@
+ // Called once by the host after aurora_initialize (and any launcher), before the
+ // game starts. Draws a progress screen while the shaders this device uses compile.
+ extern "C" void aurora_warm_pipelines(void) { aurora::gfx::run_launch_warm(); }
++
++// C entry point for the application: pause (true) or resume (false) background pipeline pre-warm.
++extern "C" void aurora_pipeline_background_pause(bool paused) {
++  aurora::gfx::g_backgroundPaused.store(paused, std::memory_order_relaxed);
++}

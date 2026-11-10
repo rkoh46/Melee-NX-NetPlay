@@ -855,7 +855,7 @@ void gpu_consume(const uint8_t* data, size_t len) {
   fifo_parse_pending();
 }
 void gpu_main() {
-  if (switch_pin_current_thread) switch_pin_current_thread(0, 0x28);
+  if (switch_pin_current_thread) switch_pin_current_thread(0, 0x26);   // ahead of Aurora's FIFO and render workers on core 0: the guest waits for this thread at every frame end
   host::ScopedFatalBoundary boundary(true);   // a fatal error here is relayed to the guest thread
   try {
     for (;;) {

@@ -386,6 +386,8 @@ int main(int argc, char** argv) {
   if (const std::string level = get("force_cpu", ""); !level.empty()) setenv("MELEE_FORCE_CPU", level.c_str(), 1);
   // hle_verify=1: hooked matrix routines also run the original code in the interpreter and log differences.
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
+  // bridge_verify=1: the Aurora bridge also converts every draw with full state comparison and logs any difference.
+  if (get("bridge_verify", "0") == "1") setenv("MELEE_BRIDGE_VERIFY", "1", 1);
   // gxn_verify=1: every native GX call (decomp source compiled for the console) is compared with the translation.
   if (get("gxn_verify", "0") == "1") gxn::g_verify = true;
   // gml_verify=1: sampled whole-RAM comparison of natively compiled decomp C against the translation.

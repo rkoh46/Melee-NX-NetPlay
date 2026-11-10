@@ -12,14 +12,45 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <thread>
+// Console: lowers the calling thread's priority (switch_threads.c); absent elsewhere.
+extern "C" __attribute__((weak)) void switch_set_current_thread_priority(int priority);
 namespace gx {
 class FrameQueue {
   std::mutex mutex;
   std::condition_variable changed;
   std::deque<Frame> frames;
   std::deque<Frame> recycled;   // buffers returned by the renderer, capacity preserved
+  std::deque<Frame> returned;   // returned but not cleared yet: the cleaner thread empties them
+  std::condition_variable clean_wake;
+  std::thread cleaner;
+  bool stopping = false;
   bool finished = false;
+  // Clearing a frame destroys ~1,500 draw records (their texture and vertex-array references); on
+  // the render thread that was 15% of a 4-player frame. A low-priority thread does it instead.
+  void cleaner_main() {
+    if (switch_set_current_thread_priority) switch_set_current_thread_priority(0x2E);
+    std::unique_lock<std::mutex> lock(mutex);
+    for (;;) {
+      clean_wake.wait(lock, [&] { return stopping || !returned.empty(); });
+      if (returned.empty()) return;   // stopping, nothing left
+      Frame frame = std::move(returned.front()); returned.pop_front();
+      lock.unlock();
+      frame.clear();
+      lock.lock();
+      if (recycled.size() < 4) recycled.push_back(std::move(frame));
+      else { lock.unlock(); { Frame drop = std::move(frame); } lock.lock(); }   // freed outside the lock
+    }
+  }
 public:
+  FrameQueue() = default;
+  FrameQueue(const FrameQueue&) = delete;
+  FrameQueue& operator=(const FrameQueue&) = delete;
+  ~FrameQueue() {
+    { std::lock_guard<std::mutex> lock(mutex); stopping = true; }
+    clean_wake.notify_all();
+    if (cleaner.joinable()) cleaner.join();
+  }
 #if defined(__SWITCH__)
   // On the Switch a match frame is about 8 MB of draw state (1,500 draws of ~5 KB), and the render
   // thread can stop for a second at a time while NVK compiles a shader variant it has not seen
@@ -55,9 +86,10 @@ public:
   // The renderer returns buffers it is about to overwrite.
   void recycle(Frame&& frame) {
     std::lock_guard<std::mutex> lock(mutex);
-    if (recycled.size() >= 4) return;
-    frame.clear();
-    recycled.push_back(std::move(frame));
+    if (recycled.size() + returned.size() >= 6) return;   // the caller frees it (rare: a long backlog)
+    if (!cleaner.joinable()) cleaner = std::thread([this] { cleaner_main(); });
+    returned.push_back(std::move(frame));
+    clean_wake.notify_one();
   }
   bool pop(Frame& frame) {
     std::unique_lock<std::mutex> lock(mutex);

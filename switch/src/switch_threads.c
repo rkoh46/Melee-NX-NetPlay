@@ -255,3 +255,18 @@ void switch_pin_current_thread(int core, int priority) {
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1ull << core);
     svcSetThreadPriority(CUR_THREAD_HANDLE, priority);
 }
+
+// Running time of the calling thread on every core so far, in ms (13.0.0+; older systems: the
+// deprecated info type). Used by the frame log to tell work from preemption.
+double switch_thread_cpu_ms(void) {
+    u64 ticks = 0;
+    if (R_FAILED(svcGetInfo(&ticks, InfoType_ThreadTickCount, CUR_THREAD_HANDLE, UINT64_MAX)) &&
+        R_FAILED(svcGetInfo(&ticks, InfoType_ThreadTickCountDeprecated, CUR_THREAD_HANDLE, UINT64_MAX)))
+        return 0.0;
+    return (double)ticks * 1000.0 / 19200000.0;
+}
+
+// Sets the calling thread's priority (higher numbers run later). Background cleanup threads.
+void switch_set_current_thread_priority(int priority) {
+    svcSetThreadPriority(CUR_THREAD_HANDLE, (u32)priority);
+}
