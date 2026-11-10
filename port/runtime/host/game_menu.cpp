@@ -285,9 +285,21 @@ void menu_frame(PadState pads[4]) {
       }
     }
     if (g_toggle_request.exchange(false)) set_open(!g_open.load());
-    // The open combo: L + R + Start held on any connected controller for half a second.
-    bool combo = false;
-    for (int i = 0; i < 4; ++i) if (pads[i].err == 0 && (pads[i].button & (BTN_L | BTN_R | BTN_START)) == (BTN_L | BTN_R | BTN_START)) combo = true;
+    // The open combo: L + R + Start held on any connected controller for half a second. Melee's
+    // own L + R + A + Start (quit the match) contains it, so a hold that includes A never counts,
+    // and pressing A during the hold cancels it until the buttons are let go.
+    static bool g_combo_blocked = false;
+    bool combo = false, any_held = false;
+    for (int i = 0; i < 4; ++i) {
+      if (pads[i].err != 0) continue;
+      const uint32_t b = pads[i].button;
+      if ((b & (BTN_L | BTN_R | BTN_START)) == (BTN_L | BTN_R | BTN_START)) {
+        any_held = true;
+        if (b & BTN_A) g_combo_blocked = true; else combo = true;
+      }
+    }
+    if (!any_held) g_combo_blocked = false;
+    if (g_combo_blocked) combo = false;
     g_combo_frames = combo ? g_combo_frames + 1 : 0;
     if (g_combo_frames == 30) set_open(!g_open.load());
     if (!g_open.load()) { g_prev_buttons = 0; return; }

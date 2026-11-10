@@ -157,7 +157,9 @@ static switch_exit_hook_fn exit_hook;
 void switch_set_exit_hook(switch_exit_hook_fn hook) { exit_hook = hook; }
 
 __attribute__((noreturn)) static void fast_exit(void) {
-    if (exit_hook) exit_hook();
+    switch_exit_hook_fn hook = exit_hook;
+    exit_hook = NULL;   // a crash inside the hook must not run it again
+    if (hook) hook();
     fflush(NULL);
     fsync(STDOUT_FILENO);
     fsync(STDERR_FILENO);
@@ -169,13 +171,25 @@ extern void __real_exit(int code);
 // A normal exit must go back through libnx so nx-hbloader regains control and returns to the
 // Homebrew Menu; svcExitProcess from an NRO ends hbloader itself, which the system reports as
 // "The software was closed because an error occurred". abort/_exit keep the fast path.
+extern void __real__exit(int code);
+// exit() runs the hook once, then newlib's atexit handlers and static destructors, then _exit.
+// That _exit must stay on libnx's path back to hbloader: fast_exit would run the hook a second
+// time over destroyed objects (card_flush walked a freed vector: a Data Abort on every quit) and
+// end with svcExitProcess, which the system reports as an error.
+static volatile int normal_exit;
 __attribute__((noreturn)) void __wrap_exit(int code) {
-    if (exit_hook) exit_hook();
+    switch_exit_hook_fn hook = exit_hook;
+    exit_hook = NULL;
+    if (hook) hook();
     fflush(NULL);
+    normal_exit = 1;
     __real_exit(code);
     __builtin_unreachable();
 }
-__attribute__((noreturn)) void __wrap__exit(int code) { (void)code; fast_exit(); }
+__attribute__((noreturn)) void __wrap__exit(int code) {
+    if (normal_exit) __real__exit(code);
+    fast_exit();
+}
 __attribute__((noreturn)) void __wrap_abort(void) { fast_exit(); }
 
 int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr, void* (*start)(void*), void* arg) {

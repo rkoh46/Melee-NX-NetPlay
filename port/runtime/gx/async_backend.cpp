@@ -36,13 +36,20 @@ void AsyncBackend::run(const std::atomic<bool>& stop) {
     }
     const double t0 = host::now_seconds();
     renderer_.submit_frame(frame);
-    const double ms = (host::now_seconds() - t0) * 1000.0;
+    const double t1 = host::now_seconds();
+    const double ms = (t1 - t0) * 1000.0;
     stat_ms_ += ms; if (ms > stat_worst_ms_) stat_worst_ms_ = ms;
+    // Age of the picture when the render thread finished handing it on: from the moment the game
+    // finished the frame (frame.time; its inputs were read one simulation frame earlier) to here. Aurora's FIFO, render worker and the swap
+    // chain come after this, so it is a floor on input-to-display latency, not the whole of it.
+    static double age_sum = 0.0, age_worst = 0.0;
+    if (frame.time > 0.0) { const double age = (t1 - frame.time) * 1000.0; age_sum += age; if (age > age_worst) age_worst = age; }
     ++rendered_;
     if (++stat_frames_ == 120) {
-      host::log("renderer: %.1f ms/frame on the render thread (worst %.1f), %llu stale frames dropped so far",
-                stat_ms_ / stat_frames_, stat_worst_ms_, (unsigned long long)dropped_.load());
-      stat_frames_ = 0; stat_ms_ = stat_worst_ms_ = 0.0;
+      host::log("renderer: %.1f ms/frame on the render thread (worst %.1f), %llu stale frames dropped so far; "
+                "frame age at hand-off %.1f ms (worst %.1f)",
+                stat_ms_ / stat_frames_, stat_worst_ms_, (unsigned long long)dropped_.load(), age_sum / stat_frames_, age_worst);
+      stat_frames_ = 0; stat_ms_ = stat_worst_ms_ = 0.0; age_sum = age_worst = 0.0;
     }
     queue_.recycle(std::move(frame));
     frame = Frame{};
