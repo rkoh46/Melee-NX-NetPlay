@@ -76,6 +76,8 @@ else()
   target_link_libraries(runtime_switch PUBLIC port_enet)
 endif()
 target_link_libraries(runtime_switch PUBLIC native_animation port_build_options Threads::Threads)
+# Line tables only (no code change): console profiles of the render thread resolve to source lines.
+target_compile_options(runtime_switch PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-gline-tables-only> $<$<COMPILE_LANGUAGE:C>:-g1>)
 
 # ---- The executable and its NRO ----
 add_executable(melee_nx_netplay app/main_switch.cpp)

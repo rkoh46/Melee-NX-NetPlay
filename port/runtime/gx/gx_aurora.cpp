@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <array>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -81,6 +82,15 @@ struct AuroraBackend::Impl {
     uint32_t width, height, format, mode0, mode1, tlut_format, levels, unit;
     auto tuple() const { return std::tie(source, width, height, format, mode0, mode1, tlut_format, levels, unit); }
     bool operator<(const TextureKey& b) const { return tuple() < b.tuple(); }
+    bool operator==(const TextureKey& b) const { return tuple() == b.tuple(); }
+  };
+  struct TextureKeyHash {
+    size_t operator()(const TextureKey& k) const {
+      uint64_t h = k.source * 0x9E3779B97F4A7C15ull;
+      for (uint32_t v : {k.width, k.height, k.format, k.mode0, k.mode1, k.tlut_format, k.levels, k.unit})
+        h = (h ^ v) * 0x100000001B3ull;
+      return size_t(h ^ (h >> 29));
+    }
   };
   struct TextureObject {
     GXTexObj texture{};
@@ -90,7 +100,7 @@ struct AuroraBackend::Impl {
     std::shared_ptr<const TextureSnapshot> source;
     std::vector<uint8_t> converted;   // paletted textures: the decoded image Aurora samples instead of the indices
   };
-  std::map<TextureKey, TextureObject> textures;
+  std::unordered_map<TextureKey, TextureObject, TextureKeyHash> textures;   // looked up for every texture of every draw
   std::function<void()> overlay;
   aurora_bridge::PreparedFrame prepared;   // reused every frame: its draws keep their byte buffers
   std::string dump_path; uint8_t dump_major = 0, dump_minor = 0; unsigned dump_after = 0, dump_seen = 0; bool dump_armed = false;
@@ -406,11 +416,11 @@ struct AuroraBackend::Impl {
         if (g_debug & kDebugSkipCopyDraws) {
           bool samples_copy = false;
           for (unsigned unit = 0; unit < 8; ++unit)
-            if (d.textures[unit].used && copy_tokens.count(d.textures[unit].addr)) samples_copy = true;
+            if (d.textures[unit]->used && copy_tokens.count(d.textures[unit]->addr)) samples_copy = true;
           if (samples_copy) continue;
         }
         for (unsigned unit = 0; unit < 8; ++unit) {
-          const auto& t = d.textures[unit];
+          const auto& t = *d.textures[unit];
           if (!t.used) continue;
           const auto found = (g_debug & kDebugCopyFromRam) ? copy_tokens.end() : copy_tokens.find(t.addr);
           auto& obj = texture(t, unit, found == copy_tokens.end() ? nullptr : found->second.get());

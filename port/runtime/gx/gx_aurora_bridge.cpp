@@ -54,33 +54,35 @@ void warn(const Frame& frame, const std::string& where, const char* reason) {
 bool texture_format(uint32_t f) { return f <= 6 || f == 8 || f == 9 || f == 10 || f == 14; }
 bool matrix_row(uint32_t row, bool identity) { return (row <= 57 && row % 3 == 0) || (identity && row == 60); }
 
-void validate_texture(const Frame& frame, const std::string& where, const TextureRef& t) {
+void validate_texture(const Frame& frame, size_t index, unsigned unit, const TextureRef& t) {
+  // The location text is built only when a check fails (it was two string allocations per texture per draw).
+  const auto where = [&] { return "draw " + std::to_string(index) + " texture " + std::to_string(unit); };
   if (!t.data || !t.width || !t.height || t.width > 1024 || t.height > 1024 || !texture_format(t.format))
-    fail(frame, where, "invalid texture shape, format, or missing immutable bytes");
+    fail(frame, where(), "invalid texture shape, format, or missing immutable bytes");
   const auto filter = bits(t.mode0, 5, 3);
   if (bits(t.mode0, 0, 2) > 2 || bits(t.mode0, 2, 2) > 2 || filter == 3 || filter == 7 || bits(t.mode0, 19, 2) > 2)
-    fail(frame, where, "unsupported texture wrap/filter/anisotropy encoding");
+    fail(frame, where(), "unsupported texture wrap/filter/anisotropy encoding");
   const bool mips = (filter & 3) != 0;
   const auto max_lod = bits(t.mode1, 8, 8);
   // Aurora infers uploaded mip count from floor(maxLOD); partial mip LOD needs
   // separate upload-level metadata before it can be represented without drift.
   if (mips && (max_lod % 16 != 0 || max_lod / 16 + 1 != t.mip_levels))
-    fail(frame, where, "fractional or clamped mip-count mapping is not implemented");
+    fail(frame, where(), "fractional or clamped mip-count mapping is not implemented");
   if (t.mip_levels != texture_mip_count(t.width, t.height, t.mip_levels) || (!mips && t.mip_levels != 1) ||
       t.data->image.size() < texture_chain_bytes(t.width, t.height, t.format, t.mip_levels))
-    fail(frame, where, "texture mip chain is incomplete");
+    fail(frame, where(), "texture mip chain is incomplete");
   const uint32_t palette_bytes = t.format == 8 ? 32 : t.format == 9 ? 512 : t.format == 10 ? 32768 : 0;
   if (palette_bytes && (t.tlut_format > 2 || t.data->palette.size() < palette_bytes))
-    fail(frame, where, "palette format or immutable palette bytes are incomplete");
+    fail(frame, where(), "palette format or immutable palette bytes are incomplete");
 }
 
 void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawState& st, const DrawCall* prev, const DrawState* pst, Draw& out) {
   // `d` holds the draw's own data (vertices, textures, formats); `st` the register and matrix state it
   // renders with, rebuilt from the frame's deltas, and `pst` that of the previous emitted draw.
   const auto& d = frame.draws[index];
-  const std::string where = "draw " + std::to_string(index);
-  const auto check = [&](bool ok, const char* reason) { if (!ok) fail(frame, where, reason); };
-  const auto soft = [&](bool ok, const char* reason) { if (!ok) warn(frame, where, reason); };
+  const auto where = [&] { return "draw " + std::to_string(index); };   // built only on failure
+  const auto check = [&](bool ok, const char* reason) { if (!ok) fail(frame, where(), reason); };
+  const auto soft = [&](bool ok, const char* reason) { if (!ok) warn(frame, where(), reason); };
   check(d.vertex_count > 0 && d.vertex_count <= 65535 &&
         (d.raw_size || (d.first_vertex <= frame.vertices.size() && d.vertex_count <= frame.vertices.size() - d.first_vertex)),
         "invalid vertex range");
@@ -136,7 +138,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
             "cylindrical texture-coordinate wrap is not implemented in Aurora");
     }
     if (d.textures[i].used) {
-      validate_texture(frame, where + " texture " + std::to_string(i), d.textures[i]);
+      validate_texture(frame, index, i, d.textures[i]);
       const auto& t = d.textures[i];
       check(t.width == (st.bp.teximage0(i) & 1023) + 1 && t.height == bits(st.bp.teximage0(i), 10, 10) + 1 &&
             t.format == bits(st.bp.teximage0(i), 20, 4) && t.mode0 == st.bp.texmode0(i) && t.mode1 == st.bp.texmode1(i),
@@ -161,7 +163,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
   out.state.clear(); out.vertices.clear();   // the caller's Draw keeps its buffers between frames
   out.arrays.fill(nullptr);
   out.primitive = uint8_t(d.primitive); out.vertex_count = uint16_t(d.vertex_count);
-  std::copy(std::begin(d.textures), std::end(d.textures), out.textures.begin());
+  for (unsigned i = 0; i < 8; ++i) out.textures[i] = &d.textures[i];
   auto& state = out.state;
   state.reserve(prev ? 512 : 4096);
   // Aurora's FIFO state persists between draws of one frame, so only registers
@@ -278,7 +280,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
     }
     for (unsigned i = 0; i < 12; ++i) {
       const auto& a = d.arrays[i];
-      out.arrays[i] = a.data;
+      out.arrays[i] = a.data.get();
       if (!a.data) { check(!a.stride || a.data, "indexed vertex array outside RAM"); continue; }
       check(a.data->size() >= a.bytes, "vertex array slice was not captured");
       // GX_AURORA_LOAD_ARRAYBASE | attribute: host pointer (u64), size (u32), little-endian flag (u8).
@@ -417,6 +419,9 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
     if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
     apply_state(state, frame.draws[i], frame);   // every draw, converted or not: the deltas chain through all of them
+    // Point at this frame's textures before anything can fail: the copy-history pass reads them for
+    // every draw, including ones the bridge rejects below.
+    for (unsigned k = 0; k < 8; ++k) out.draws[i].textures[k] = &frame.draws[i].textures[k];
     try {
       convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, out.draws[i]);
       previous = &frame.draws[i];
@@ -445,32 +450,46 @@ CopyHistory advance_copy_history(const PreparedFrame& frame, CopyHistory history
 // The in-place form: this pass only warns, so there is nothing to roll back, and copying the
 // history map (up to 4096 nodes) every frame was most of the render thread's allocation.
 void advance_copy_history_in_place(const PreparedFrame& frame, CopyHistory& history) {
+  // Entries overlapping [lo, hi): the map is ordered by start address and no entry is longer than
+  // max_bytes, so a backward walk from hi visits only candidates (a full walk per texture per draw
+  // was 2% of the render thread).
+  uint64_t max_bytes = 0;
+  for (const auto& [address, record] : history) max_bytes = std::max<uint64_t>(max_bytes, record.bytes);
+  const auto for_overlaps = [&](uint64_t lo, uint64_t hi, auto&& visit) {
+    auto it = hi > UINT32_MAX ? history.end() : history.lower_bound(uint32_t(hi));
+    while (it != history.begin()) {
+      --it;
+      if (uint64_t(it->first) + max_bytes <= lo) break;
+      if (uint64_t(it->first) + it->second.bytes > lo) visit(it->first, it->second);
+    }
+  };
   for (const auto& cmd : frame.commands) {
     if (cmd.kind == FrameCommand::Copy) {
       const auto& c = frame.copies.at(cmd.index);
       const uint64_t bytes = c.to_xfb ? uint64_t(c.dest_stride) * c.src_h : uint64_t(c.dest_stride) * ((c.src_h + 3) / 4);
       if (!bytes || bytes > UINT32_MAX || uint64_t(c.dest_addr) + bytes > uint64_t(UINT32_MAX) + 1)
         { warn_history("invalid copy destination range"); continue; }
-      for (const auto& [address, previous] : history) {
+      for_overlaps(c.dest_addr, uint64_t(c.dest_addr) + bytes, [&](uint32_t address, const CopyRecord& previous) {
         if (address == c.dest_addr) {
           if (previous.width != c.src_w || previous.height != c.src_h || previous.bytes != bytes || previous.xfb != c.to_xfb)
             warn_history("copy shape change leaves an untracked destination tail");
-        } else if (uint64_t(c.dest_addr) < uint64_t(address) + previous.bytes && uint64_t(address) < uint64_t(c.dest_addr) + bytes)
+        } else
           warn_history("overlapping copy destinations are not tracked");
-      }
+      });
       history[c.dest_addr] = {c.src_w, c.src_h, uint32_t(bytes), c.to_xfb, c.destination_before_copy};
+      max_bytes = std::max<uint64_t>(max_bytes, bytes);
       if (history.size() > 4096) history.erase(history.begin());
     } else {
-      for (const auto& t : frame.draws.at(cmd.index).textures) {
+      for (const TextureRef* tp : frame.draws.at(cmd.index).textures) {
+        const TextureRef& t = *tp;
         if (!t.used) continue;
         const uint64_t end = uint64_t(t.addr) + texture_chain_bytes(t.width, t.height, t.format, t.mip_levels);
-        for (const auto& [address, copy] : history) {
-          if (uint64_t(t.addr) >= uint64_t(address) + copy.bytes || uint64_t(address) >= end) continue;
+        for_overlaps(t.addr, end, [&](uint32_t address, const CopyRecord& copy) {
           if (address != t.addr || copy.xfb || copy.width != t.width || copy.height != t.height || t.format != 6 || t.mip_levels != 1)
             warn_history("unsupported texture view of an EFB/XFB copy");
           if (!t.data || copy.destination_bytes != t.data->image)
             warn_history("CPU-modified EFB-copy destination is not re-uploaded");
-        }
+        });
       }
     }
   }

@@ -22,8 +22,11 @@ struct Draw {
   // Reconstructed semantic GX state and canonical direct-attribute vertex data,
   // in documented GX big-endian wire order. Never the original guest FIFO.
   std::vector<uint8_t> state, vertices;
-  std::array<TextureRef, 8> textures;
-  std::array<std::shared_ptr<const std::vector<uint8_t>>, 12> arrays;   // raw draws: the indexed-array slices the state points at
+  // Into the source Frame's draw, which outlives the submission (aurora_end_frame drains before it
+  // returns). Plain pointers: copying eight TextureRefs and twelve array shared_ptrs per draw was
+  // ~12% of the render thread in atomic reference counting.
+  std::array<const TextureRef*, 8> textures{};
+  std::array<const std::vector<uint8_t>*, 12> arrays{};   // raw draws: the indexed-array slices the state points at
   uint8_t primitive = 0;
   uint16_t vertex_count = 0;
   uint32_t vertex_stride = 0;
