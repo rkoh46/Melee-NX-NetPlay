@@ -183,6 +183,22 @@ void create_file() {
   g_last_frame = -123;
 }
 
+void finish_file() {
+  if (!g_file) return;
+  std::vector<uint8_t> closing = generate_metadata();
+  closing.push_back('}');
+  replay_write(closing.data(), closing.size());
+  uint8_t size_bytes[4] = {(uint8_t)(g_written >> 24), (uint8_t)(g_written >> 16), (uint8_t)(g_written >> 8), (uint8_t)g_written};
+#if defined(__SWITCH__)
+  melee_nx_afile_patch(g_file, 11, size_bytes, 4);   // in order after the queued bytes, on the writer thread
+#else
+  replay_drain();   // the header patch below seeks: everything queued must be on disk first
+  std::fseek(g_file, 11, SEEK_SET);
+  std::fwrite(size_bytes, 1, 4, g_file);
+#endif
+  close_file();
+}
+
 void write_to_file(const uint8_t* payload, uint32_t length, const char* option) {
   if (std::strcmp(option, "create") == 0) create_file();
   if (!g_file) return;
@@ -193,20 +209,7 @@ void write_to_file(const uint8_t* payload, uint32_t length, const char* option) 
   }
   replay_write(payload, length);
   g_written += length;
-  if (std::strcmp(option, "close") == 0) {
-    std::vector<uint8_t> closing = generate_metadata();
-    closing.push_back('}');
-    replay_write(closing.data(), closing.size());
-    uint8_t size_bytes[4] = {(uint8_t)(g_written >> 24), (uint8_t)(g_written >> 16), (uint8_t)(g_written >> 8), (uint8_t)g_written};
-#if defined(__SWITCH__)
-    melee_nx_afile_patch(g_file, 11, size_bytes, 4);   // in order after the queued bytes, on the writer thread
-#else
-    replay_drain();   // the header patch below seeks: everything queued must be on disk first
-    std::fseek(g_file, 11, SEEK_SET);
-    std::fwrite(size_bytes, 1, 4, g_file);
-#endif
-    close_file();
-  }
+  if (std::strcmp(option, "close") == 0) finish_file();
 }
 
 void configure_commands(const uint8_t* payload, uint8_t length) {
@@ -375,6 +378,9 @@ void prepare_file(const uint8_t* payload, uint32_t available, bool load) {
 }  // namespace
 
 // The disc emulation keeps reads deterministic only while a match runs (see hle_dvd.cpp).
+// Quitting mid-match: finish the open replay as Slippi Dolphin does when emulation stops (metadata,
+// closing brace, raw size in the header), so the game up to the last frame stays watchable.
+void finish_replay() { if (g_file) { host::log("slippi: finishing the replay of an unfinished game"); finish_file(); } }
 bool match_running() { return g_match_frames.load(std::memory_order_relaxed); }
 
 // Every game file the Sys folder can serve is read and patched on a worker at boot, so the first

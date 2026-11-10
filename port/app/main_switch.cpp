@@ -312,11 +312,13 @@ extern "C" void userAppExit() {
   romfsExit();
 }
 
+namespace slippi { void finish_replay(); }   // exi_slippi.cpp: completes a replay cut off by quitting
+
 int main(int argc, char** argv) {
   (void)argc; (void)argv;
   // Runs on exit(), abort() and Aurora's FATAL: flush the log and, when sampling, write the profile
   // so a crash still leaves the hot-address table behind.
-  switch_set_exit_hook([] { host::card_flush(); ppc::dump_branch_counts((std::string(kBaseDir) + "/Logs/branch_counts.txt").c_str()); switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
+  switch_set_exit_hook([] { slippi::finish_replay(); host::card_flush(); ppc::dump_branch_counts((std::string(kBaseDir) + "/Logs/branch_counts.txt").c_str()); switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
 #if !MELEE_NX_AURORA
   // The text console and libnx pad are the headless build's only UI. With the
   // renderer, Aurora's SDL window owns the display and the controllers.
