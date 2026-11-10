@@ -70,8 +70,15 @@ else()
   endif()
 endif()
 
+# Natively compiled decomp C (tools/gml): the lowered object and its guest-register wrappers.
+set(GML_DIR "${PORT_GEN}/../gml")
+set(GML_OBJECTS)
+if(EXISTS "${GML_DIR}/gml_native.o")
+  set(GML_OBJECTS "${GML_DIR}/gml_native.o")
+endif()
 add_library(runtime_switch STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} ${PORT_FRONTEND_SOURCES} ${PORT_SWITCH_SOURCES}
-  runtime/gx/gxnative/gxn_glue.cpp "${GXN_DIR}/gxn_hle.cpp")
+  runtime/gx/gxnative/gxn_glue.cpp "${GXN_DIR}/gxn_hle.cpp"
+  runtime/gml/gml_glue.cpp "${GML_DIR}/gml_hle.cpp" ${GML_OBJECTS})
 target_include_directories(runtime_switch PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
   "${PORT_GEN}" "${PROJECT_SOURCE_DIR}/native" "${PROJECT_SOURCE_DIR}/switch/src" third_party)
 # devkitPro portlibs (curl, mbedTLS, zlib) and libnx headers.
@@ -86,7 +93,7 @@ else()
   target_link_libraries(runtime_switch PUBLIC port_enet)
 endif()
 target_link_libraries(runtime_switch PUBLIC native_animation port_build_options Threads::Threads gx_native)
-target_include_directories(runtime_switch PRIVATE runtime/gx/gxnative)
+target_include_directories(runtime_switch PRIVATE runtime/gx/gxnative runtime/gml)
 # Line tables only (no code change): console profiles of the render thread resolve to source lines.
 target_compile_options(runtime_switch PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-gline-tables-only> $<$<COMPILE_LANGUAGE:C>:-g1>)
 

@@ -382,6 +382,8 @@ int main(int argc, char** argv) {
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
   // gxn_verify=1: every native GX call (decomp source compiled for the console) is compared with the translation.
   if (get("gxn_verify", "0") == "1") setenv("MELEE_GXN_VERIFY", "1", 1);
+  // gml_verify=1: sampled whole-RAM comparison of natively compiled decomp C against the translation.
+  if (get("gml_verify", "0") == "1") setenv("MELEE_GML_VERIFY", "1", 1);
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
   if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
   if (get("shader_warmup", "1") == "0") setenv("AURORA_LAUNCH_WARM_SECONDS", "0", 1);

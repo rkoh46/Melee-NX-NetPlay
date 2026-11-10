@@ -888,8 +888,10 @@ void gpu_main() {
   g_gpu_cv.notify_all();
 }
 // Hands the producer chunk to the worker (waiting while 8 MB are already queued).
+uint64_t g_submits = 0;   // hand-offs so far (verify_take detects one inside a compared call)
 void gpu_submit() {
   if (!g_prod_len) return;
+  ++g_submits;
   bool wake = false;
   {
     std::unique_lock<std::mutex> lock(g_gpu_mutex);
@@ -1003,11 +1005,13 @@ void fifo_store16(uint32_t v) {
 }
 FifoMark verify_mark() {
   if (g_gpu_threaded && g_prod_len > kChunkFlush / 2) gpu_submit();
-  return {g_prod_len, g_bp_opcode};
+  return {g_prod_len, g_bp_opcode, g_submits};
 }
-void verify_take(const FifoMark& mark, std::vector<uint8_t>& out) {
+bool verify_take(const FifoMark& mark, std::vector<uint8_t>& out) {
+  if (g_submits != mark.submits || g_prod_len < mark.len) { out.clear(); return false; }
   out.assign(g_prod.data() + mark.len, g_prod.data() + g_prod_len);
   g_prod_len = mark.len; g_bp_opcode = mark.bp_opcode;
+  return true;
 }
 void verify_put(const std::vector<uint8_t>& bytes) {
   for (uint8_t b : bytes) fifo_store8(b);

@@ -77,13 +77,13 @@ void gxn::verify_run(ppc::Context& c, uint8_t* m, const char* name, void (*orig)
   thunk(native);
   const uint32_t r3n = c.r[3]; const uint64_t f1n = c.f[1].u0;
   std::vector<uint8_t> pipe_native, pipe_orig;
-  gx::verify_take(mark, pipe_native);
+  if (!gx::verify_take(mark, pipe_native)) return;   // the pipe was handed off: keep the native result
   for (const auto& r : regions) after_native.insert(after_native.end(), m + r.off, m + r.off + r.len);
   size_t k = 0;
   for (const auto& r : regions) { std::memcpy(m + r.off, before.data() + k, r.len); k += r.len; }
   c = saved;
   orig(c, m);
-  gx::verify_take(mark, pipe_orig);
+  if (!gx::verify_take(mark, pipe_orig)) return;
   for (const auto& r : regions) after_orig.insert(after_orig.end(), m + r.off, m + r.off + r.len);
   gx::verify_put(pipe_orig);   // the original's pipe bytes stand
   ++calls;

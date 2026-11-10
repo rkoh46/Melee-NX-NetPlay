@@ -233,11 +233,14 @@ def main():
         for idx, a, b in (gs.boot.unsupported + gs.main.unsupported)[:10]:
             print("  unsupported Gecko line %d: %08X %08X" % (idx, a, b))
     hle = set()
-    with open(args.hle, encoding="utf-8") as hle_source:
-        for line in hle_source:
-            line = line.split("#", 1)[0].strip()
-            if line:
-                hle.add(line)
+    # Extra hook lists written by earlier generation steps: natively compiled decomp C (tools/gml).
+    extra = [Path(args.out).parent / "gml" / "gml_hooked.txt"]
+    for path in [Path(args.hle)] + [e for e in extra if e.exists()]:
+        with open(path, encoding="utf-8") as hle_source:
+            for line in hle_source:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    hle.add(line)
     missing = sorted(n for n in hle if n not in symbols.by_name)
     if missing:
         print("warning: HLE names not in symbol map (they will be recompiled instead of hooked):", ", ".join(missing))
