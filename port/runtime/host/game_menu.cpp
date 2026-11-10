@@ -26,7 +26,9 @@ constexpr int kEscapeScancode = 41;   // SDL_SCANCODE_ESCAPE
 constexpr int kSkipFrames = 6 * 60;   // remap: a control left untouched for 6 s keeps its binding
 
 enum class Page { Main, Controls, Remap };
-enum MainRow { ROW_SCALE, ROW_ANISO, ROW_UPSCALE, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN, ROW_ONLINE_DELAY, ROW_CONTROLS, ROW_HUD, ROW_RESUME, ROW_MAIN_COUNT };
+enum MainRow { ROW_SCALE, ROW_ANISO, ROW_UPSCALE, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN, ROW_ONLINE_DELAY, ROW_CONTROLS, ROW_HUD, ROW_RESUME, ROW_QUIT, ROW_MAIN_COUNT };
+// Quit asks for a second A press so a stray one cannot end the session.
+bool g_quit_armed = false;
 enum ControlsRow { C_DEVICE, C_REMAP, C_STICK_DZ, C_CSTICK_DZ, C_TRIGGER, C_SWAP, C_RUMBLE, C_TEST_RUMBLE, C_MODIFIER, C_RESET, C_BACK };
 struct Device { std::string guid, name; };   // an empty guid is the keyboard
 
@@ -72,6 +74,8 @@ std::vector<int> main_rows() {
     // The console's renderer has no resolution, filtering, sharpening, sync, widescreen or window
     // settings yet: rows that change nothing only made the menu longer and harder to read.
     if (r == ROW_SCALE || r == ROW_ANISO || r == ROW_SHARPEN || r == ROW_VSYNC || r == ROW_WIDESCREEN || r == ROW_FULLSCREEN) continue;
+#else
+    if (r == ROW_QUIT) continue;   // a GameCube controller has no HOME button; elsewhere the system quits
 #endif
     v.push_back(r);
   }
@@ -93,6 +97,7 @@ const char* main_name(int r) {
     case ROW_CONTROLS: return "Controls";
     case ROW_HUD: return "Performance HUD";
     case ROW_RESUME: return "Resume game";
+    case ROW_QUIT: return g_quit_armed ? "Press A again to quit" : "Quit to HOME Menu";
   }
   return "";
 }
@@ -251,10 +256,17 @@ void remap_assign(int input) {   // the same input on another control is cleared
   g_changed.store(true);
 }
 
+// Quit to HOME Menu (Switch): exit() runs the exit hook (memory card saves, logs) and asks the
+// system to close the application, which ends at the HOME menu with no error report.
+void quit_to_home() {
+  log("menu: quit to HOME Menu");
+  std::exit(0);
+}
 std::vector<int> page_rows() { return g_page == Page::Main ? main_rows() : g_page == Page::Controls ? controls_rows() : std::vector<int>{}; }
 void set_open(bool open) {
   if (open != g_open.load()) log("menu: %s", open ? "opened" : "closed");
   g_open.store(open);
+  g_quit_armed = false;
   g_combo_frames = 0; g_repeat = 0; g_prev_dir = 0;
   if (!open) { g_page = Page::Main; g_capturing.store(false); }
   if (g_selected >= (int)page_rows().size()) g_selected = 0;
@@ -279,6 +291,7 @@ void menu_toggle() { g_toggle_request.store(true); }
 
 void menu_frame(PadState pads[4]) {
   int apply_what = -1;
+  bool quit = false;
   RuntimeSettings snapshot;
   std::function<void(const RuntimeSettings&, MenuChange)> apply;
   {
@@ -355,10 +368,11 @@ void menu_frame(PadState pads[4]) {
         const int what = main_step(r, step, g_settings);
         if (what >= 0) { g_changed.store(true); apply_what = what; snapshot = g_settings; apply = g_apply; }
       };
+      if (fire && dir_y) g_quit_armed = false;
       if (fire && dir_y && !rows.empty()) g_selected = (g_selected + dir_y + (int)rows.size()) % (int)rows.size();
       else if (fire && dir_x && !rows.empty()) {
         const int r = rows[g_selected];
-        if (g_page == Page::Main) { if (r != ROW_RESUME && r != ROW_CONTROLS) main_change(r, dir_x); }
+        if (g_page == Page::Main) { if (r != ROW_RESUME && r != ROW_CONTROLS && r != ROW_QUIT) main_change(r, dir_x); }
         else if (value_row(r) && controls_act(r, dir_x)) g_changed.store(true);
       }
       if (!combo && !rows.empty()) {
@@ -367,6 +381,7 @@ void menu_frame(PadState pads[4]) {
           if (g_page == Page::Main) {
             if (r == ROW_RESUME) set_open(false);
             else if (r == ROW_CONTROLS) open_controls();
+            else if (r == ROW_QUIT) { quit = g_quit_armed; g_quit_armed = true; }
             else main_change(r, 1);
           } else if (controls_act(r, 1)) g_changed.store(true);
         } else if (pressed & BTN_B) {
@@ -379,10 +394,12 @@ void menu_frame(PadState pads[4]) {
     for (int i = 0; i < 4; ++i) { const int8_t err = pads[i].err; pads[i] = {}; pads[i].err = err; }
   }
   if (apply_what >= 0 && apply) apply(snapshot, (MenuChange)apply_what);
+  if (quit) quit_to_home();
 }
 
 bool menu_touch(float px, float py) {
   int apply_what = -1;
+  bool quit = false;
   RuntimeSettings snapshot;
   std::function<void(const RuntimeSettings&, MenuChange)> apply;
   {
@@ -400,12 +417,14 @@ bool menu_touch(float px, float py) {
     const int row = (int)((py - l.top) / std::max(l.row_h, 1.0f));
     const std::vector<int> rows = page_rows();
     if (row < 0 || row >= (int)rows.size()) return true;
+    if (g_selected != row) g_quit_armed = false;
     g_selected = row;
     const int r = rows[row];
     const bool left = px < l.x0 + (l.x1 - l.x0) / 3.0f;   // left third lowers, the rest raises
     if (g_page == Page::Main) {
       if (r == ROW_RESUME) set_open(false);
       else if (r == ROW_CONTROLS) open_controls();
+      else if (r == ROW_QUIT) { quit = g_quit_armed; g_quit_armed = true; }
       else {
         const int what = main_step(r, left ? -1 : 1, g_settings);
         if (what >= 0) { g_changed.store(true); apply_what = what; snapshot = g_settings; apply = g_apply; }
@@ -413,6 +432,7 @@ bool menu_touch(float px, float py) {
     } else if (controls_act(r, left && value_row(r) ? -1 : 1)) g_changed.store(true);
   }
   if (apply_what >= 0 && apply) apply(snapshot, (MenuChange)apply_what);
+  if (quit) quit_to_home();
   return true;
 }
 
@@ -528,7 +548,7 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     const std::string value = main ? main_value(r, s) : controls_value(r);
     const float lr = sel ? 0.08f : 1.0f, lg = sel ? 0.06f : 1.0f, lb = sel ? 0.02f : 1.0f;
     out.texts.push_back({x0 + pad * 1.2f, ty, unit, lr, lg, lb, sel ? 1.0f : 0.92f, 0, main ? main_name(r) : controls_name(r), value.empty() ? panel_w - 2 * pad : panel_w * 0.56f - pad});
-    const bool steppable = main ? (r != ROW_RESUME && r != ROW_CONTROLS) : value_row(r);
+    const bool steppable = main ? (r != ROW_RESUME && r != ROW_CONTROLS && r != ROW_QUIT) : value_row(r);
     if (!value.empty()) out.texts.push_back({x1 - pad * 1.2f, ty, unit, sel ? 0.08f : 0.97f, sel ? 0.06f : 0.85f, sel ? 0.02f : 0.45f, 1.0f, 2, sel && steppable ? "<  " + value + "  >" : value, panel_w * 0.42f - pad});
   }
   const char* hint = touch_controls_visible ? "Tap a row's left or right side to change it"

@@ -170,7 +170,7 @@ __attribute__((noreturn)) static void fast_exit(void) {
 // A normal exit must go back through libnx so nx-hbloader regains control and returns to the
 // Homebrew Menu; svcExitProcess from an NRO ends hbloader itself, which the system reports as
 // "The software was closed because an error occurred". abort/_exit keep the fast path.
-// exit() (quitting from the menu, or the end of a measured run) asks the system to close the
+// exit() (Quit to HOME Menu, or the end of a measured run) asks the system to close the
 // whole application, as a game quitting to the HOME menu does: the process ends with every thread
 // in it, and no error is reported. Two earlier routes failed: svcExitProcess from the NRO is
 // reported as "The software was closed because an error occurred", and returning to hbloader
@@ -182,7 +182,17 @@ __attribute__((noreturn)) void __wrap_exit(int code) {
     exit_hook = NULL;
     if (hook) hook();
     fflush(NULL);
-    if (R_SUCCEEDED(appletRequestExitToSelf())) {
+    // An application (launched over a game title) closes with ISelfController::Exit, the call a
+    // retail game makes; a library applet (launched from the Album) with RequestExitToSelf. Either
+    // way the system ends the process with all its threads and returns to the HOME menu cleanly.
+    Result rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
+    if (appletGetAppletType() == AppletType_Application) {
+        appletSetFocusHandlingMode(AppletFocusHandlingMode_NoSuspend);
+        rc = serviceDispatch(appletGetServiceSession_SelfController(), 0);
+    } else {
+        rc = appletRequestExitToSelf();
+    }
+    if (R_SUCCEEDED(rc)) {
         for (;;) svcSleepThread(1000000000LL);   // the system terminates the process
     }
     svcExitProcess();
