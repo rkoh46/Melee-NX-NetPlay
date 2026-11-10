@@ -104,27 +104,37 @@ void close_adapter() {
   g_rate_hz.store(0);
 }
 
-// How often the system's HID updates a GameCube controller: its sampling number counts updates, so
-// two reads a second apart give the rate. Logged once, from a short-lived thread.
+// What the system's HID reports: every controller slot with its styles and device type, then how
+// often HID updates each connected one (its sampling number counts updates, so two reads a second
+// apart give the rate). Once, 15 s after launch (the controller list is set up by then).
 void measure_system_rate() {
   static bool done = false;
   if (done) return;
   done = true;
   static Thread t;
   auto body = [](void*) {
-    const HidNpadIdType ids[] = {HidNpadIdType_No1, HidNpadIdType_No2, HidNpadIdType_No3, HidNpadIdType_No4};
+    svcSleepThread(15000000000ll);
+    const HidNpadIdType ids[] = {HidNpadIdType_No1, HidNpadIdType_No2, HidNpadIdType_No3, HidNpadIdType_No4,
+                                 HidNpadIdType_No5, HidNpadIdType_No6, HidNpadIdType_No7, HidNpadIdType_No8, HidNpadIdType_Handheld};
     for (HidNpadIdType id : ids) {
-      if (!(hidGetNpadStyleSet(id) & HidNpadStyleTag_NpadGc)) continue;
-      HidNpadGcState a{}, b{};
-      hidGetNpadStatesGc(id, &a, 1);
+      const uint32_t styles = hidGetNpadStyleSet(id);
+      if (!styles) continue;
+      const uint32_t type = hidGetNpadDeviceType(id);
+      uint64_t a = 0, b = 0;
+      const bool gc = styles & HidNpadStyleTag_NpadGc;
+      auto sample = [&]() -> uint64_t {
+        if (gc) { HidNpadGcState st{}; hidGetNpadStatesGc(id, &st, 1); return st.sampling_number; }
+        HidNpadFullKeyState st{}; hidGetNpadStatesFullKey(id, &st, 1); return st.sampling_number;
+      };
+      a = sample();
       const uint64_t t0 = armGetSystemTick();
       svcSleepThread(1000000000ll);
-      hidGetNpadStatesGc(id, &b, 1);
+      b = sample();
       const double secs = armTicksToNs(armGetSystemTick() - t0) / 1e9;
-      log("gc adapter: the system updates GameCube controller %d %.0f times/s", int(id) + 1, double(b.sampling_number - a.sampling_number) / secs);
-      return;
+      log("controllers: slot %d styles %08X device type %08X%s: the system updates it %.0f times/s", int(id) + 1, styles, type,
+          gc ? " (GameCube)" : "", double(b - a) / secs);
     }
-    log("gc adapter: no GameCube controller in the system's controller list to measure");
+    log("controllers: survey done");
   };
   if (R_SUCCEEDED(threadCreate(&t, body, nullptr, nullptr, 0x4000, 0x2C, -2))) threadStart(&t);
 }
