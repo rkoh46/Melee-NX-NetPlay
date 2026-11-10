@@ -392,6 +392,8 @@ int main(int argc, char** argv) {
   if (const std::string v = get("gml_verify_frames", ""); !v.empty()) { gml::g_verify = true; setenv("MELEE_GML_VERIFY_FRAMES", v.c_str(), 1); }
   // frame_trace=1: GX counters every frame (first-divergence search between builds).
   if (get("frame_trace", "0") == "1") setenv("MELEE_FRAME_TRACE", "1", 1);
+  if (const std::string v = get("audio_frames", ""); !v.empty()) setenv("MELEE_AUDIO_FRAMES", v.c_str(), 1);
+  if (const std::string v = get("audio_slack_ms", ""); !v.empty()) setenv("MELEE_AUDIO_SLACK_MS", v.c_str(), 1);
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
   if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
   if (get("shader_warmup", "1") == "0") setenv("AURORA_LAUNCH_WARM_SECONDS", "0", 1);

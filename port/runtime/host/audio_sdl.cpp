@@ -133,8 +133,17 @@ bool device_open() {
   // A small CoreAudio buffer: the render callback runs on a real-time audio thread and our ring adds
   // its own slack, so the device buffer only needs to cover one callback period. MELEE_AUDIO_FRAMES
   // overrides (default 256 frames, about 5 ms at 48 kHz).
+  // Switch: the AudioRenderer starts a wave buffer only at its 5 ms frame (160 samples at 32 kHz),
+  // so a buffer that is not a whole number of frames leaves silence after it: 256 frames played
+  // 8 ms of sound every 10 ms (25.6 kHz taken of the game's 32 kHz, a block in five dropped, crackle).
+  // 320 = two renderer frames.
+#if defined(__SWITCH__)
+  constexpr const char* kDefaultFrames = "320";
+#else
+  constexpr const char* kDefaultFrames = "256";
+#endif
   const char* frames = std::getenv("MELEE_AUDIO_FRAMES");
-  SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames && *frames ? frames : "256");
+  SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames && *frames ? frames : kDefaultFrames);
   g_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, stream_callback, nullptr);
   if (!g_stream) { log("audio: cannot open default playback device: %s", SDL_GetError()); return false; }
   // Aim for the same ~35-55 ms of queued audio the WASAPI path uses; the device
