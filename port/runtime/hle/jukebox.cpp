@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <chrono>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -155,7 +156,17 @@ void decode_loop() {
     }
     if (cancelled(request.generation)) continue;
     std::vector<uint8_t> file(request.size);
-    if (!host::disc_read(request.disc_offset, file.data(), request.size)) {
+    // In 128 KB pieces with a breath between them: the SD card serves one request at a time, and
+    // one multi-megabyte read at match start held the game's own small disc reads for 20-30 ms.
+    bool ok = true;
+    for (uint32_t done = 0; ok && done < request.size;) {
+      const uint32_t n = std::min<uint32_t>(request.size - done, 128u * 1024u);
+      ok = host::disc_read_background(request.disc_offset + done, file.data() + done, n);
+      done += n;
+      if (cancelled(request.generation)) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!ok) {
       host::log("jukebox: cannot read song at %08X", request.disc_offset);
       continue;
     }

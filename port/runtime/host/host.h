@@ -63,6 +63,7 @@ std::string cstr(uint32_t addr, size_t max = 256);
 struct DiscFile { uint32_t offset, size; };
 bool disc_open(const std::string& path);
 bool disc_read(uint32_t offset, void* dst, uint32_t size);
+bool disc_read_background(uint32_t offset, void* dst, uint32_t size);   // own handle: never waits on the game's reads
 uint32_t disc_fst_offset();
 uint32_t disc_fst_size();
 uint32_t disc_fst_max_size();

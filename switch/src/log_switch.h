@@ -17,6 +17,13 @@ void melee_nx_log_shutdown(void);
 // close a file with melee_nx_file_close, which drains first. Before init, writes are synchronous.
 void melee_nx_file_write(void* file, const void* bytes, size_t size);
 void melee_nx_file_close(void* file);
+// Files the writer thread owns entirely: open (creating parent directories), writes, an in-place
+// patch (seek, write, back to the end) and close are queued in order and none of them blocks the
+// caller. The handle is valid from open until close; a failed open turns the rest into no-ops.
+void* melee_nx_afile_open(const char* path, const char* mode);
+void melee_nx_afile_write(void* file, const void* bytes, size_t size);
+void melee_nx_afile_patch(void* file, long offset, const void* bytes, size_t size);
+void melee_nx_afile_close(void* file);
 #ifdef __cplusplus
 }
 #endif

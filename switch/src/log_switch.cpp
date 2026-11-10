@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <filesystem>
 #if defined(__SWITCH__)
 #include <switch.h>
 #endif
@@ -23,7 +24,11 @@ size_t used = 0;
 unsigned pending = 0;
 bool running = false, stopping = false;
 uint64_t requested = 0, completed = 0, dropped = 0;
-struct FileChunk { FILE* file; std::string bytes; };
+// A file the writer thread opens, patches and closes itself (melee_nx_afile_*): the simulation
+// thread never touches the SD card for it, not even to create it.
+struct AsyncFile { std::string path, mode; FILE* f = nullptr; };
+enum ChunkKind { Write, Open, Patch, Close };
+struct FileChunk { FILE* file; std::string bytes; AsyncFile* af = nullptr; ChunkKind kind = Write; long offset = 0; };
 std::vector<FileChunk> fileQueue;        // guarded by `mutex`; drained by the writer in order
 std::vector<FILE*> dirtyFiles;           // writer thread only: files with unflushed bytes
 pthread_once_t clockOnce = PTHREAD_ONCE_INIT;
@@ -79,6 +84,39 @@ void* writer(void*) {
         pthread_mutex_unlock(&mutex);
 
         for (const FileChunk& chunk : chunks) {
+            if (chunk.af) {
+                AsyncFile* af = chunk.af;
+                const auto start = now_ns();
+                if (chunk.kind == Open) {
+                    std::error_code ec;
+                    std::filesystem::create_directories(std::filesystem::path(af->path).parent_path(), ec);
+                    af->f = std::fopen(af->path.c_str(), af->mode.c_str());
+                    if (!af->f) ++errors;
+                } else if (af->f && chunk.kind == Write) {
+                    if (std::fwrite(chunk.bytes.data(), 1, chunk.bytes.size(), af->f) != chunk.bytes.size()) ++errors;
+                    bytes += chunk.bytes.size();
+                } else if (af->f && chunk.kind == Patch) {
+                    std::fflush(af->f);
+                    if (std::fseek(af->f, chunk.offset, SEEK_SET) != 0 ||
+                        std::fwrite(chunk.bytes.data(), 1, chunk.bytes.size(), af->f) != chunk.bytes.size()) ++errors;
+                    std::fseek(af->f, 0, SEEK_END);
+                } else if (chunk.kind == Close) {
+                    for (size_t i = 0; i < dirtyFiles.size(); ++i)
+                        if (dirtyFiles[i] == af->f) { dirtyFiles.erase(dirtyFiles.begin() + long(i)); break; }
+                    if (af->f && std::fclose(af->f) != 0) ++errors;
+                    delete af;
+                    writeNs += now_ns() - start;
+                    continue;
+                }
+                writeNs += now_ns() - start;
+                if (af->f && chunk.kind != Open) {
+                    bool known = false;
+                    for (FILE* f : dirtyFiles) known = known || f == af->f;
+                    if (!known) dirtyFiles.push_back(af->f);
+                    dirty = true;
+                }
+                continue;
+            }
             if (!chunk.file) continue;
             const auto start = now_ns();
             if (std::fwrite(chunk.bytes.data(), 1, chunk.bytes.size(), chunk.file) != chunk.bytes.size()) ++errors;
@@ -229,7 +267,7 @@ extern "C" void melee_nx_file_write(void* file, const void* bytes, size_t size) 
     // frame, and one string append is far cheaper than a queue node each. No wake-up either: the
     // writer runs every 100 ms (or with the next log line), which is soon enough for a file, and
     // a signal per record was a syscall per record on the simulation thread.
-    if (!fileQueue.empty() && fileQueue.back().file == file && fileQueue.back().bytes.size() < (1u << 16))
+    if (!fileQueue.empty() && !fileQueue.back().af && fileQueue.back().file == file && fileQueue.back().bytes.size() < (1u << 16))
         fileQueue.back().bytes.append(static_cast<const char*>(bytes), size);
     else
         fileQueue.push_back({static_cast<FILE*>(file), std::string(static_cast<const char*>(bytes), size)});
@@ -240,4 +278,55 @@ extern "C" void melee_nx_file_close(void* file) {
     if (!file) return;
     if (running) melee_nx_log_flush();   // every queued chunk for this file is written and flushed
     std::fclose(static_cast<FILE*>(file));
+}
+
+// ---- writer-owned files ----------------------------------------------------------------------
+namespace {
+void afile_sync(AsyncFile* af, ChunkKind kind, const void* bytes, size_t size, long offset) {
+    // No writer thread (tests, or after shutdown): do the operation here, in order.
+    if (kind == Open) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(af->path).parent_path(), ec);
+        af->f = std::fopen(af->path.c_str(), af->mode.c_str());
+    } else if (kind == Write) {
+        if (af->f) std::fwrite(bytes, 1, size, af->f);
+    } else if (kind == Patch) {
+        if (af->f) { std::fflush(af->f); std::fseek(af->f, offset, SEEK_SET); std::fwrite(bytes, 1, size, af->f); std::fseek(af->f, 0, SEEK_END); }
+    } else {
+        if (af->f) std::fclose(af->f);
+        delete af;
+    }
+}
+void afile_queue(AsyncFile* af, ChunkKind kind, const void* bytes, size_t size, long offset) {
+    pthread_mutex_lock(&mutex);
+    if (!running || stopping) {
+        pthread_mutex_unlock(&mutex);
+        afile_sync(af, kind, bytes, size, offset);
+        return;
+    }
+    if (kind == Write && !fileQueue.empty() && fileQueue.back().af == af && fileQueue.back().kind == Write &&
+        fileQueue.back().bytes.size() < (1u << 16)) {
+        fileQueue.back().bytes.append(static_cast<const char*>(bytes), size);
+    } else {
+        FileChunk c{nullptr, bytes ? std::string(static_cast<const char*>(bytes), size) : std::string(), af, kind, offset};
+        fileQueue.push_back(std::move(c));
+        if (kind == Close) pthread_cond_signal(&wake);
+    }
+    pthread_mutex_unlock(&mutex);
+}
+}  // namespace
+
+extern "C" void* melee_nx_afile_open(const char* path, const char* mode) {
+    AsyncFile* af = new AsyncFile{path, mode, nullptr};
+    afile_queue(af, Open, nullptr, 0, 0);
+    return af;
+}
+extern "C" void melee_nx_afile_write(void* file, const void* bytes, size_t size) {
+    if (file && size) afile_queue(static_cast<AsyncFile*>(file), Write, bytes, size, 0);
+}
+extern "C" void melee_nx_afile_patch(void* file, long offset, const void* bytes, size_t size) {
+    if (file && size) afile_queue(static_cast<AsyncFile*>(file), Patch, bytes, size, offset);
+}
+extern "C" void melee_nx_afile_close(void* file) {
+    if (file) afile_queue(static_cast<AsyncFile*>(file), Close, nullptr, 0, 0);
 }

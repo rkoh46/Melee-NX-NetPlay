@@ -8,6 +8,8 @@
 #include <deque>
 #include <mutex>
 
+namespace slippi { bool match_running(); }
+
 namespace {
 constexpr uint32_t DVD_STATE_END = 0, DVD_STATE_BUSY = 1;
 constexpr uint32_t DVD_COMMAND_READ = 1;
@@ -24,8 +26,11 @@ void finish_read(uint32_t block, uint32_t addr, uint32_t length, uint32_t disc_o
 }
 void do_read(uint32_t block, uint32_t addr, uint32_t length, uint32_t disc_offset) {
   host::SimCostScope cost(host::SIM_DVD);
+  const double t0 = host::now_seconds();
   if (!host::disc_read(disc_offset, host::ptr(addr, length), length))
     host::die("disc read failed: offset %08X length %X to %08X", disc_offset, length, addr);
+  if (const double ms = (host::now_seconds() - t0) * 1000.0; ms > 10.0)
+    host::log("dvd: synchronous read of %u KB at %08X took %.1f ms", length / 1024, disc_offset, ms);
   finish_read(block, addr, length, disc_offset);
 }
 
@@ -133,8 +138,18 @@ void dvd_poll() {
     }
 
     if (!dvd_detail::ReadWorker::finished(r.job->status.load(std::memory_order_acquire))) {
+      // Outside a match (menus, the loading before a match) a read that is not done yet is
+      // simply delivered at a later wait point: the game keeps running its frames, as with a
+      // real disc drive, instead of the simulation thread blocking on the SD card (the stall
+      // at every match load). During a match delivery stays at its fixed virtual time so the
+      // game stays deterministic (Pokemon Stadium loads its forms mid-match; netplay needs
+      // both consoles to see the same frame).
+      if (!slippi::match_running()) return;
       host::SimCostScope cost(host::SIM_DVD);
+      const double t0 = host::now_seconds();
       g_dvd_worker.wait(r.job);
+      if (const double ms = (host::now_seconds() - t0) * 1000.0; ms > 10.0)
+        host::log("dvd: waited %.1f ms for an asynchronous read of %u KB at %08X (match running)", ms, r.length / 1024, r.disc_offset);
     }
 
     bool read_failed = false;

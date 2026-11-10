@@ -16,6 +16,9 @@
 #include <cstring>
 #include <vector>
 #include <mutex>
+#if defined(__SWITCH__)
+#include "log_switch.h"
+#endif
 
 namespace host {
 namespace {
@@ -200,6 +203,9 @@ void audio_close() {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_device) { device_close(); g_device = false; }
   if (g_wav) {
+#if defined(__SWITCH__)
+    melee_nx_log_flush();   // the queued recording must reach the file before the header is rewritten
+#endif
     if (std::fseek(g_wav, 0, SEEK_SET) != 0) g_output_ok = false;
     wav_header(g_wav, g_wav_bytes);
     if (std::fclose(g_wav) != 0) g_output_ok = false;
@@ -218,7 +224,16 @@ void audio_push(const uint8_t* be_samples, size_t bytes) {
       int16_t l = int16_t((src[i * 4 + 2] << 8) | src[i * 4 + 3]);
       converted[i * 2] = l; converted[i * 2 + 1] = r;
     }
-    if (g_wav) { if (std::fwrite(converted, 1, BLOCK_BYTES, g_wav) != BLOCK_BYTES) g_output_ok = false; g_wav_bytes += BLOCK_BYTES; }
+    if (g_wav) {
+#if defined(__SWITCH__)
+      // This runs on the simulation thread (the AI DMA): an SD card write here stalled whole
+      // frames. The log's writer thread owns the card and writes the recording in order.
+      melee_nx_file_write(g_wav, converted, BLOCK_BYTES);
+#else
+      if (std::fwrite(converted, 1, BLOCK_BYTES, g_wav) != BLOCK_BYTES) g_output_ok = false;
+#endif
+      g_wav_bytes += BLOCK_BYTES;
+    }
     constexpr size_t frames = BLOCK_BYTES / 4;
     if (!g_device) { g_frames += frames; continue; }
     uint64_t write = g_ring_write.load(std::memory_order_relaxed);

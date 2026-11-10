@@ -10,6 +10,11 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 namespace {
 constexpr int32_t READY = 0, BUSY = -1, NOCARD = -3, NOFILE = -4, BROKEN = -6, EXIST = -7, NOENT = -8,
@@ -51,23 +56,75 @@ std::string safe_name(const File& f) {
   return s + ".gci";
 }
 
-void save(File& f) {
-  if (f.path.empty()) f.path = (g_dir / safe_name(f)).string();
-  std::filesystem::path tmp = f.path + ".tmp";
-  FILE* out = std::fopen(tmp.string().c_str(), "wb");
-  if (!out) { host::log("card: cannot write %s", f.path.c_str()); return; }
-  bool ok = std::fwrite(f.dir, 1, 64, out) == 64 && std::fwrite(f.data.data(), 1, f.data.size(), out) == f.data.size();
-  std::fclose(out);
+// Saves leave the simulation thread: a save was a temp-file create, ~90 KB of writes, a remove
+// and a rename on the SD card, and Melee saves at the end of every match and in the menus. The
+// game thread snapshots the bytes and returns; one worker writes them in order, so a later save
+// or delete of the same file always lands after an earlier one. card_flush waits for the queue.
+struct CardJob { std::string path; std::vector<uint8_t> bytes; bool remove_only = false; };
+std::mutex g_job_mutex;
+std::condition_variable g_job_cv, g_job_done;
+std::deque<CardJob> g_jobs;
+bool g_job_busy = false, g_worker_started = false;
+
+void write_job(const CardJob& job) {
   std::error_code ec;
+  if (job.remove_only) { std::filesystem::remove(job.path, ec); return; }
+  std::filesystem::path tmp = job.path + ".tmp";
+  FILE* out = std::fopen(tmp.string().c_str(), "wb");
+  if (!out) { host::log("card: cannot write %s", job.path.c_str()); return; }
+  bool ok = std::fwrite(job.bytes.data(), 1, job.bytes.size(), out) == job.bytes.size();
+  if (std::fclose(out) != 0) ok = false;
 #if defined(__SWITCH__)
   // The SD card's FAT rename does not replace an existing file (EEXIST), which left every save
   // after the first on disk as .tmp and the game reporting a corrupted card at the next boot.
-  if (ok) std::filesystem::remove(f.path, ec);
+  if (ok) std::filesystem::remove(job.path, ec);
   ec.clear();
 #endif
-  if (ok) std::filesystem::rename(tmp, f.path, ec);
-  if (!ok || ec) host::log("card: failed to save %s (%s)", f.path.c_str(), ec ? ec.message().c_str() : "write error");
+  if (ok) std::filesystem::rename(tmp, job.path, ec);
+  if (!ok || ec) host::log("card: failed to save %s (%s)", job.path.c_str(), ec ? ec.message().c_str() : "write error");
 }
+
+void worker_main() {
+  std::unique_lock<std::mutex> lock(g_job_mutex);
+  for (;;) {
+    g_job_cv.wait(lock, [] { return !g_jobs.empty(); });
+    CardJob job = std::move(g_jobs.front());
+    g_jobs.pop_front();
+    g_job_busy = true;
+    lock.unlock();
+    write_job(job);
+    lock.lock();
+    g_job_busy = false;
+    if (g_jobs.empty()) g_job_done.notify_all();
+  }
+}
+
+void enqueue(CardJob job) {
+  std::lock_guard<std::mutex> lock(g_job_mutex);
+  if (!g_worker_started) {
+    g_worker_started = true;
+    std::thread(worker_main).detach();
+  }
+  g_jobs.push_back(std::move(job));
+  g_job_cv.notify_one();
+}
+
+void wait_for_saves() {
+  std::unique_lock<std::mutex> lock(g_job_mutex);
+  if (!g_worker_started) return;
+  g_job_done.wait_for(lock, std::chrono::seconds(5), [] { return g_jobs.empty() && !g_job_busy; });
+}
+
+void save(File& f) {
+  if (f.path.empty()) f.path = (g_dir / safe_name(f)).string();
+  CardJob job{f.path, {}, false};
+  job.bytes.reserve(64 + f.data.size());
+  job.bytes.insert(job.bytes.end(), f.dir, f.dir + 64);
+  job.bytes.insert(job.bytes.end(), f.data.begin(), f.data.end());
+  enqueue(std::move(job));
+}
+
+void remove_file(const std::string& path) { if (!path.empty()) enqueue(CardJob{path, {}, true}); }
 
 void mount() {
   if (g_mounted) return;
@@ -146,7 +203,7 @@ void flush_dirty() {
 }
 }  // namespace
 
-namespace host { void card_flush() { flush_dirty(); } }   // exit path: write saves the game has not closed yet
+namespace host { void card_flush() { flush_dirty(); wait_for_saves(); } }   // exit path: write saves the game has not closed yet
 
 HLE(CARDInit) { host::pump_completions(); }
 HLE(CARDProbe) { host::pump_completions(); RET(ARG0 == 0 ? 1 : 0); }
@@ -260,7 +317,7 @@ static int32_t do_delete(int32_t no) {
   if (no < 0 || no >= (int32_t)MAX_FILES || !g_files[no]) return NOFILE;
   File* f = g_files[no];
   std::error_code ec;
-  if (!f->path.empty()) std::filesystem::remove(f->path, ec);
+  remove_file(f->path);
   host::log("card: deleted %s", f->name().c_str());
   delete f; g_files[no] = nullptr;
   return READY;
@@ -337,7 +394,7 @@ static int32_t do_rename(uint32_t chan, uint32_t old_addr, uint32_t new_addr) {
   if (find(new_name) >= 0) return EXIST;
   File& f = *g_files[no];
   std::error_code ec;
-  if (!f.path.empty()) std::filesystem::remove(f.path, ec);
+  remove_file(f.path);
   f.path.clear();
   std::memset(f.dir + 8, 0, 32); std::memcpy(f.dir + 8, new_name.data(), new_name.size());
   save(f);

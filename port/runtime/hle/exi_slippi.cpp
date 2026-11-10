@@ -92,9 +92,14 @@ void observe_recording_event(const uint8_t* data, size_t size) {
 }
 
 // ---- .slp replay recording (UBJSON container, exactly as CEXISlippi::writeToFile) ----
+#if defined(__SWITCH__)
+void* g_file = nullptr;   // a writer-owned file (melee_nx_afile_*): creating it was an SD card stall at match start
+#else
 FILE* g_file = nullptr;
+#endif
 uint32_t g_written = 0;
 int32_t g_last_frame = -123;
+std::atomic<bool> g_match_frames{false};   // a match is recording frames (set by the first post-frame record)
 time_t g_start_time = 0;
 std::map<uint8_t, std::map<uint8_t, uint32_t>> g_char_usage;   // player index -> internal character -> frames
 std::string g_replay_path;
@@ -132,7 +137,7 @@ std::vector<uint8_t> generate_metadata() {
 // fsFileWrite from here cost the frame milliseconds whenever the stdio buffer filled.
 void replay_write(const void* data, size_t size) {
 #if defined(__SWITCH__)
-  melee_nx_file_write(g_file, data, size);
+  melee_nx_afile_write(g_file, data, size);
 #else
   std::fwrite(data, 1, size, g_file);
 #endif
@@ -144,9 +149,10 @@ void replay_drain() {
 }
 
 void close_file() {
+  g_match_frames.store(false, std::memory_order_relaxed);
   if (!g_file) return;
 #if defined(__SWITCH__)
-  melee_nx_file_close(g_file); g_file = nullptr;   // drains the queued bytes first
+  melee_nx_afile_close(g_file); g_file = nullptr;   // the writer closes it after the queued bytes
 #else
   std::fclose(g_file); g_file = nullptr;
 #endif
@@ -156,13 +162,19 @@ void close_file() {
 
 void create_file() {
   close_file();
+#if !defined(__SWITCH__)
   std::error_code error;
   std::filesystem::create_directories(g_replay_dir, error);
   if (error) { host::log("slippi: cannot create replay directory: %s", error.message().c_str()); return; }
+#endif
   char stamp[32];
   std::strftime(stamp, sizeof stamp, "%Y%m%dT%H%M%S", std::localtime(&g_start_time));
   g_replay_path = (std::filesystem::path(g_replay_dir) / (std::string("Game_") + stamp + ".slp")).string();
+#if defined(__SWITCH__)
+  g_file = melee_nx_afile_open(g_replay_path.c_str(), "wb");   // the writer creates the directory and the file
+#else
   g_file = std::fopen(g_replay_path.c_str(), "wb");
+#endif
   if (!g_file) { host::log("slippi: cannot create %s", g_replay_path.c_str()); return; }
   const uint8_t header[] = {'{', 'U', 3, 'r', 'a', 'w', '[', '$', 'U', '#', 'l', 0, 0, 0, 0};
   replay_write(header, sizeof header);
@@ -176,6 +188,7 @@ void write_to_file(const uint8_t* payload, uint32_t length, const char* option) 
   if (!g_file) return;
   if (length > 0 && payload[0] == CMD_RECEIVE_POST_FRAME_UPDATE && length >= 8) {
     g_last_frame = (int32_t)be32(payload + 1);
+    g_match_frames.store(true, std::memory_order_relaxed);
     g_char_usage[payload[5]][payload[7]] += 1;
   }
   replay_write(payload, length);
@@ -185,9 +198,13 @@ void write_to_file(const uint8_t* payload, uint32_t length, const char* option) 
     closing.push_back('}');
     replay_write(closing.data(), closing.size());
     uint8_t size_bytes[4] = {(uint8_t)(g_written >> 24), (uint8_t)(g_written >> 16), (uint8_t)(g_written >> 8), (uint8_t)g_written};
+#if defined(__SWITCH__)
+    melee_nx_afile_patch(g_file, 11, size_bytes, 4);   // in order after the queued bytes, on the writer thread
+#else
     replay_drain();   // the header patch below seeks: everything queued must be on disk first
     std::fseek(g_file, 11, SEEK_SET);
     std::fwrite(size_bytes, 1, 4, g_file);
+#endif
     close_file();
   }
 }
@@ -356,6 +373,9 @@ void prepare_file(const uint8_t* payload, uint32_t available, bool load) {
 
 
 }  // namespace
+
+// The disc emulation keeps reads deterministic only while a match runs (see hle_dvd.cpp).
+bool match_running() { return g_match_frames.load(std::memory_order_relaxed); }
 
 // Every game file the Sys folder can serve is read and patched on a worker at boot, so the first
 // request from the game (menus, CSS) is a cache hit instead of a multi-megabyte read plus VCDIFF

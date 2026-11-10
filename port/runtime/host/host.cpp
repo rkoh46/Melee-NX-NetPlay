@@ -46,6 +46,7 @@ uint8_t* aram = nullptr;
 ppc::Context* cpu = nullptr;
 
 static FILE* g_disc = nullptr;
+static std::string g_disc_path;   // reopened by disc_read_background
 static FILE* g_state_trace = nullptr;
 static bool g_state_trace_ok = true;
 void close_state_trace() {
@@ -151,7 +152,16 @@ static bool ciso_open() {
 bool disc_open(const std::string& path) {
   g_disc = std::fopen(path.c_str(), "rb");
   if (!g_disc) return false;
+  g_disc_path = path;
+#if defined(__SWITCH__)
+  // Unbuffered: every read already asks for exactly what it needs (whole files, or the small
+  // headers the game reads before them). Through a 1 MB stdio buffer a 200-byte read at a new
+  // place on the disc first filled the whole megabyte from the SD card: 50 ms, the stall at
+  // every match start.
+  std::setvbuf(g_disc, nullptr, _IONBF, 0);
+#else
   std::setvbuf(g_disc, nullptr, _IOFBF, 1u << 20);   // disc reads are large and sequential: a 1 MB stdio buffer, plus kernel read-ahead
+#endif
 #if defined(__APPLE__)
   fcntl(fileno(g_disc), F_RDAHEAD, 1);
 #endif
@@ -167,14 +177,13 @@ bool disc_open(const std::string& path) {
 }
 uint64_t g_disc_reads = 0, g_disc_bytes = 0;
 static std::mutex g_disc_mutex;   // the DVD worker and the simulation thread share the file
-bool disc_read(uint32_t offset, void* dst, uint32_t size) {
-  std::lock_guard<std::mutex> lk(g_disc_mutex);
-  if (!g_disc) return false;
-  ++g_disc_reads;
-  g_disc_bytes += size;
+static FILE* g_disc_bg = nullptr;   // background readers' own handle (see disc_read_background)
+static std::mutex g_disc_bg_mutex;
+static bool read_from(FILE* file, uint32_t offset, void* dst, uint32_t size) {
+  if (!file) return false;
   if (!g_ciso.active) {
-    if (!seek_file(g_disc, offset)) return false;
-    return std::fread(dst, 1, size, g_disc) == size;
+    if (!seek_file(file, offset)) return false;
+    return std::fread(dst, 1, size, file) == size;
   }
   const uint64_t data_offset = g_ciso.data_offset;
   const uint64_t block = g_ciso.block_size;
@@ -187,8 +196,8 @@ bool disc_read(uint32_t offset, void* dst, uint32_t size) {
     const int64_t phys = index < g_ciso.phys.size() ? g_ciso.phys[index] : -1;
     if (phys < 0) {
       std::memset(out, 0, chunk);
-    } else if (!seek_file(g_disc, data_offset + (uint64_t)phys * block + within) ||
-               std::fread(out, 1, chunk, g_disc) != chunk) {
+    } else if (!seek_file(file, data_offset + (uint64_t)phys * block + within) ||
+               std::fread(out, 1, chunk, file) != chunk) {
       return false;
     }
     out += chunk;
@@ -196,6 +205,29 @@ bool disc_read(uint32_t offset, void* dst, uint32_t size) {
     remaining -= chunk;
   }
   return true;
+}
+bool disc_read(uint32_t offset, void* dst, uint32_t size) {
+  std::lock_guard<std::mutex> lk(g_disc_mutex);
+  if (!g_disc) return false;
+  ++g_disc_reads;
+  g_disc_bytes += size;
+  return read_from(g_disc, offset, dst, size);
+}
+// Readers off the game's path (the jukebox decoding a whole song) use a second handle with its
+// own lock: through the shared one, a multi-megabyte song read at every match start held the
+// game's own disc reads (a 40-60 ms frame on the SD card).
+bool disc_read_background(uint32_t offset, void* dst, uint32_t size) {
+  std::lock_guard<std::mutex> lk(g_disc_bg_mutex);
+  if (!g_disc_bg && !g_disc_path.empty()) {
+    g_disc_bg = std::fopen(g_disc_path.c_str(), "rb");
+#if defined(__SWITCH__)
+    if (g_disc_bg) std::setvbuf(g_disc_bg, nullptr, _IONBF, 0);
+#else
+    if (g_disc_bg) std::setvbuf(g_disc_bg, nullptr, _IOFBF, 1u << 18);
+#endif
+  }
+  if (!g_disc_bg) return disc_read(offset, dst, size);
+  return read_from(g_disc_bg, offset, dst, size);
 }
 uint32_t disc_fst_offset() { return g_fst_offset; }
 uint32_t disc_fst_size() { return g_fst_size; }
