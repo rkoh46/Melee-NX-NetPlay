@@ -1,0 +1,30 @@
+--- a/lib/gfx/pipeline_cache.cpp	2026-11-10 01:40:58
++++ b/lib/gfx/pipeline_cache.cpp	2026-11-10 01:40:58
+@@ -1601,10 +1601,17 @@
+     }
+     return a.firstFrameUsed < b.firstFrameUsed;
+   });
++  // AURORA_LAUNCH_WARM_ALL=1 (a one-time warm-up session): every seed descriptor gates the
++  // launch screen too, so the whole seed is compiled with every core before the game runs and
++  // its driver binaries persist; later launches load them instead of compiling mid-match.
++  static const bool warmAll = [] {
++    const char* value = std::getenv("AURORA_LAUNCH_WARM_ALL");
++    return value != nullptr && value[0] == '1';
++  }();
+   if (!uberOn) {
+     for (const auto& row : rows) {
+       find_pipeline_impl(type, row.config, [config = row.config, create] { return create(config); },
+-                         PipelinePriority::Background, row.firstFrameUsed, row.deviceUsed, row.deviceUsed);
++                         PipelinePriority::Background, row.firstFrameUsed, row.deviceUsed, row.deviceUsed || warmAll);
+     }
+   } else if constexpr (isGx) {
+     size_t standIns = 0;
+@@ -1635,7 +1642,7 @@
+     // thousands of unneeded compiles from competing with the game for cores.
+     for (const bool warmPass : {true, false}) {
+       for (const auto& row : rows) {
+-        const bool warm = row.deviceUsed && !row.standIn;
++        const bool warm = (row.deviceUsed || warmAll) && !row.standIn;
+         if (warm != warmPass || (!row.deviceUsed && row.standIn)) {
+           continue;
+         }

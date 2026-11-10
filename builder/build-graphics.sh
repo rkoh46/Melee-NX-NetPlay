@@ -100,6 +100,7 @@ prepare() {
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-texgen-fallback.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-system-pad-layout.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-object-identity.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-launch-warm-all.patch"
 }
 
 build_dawn() {

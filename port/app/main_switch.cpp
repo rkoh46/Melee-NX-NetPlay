@@ -397,6 +397,16 @@ int main(int argc, char** argv) {
   // gpu_thread=0: parse the GX stream on the simulation thread (as before the GPU thread) for A/B tests.
   if (get("gpu_thread", "1") == "0") setenv("MELEE_GPU_THREAD", "0", 1);
   if (get("shader_warmup", "1") == "0") setenv("AURORA_LAUNCH_WARM_SECONDS", "0", 1);
+  // shader_warmup_all=1: one long warm-up session that compiles every pipeline in the seed
+  // (sdmc:/switch/melee-nx/initial_pipeline_cache.db) with every core before the game starts.
+  if (get("shader_warmup_all", "0") == "1") { setenv("AURORA_LAUNCH_WARM_ALL", "1", 1); setenv("AURORA_LAUNCH_WARM_HELPERS", "2", 1); }
+  // uber=1: a draw whose pipeline is still compiling uses Aurora's uber-shader instead of waiting
+  // for it (a first-seen pipeline otherwise stalls the renderer and then the game); 2 always.
+  // The uber pipelines share one shader, so they need the shared Vulkan pipeline cache.
+  if (const std::string v = get("uber", ""); !v.empty()) {
+    setenv("AURORA_UBER", v.c_str(), 1);
+    if (v != "0") setenv("AURORA_MONOLITHIC_PIPELINE_CACHE", "1", 1);
+  }
 
   const bool applet_mode = appletGetAppletType() != AppletType_Application && appletGetAppletType() != AppletType_SystemApplication;
 #if !MELEE_NX_AURORA

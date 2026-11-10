@@ -101,3 +101,4 @@ Run `python builder/verify-patches.py` after editing reference sources. It
 reconstructs patched files from pinned Git objects in a disposable directory,
 checks application and reversal, rejects overlapping ownership, and compares
 the result with the live sources. Do not reset or clean the reference trees.
+| [aurora-switch-launch-warm-all.patch](aurora-switch-launch-warm-all.patch) | `AURORA_LAUNCH_WARM_ALL=1` (launcher.ini `shader_warmup_all=1`): the launch screen compiles the whole pipeline seed, once, so first-seen pipelines stop stalling matches |
