@@ -284,6 +284,14 @@ void fifo_grow();
 void fifo_store32(uint32_t be);
 void fifo_store8(uint32_t v);
 void fifo_store_words(const uint32_t* be, size_t n);
+
+// Native-GX verification (gxn_verify=1): mark the pipe, take the bytes written since (rewinding to
+// the mark), put bytes back. The mark hands the chunk off first if it is half full, so a single GX
+// call never crosses a hand-off between mark and take. Threaded mode only (the default).
+struct FifoMark { size_t len; bool bp_opcode; };
+FifoMark verify_mark();
+void verify_take(const FifoMark& mark, std::vector<uint8_t>& out);
+void verify_put(const std::vector<uint8_t>& bytes);
 // GPU thread (Aurora): the guest appends pipe writes and a worker parses them. The guest synchronises
 // before it waits for a PE interrupt (gpu_sync_for_wait, from host::wait_event), before RAM is replaced
 // (gpu_sync_all: savestate loads) and at the end of the run (gpu_finish: drains and stops the worker).

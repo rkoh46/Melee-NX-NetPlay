@@ -1001,6 +1001,17 @@ void fifo_store16(uint32_t v) {
   }
   fifo_store16_slow(v);
 }
+FifoMark verify_mark() {
+  if (g_gpu_threaded && g_prod_len > kChunkFlush / 2) gpu_submit();
+  return {g_prod_len, g_bp_opcode};
+}
+void verify_take(const FifoMark& mark, std::vector<uint8_t>& out) {
+  out.assign(g_prod.data() + mark.len, g_prod.data() + g_prod_len);
+  g_prod_len = mark.len; g_bp_opcode = mark.bp_opcode;
+}
+void verify_put(const std::vector<uint8_t>& bytes) {
+  for (uint8_t b : bytes) fifo_store8(b);
+}
 void write_fifo(uint32_t value, int bytes) {
   if (g_gpu_threaded) {
     if (bytes == 4) { fifo_store32(__builtin_bswap32(value)); return; }

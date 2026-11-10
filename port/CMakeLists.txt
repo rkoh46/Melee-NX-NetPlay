@@ -12,6 +12,15 @@ target_link_libraries(guest PUBLIC port_build_options)
 target_compile_options(guest PRIVATE -Wno-unused-label -Wno-unused-variable -Os)
 target_compile_definitions(guest PRIVATE NOMINMAX)
 
+# ---- Native GX: the decompilation's matching GX source, compiled by GCC (scalar_storage_order) ----
+# tools/generate_gx_native.py writes it (with gxn_hle.cpp, the guest-register wrappers) at generation.
+set(GXN_DIR "${PORT_GEN}/../gxnative")
+file(GLOB GXN_C_SOURCES "${GXN_DIR}/GX*.c")
+add_library(gx_native STATIC ${GXN_C_SOURCES})
+target_include_directories(gx_native PRIVATE "${GXN_DIR}" "${GXN_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/runtime/gx/gxnative"
+  "${PROJECT_SOURCE_DIR}/ref/melee/include")
+target_compile_options(gx_native PRIVATE -O2 -ffp-contract=off -fno-strict-aliasing -w)
+
 # ---- ENet 1.3.13 (IPv4 peer transport for Slippi netplay) ----
 add_library(port_enet STATIC third_party/enet/callbacks.c third_party/enet/compress.c third_party/enet/host.c
   third_party/enet/list.c third_party/enet/packet.c third_party/enet/peer.c third_party/enet/protocol.c
@@ -61,7 +70,8 @@ else()
   endif()
 endif()
 
-add_library(runtime_switch STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} ${PORT_FRONTEND_SOURCES} ${PORT_SWITCH_SOURCES})
+add_library(runtime_switch STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} ${PORT_FRONTEND_SOURCES} ${PORT_SWITCH_SOURCES}
+  runtime/gx/gxnative/gxn_glue.cpp "${GXN_DIR}/gxn_hle.cpp")
 target_include_directories(runtime_switch PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
   "${PORT_GEN}" "${PROJECT_SOURCE_DIR}/native" "${PROJECT_SOURCE_DIR}/switch/src" third_party)
 # devkitPro portlibs (curl, mbedTLS, zlib) and libnx headers.
@@ -75,7 +85,8 @@ if(NOT PORT_ONLINE)
 else()
   target_link_libraries(runtime_switch PUBLIC port_enet)
 endif()
-target_link_libraries(runtime_switch PUBLIC native_animation port_build_options Threads::Threads)
+target_link_libraries(runtime_switch PUBLIC native_animation port_build_options Threads::Threads gx_native)
+target_include_directories(runtime_switch PRIVATE runtime/gx/gxnative)
 # Line tables only (no code change): console profiles of the render thread resolve to source lines.
 target_compile_options(runtime_switch PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-gline-tables-only> $<$<COMPILE_LANGUAGE:C>:-g1>)
 

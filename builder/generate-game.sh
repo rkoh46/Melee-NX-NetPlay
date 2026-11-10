@@ -18,4 +18,7 @@ dol="$repo/build/disc/main.dol"
 
 python3 "$repo/tools/bootstrap_port.py" --decomp-root "$decomp" --dol "$dol" \
   --build-dir "$repo/build/game" --gct-base 0x8065CC80 --frontend switch --stage generate
+# Native GX from the decompilation's matching source (compiled with GCC; see the script).
+python3 "$repo/tools/generate_gx_native.py" "$repo/build/game/generated/gxnative" --decomp-root "$decomp"
+cp "$repo/port/runtime/gx/gxnative/gxn_glue.h" "$repo/build/game/generated/gxnative/"
 echo "Generated game: $repo/build/game/generated/guest"
