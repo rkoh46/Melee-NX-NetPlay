@@ -68,6 +68,11 @@ std::vector<int> main_rows() {
     if ((r == ROW_TOUCH_OPACITY || r == ROW_TOUCH_SIZE) && !g_touch_visible) continue;
     if ((r == ROW_FULLSCREEN || r == ROW_VSYNC) && g_touch_visible) continue;   // macOS-only controls
     if (r == ROW_UPSCALE && !apple_graphics()) continue;                       // Metal only
+#if defined(__SWITCH__)
+    // The console's renderer has no resolution, filtering, sharpening, sync, widescreen or window
+    // settings yet: rows that change nothing only made the menu longer and harder to read.
+    if (r == ROW_SCALE || r == ROW_ANISO || r == ROW_SHARPEN || r == ROW_VSYNC || r == ROW_WIDESCREEN || r == ROW_FULLSCREEN) continue;
+#endif
     v.push_back(r);
   }
   return v;
@@ -248,6 +253,7 @@ void remap_assign(int input) {   // the same input on another control is cleared
 
 std::vector<int> page_rows() { return g_page == Page::Main ? main_rows() : g_page == Page::Controls ? controls_rows() : std::vector<int>{}; }
 void set_open(bool open) {
+  if (open != g_open.load()) log("menu: %s", open ? "opened" : "closed");
   g_open.store(open);
   g_combo_frames = 0; g_repeat = 0; g_prev_dir = 0;
   if (!open) { g_page = Page::Main; g_capturing.store(false); }
@@ -301,7 +307,10 @@ void menu_frame(PadState pads[4]) {
     if (!any_held) g_combo_blocked = false;
     if (g_combo_blocked) combo = false;
     g_combo_frames = combo ? g_combo_frames + 1 : 0;
-    if (g_combo_frames == 30) set_open(!g_open.load());
+    if (g_combo_frames == 1) log("menu: L+R+Start held");
+    // One hold toggles once: the buttons must be let go before the next toggle (a long hold
+    // used to open and close the menu every half second).
+    if (g_combo_frames == 30) { set_open(!g_open.load()); g_combo_blocked = true; }
     if (!g_open.load()) { g_prev_buttons = 0; return; }
 
     if (g_page == Page::Remap) {
@@ -411,7 +420,13 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   std::lock_guard<std::mutex> lock(g_mutex);
   g_touch_visible = touch_controls_visible;
   const RuntimeSettings s = g_settings;
+#if defined(__SWITCH__)
+  // A television seen from the couch: lines scale with the picture (1/24 of its height, 30 px
+  // at 720p, 45 px at 1080p). The phone-sized 18 px lines were unreadable on a TV.
+  const float unit = std::max(18.0f, wh / 24.0f);
+#else
   const float unit = std::min(18.0f * std::max(window_pixels_per_point(), 1.0f), std::min(ww, wh) / 22.0f);   // 18 pt lines on every display, smaller only when the window is tiny
+#endif
   float safe_t = 0, safe_l = 0, safe_r = 0, safe_b = 0;
   window_safe_insets(safe_t, safe_l, safe_r, safe_b);   // keep clear of the island, the rounded corners and the home indicator
   // Performance HUD: one line, top-left.
@@ -425,7 +440,7 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     std::string hud = line;
     if (const int ping = online_ping_ms(); ping >= 0) { hud += "   ping "; hud += std::to_string(ping); hud += " ms"; }
     if (const char* warn = latency_warning(); warn && *warn) { hud += "   "; hud += warn; }   // Low Power Mode, Bluetooth audio
-    const float h = unit * 0.7f, pad = h * 0.4f, w = h * 0.55f * (float)hud.size() + pad * 2;
+    const float h = std::min(unit * 0.7f, 20.0f), pad = h * 0.4f, w = h * 0.55f * (float)hud.size() + pad * 2;
     const float hx = pad + safe_l, hy = pad + safe_t;
     out.shapes.push_back({hx, hy, hx + w, hy + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
     out.texts.push_back({hx + pad, hy + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, hud, (float)ww - safe_l - safe_r - 4 * pad});
@@ -440,12 +455,12 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     return;
   }
   // Dim the game, then the panel.
-  out.shapes.push_back({0, 0, (float)ww, (float)wh, 0, 0, 0, 0.55f, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+  out.shapes.push_back({0, 0, (float)ww, (float)wh, 0, 0, 0, 0.72f, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});   // dim the game enough that the panel reads at a glance
   const std::vector<int> rows = page_rows();
   const int body_rows = g_page == Page::Remap ? 9 : (int)rows.size();
-  const float row_h = unit * 1.45f, pad = unit * 0.9f, title_h = unit * 1.3f;
+  const float row_h = unit * 1.5f, pad = unit * 0.8f, title_h = unit * 1.4f;
   const float avail_w = (float)ww - safe_l - safe_r, avail_h = (float)wh - safe_t - safe_b;
-  const float panel_w = std::min(avail_w - 2 * pad, unit * 24.0f);
+  const float panel_w = std::min(avail_w - 2 * pad, unit * 26.0f);
   const float panel_h = pad + title_h + unit * 0.5f + row_h * body_rows + unit * 1.6f + pad;
   float x0 = safe_l + (avail_w - panel_w) * 0.5f, y0 = safe_t + std::max(pad, (avail_h - panel_h) * 0.5f);
   // iPhone Duo: an interactive panel never sits in the fold. Shift it whole into the larger
@@ -471,12 +486,15 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     }
   }
   const float x1 = x0 + panel_w, y1 = y0 + panel_h;
-  out.shapes.push_back({x0, y0, x1, y1, 0.03f, 0.04f, 0.12f, 0.985f, unit * 0.7f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-  out.shapes.push_back({x0, y0, x1, y1, 0.5f, 0.6f, 1.0f, 0.25f, unit * 0.7f, 1.5f, 0.0f, 0, 0.0f, 0.0f});
+  out.shapes.push_back({x0, y0, x1, y1, 0.04f, 0.06f, 0.16f, 1.0f, unit * 0.5f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+  out.shapes.push_back({x0, y0, x1, y1, 0.55f, 0.65f, 1.0f, 0.6f, unit * 0.5f, std::max(2.0f, unit * 0.08f), 0.0f, 0, 0.0f, 0.0f});
   // Title bar in Melee's angled yellow.
   const std::string title = g_page == Page::Main ? "DASHDANCE  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
-  out.shapes.push_back({x0 + pad, y0 + pad, x0 + pad + panel_w * 0.62f, y0 + pad + title_h, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.15f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-  out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.12f, title_h * 0.75f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title, panel_w * 0.62f - unit * 1.2f});
+  out.shapes.push_back({x0 + pad, y0 + pad, x0 + pad + panel_w * 0.72f, y0 + pad + title_h, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.15f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+  out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.14f, title_h * 0.72f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title, panel_w * 0.72f - unit * 1.0f});
+#ifdef MELEE_PORT_VERSION
+  out.texts.push_back({x1 - pad, y0 + pad + title_h * 0.3f, unit * 0.6f, 1, 1, 1, 0.6f, 2, "v" MELEE_PORT_VERSION, panel_w * 0.25f - pad});
+#endif
   const float top = y0 + pad + title_h + unit * 0.5f;
   const float cx = (x0 + x1) * 0.5f;
 
@@ -503,18 +521,20 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     const int r = rows[i];
     const float ry = top + row_h * i;
     const bool sel = (int)i == g_selected;
-    if (sel) out.shapes.push_back({x0 + pad * 0.5f, ry, x1 - pad * 0.5f, ry + row_h, 0.97f, 0.79f, 0.28f, 0.18f, unit * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+    // The selected row is a solid yellow bar with dark text: readable from across the room.
+    if (sel) out.shapes.push_back({x0 + pad * 0.5f, ry + unit * 0.06f, x1 - pad * 0.5f, ry + row_h - unit * 0.06f, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.25f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
     const float ty = ry + (row_h - unit) * 0.5f;
     const bool main = g_page == Page::Main;
     const std::string value = main ? main_value(r, s) : controls_value(r);
-    out.texts.push_back({x0 + pad, ty, unit * 0.95f, 1, 1, 1, sel ? 1.0f : 0.85f, 0, main ? main_name(r) : controls_name(r), value.empty() ? panel_w - 2 * pad : panel_w * 0.56f - pad});
+    const float lr = sel ? 0.08f : 1.0f, lg = sel ? 0.06f : 1.0f, lb = sel ? 0.02f : 1.0f;
+    out.texts.push_back({x0 + pad * 1.2f, ty, unit, lr, lg, lb, sel ? 1.0f : 0.92f, 0, main ? main_name(r) : controls_name(r), value.empty() ? panel_w - 2 * pad : panel_w * 0.56f - pad});
     const bool steppable = main ? (r != ROW_RESUME && r != ROW_CONTROLS) : value_row(r);
-    if (!value.empty()) out.texts.push_back({x1 - pad, ty, unit * 0.95f, 0.97f, 0.79f, 0.28f, sel ? 1.0f : 0.8f, 2, sel && steppable ? "<  " + value + "  >" : value, panel_w * 0.42f - pad});
+    if (!value.empty()) out.texts.push_back({x1 - pad * 1.2f, ty, unit, sel ? 0.08f : 0.97f, sel ? 0.06f : 0.85f, sel ? 0.02f : 0.45f, 1.0f, 2, sel && steppable ? "<  " + value + "  >" : value, panel_w * 0.42f - pad});
   }
   const char* hint = touch_controls_visible ? "Tap a row's left or right side to change it"
                    : g_page == Page::Main ? "Up/Down select   Left/Right change   B resume"
                                           : "Up/Down select   Left/Right change   B back";
-  out.texts.push_back({cx, y1 - pad - unit * 1.1f, unit * 0.7f, 1, 1, 1, 0.55f, 1, hint, panel_w - 2 * pad});
+  out.texts.push_back({cx, y1 - pad - unit * 1.05f, unit * 0.72f, 1, 1, 1, 0.8f, 1, hint, panel_w - 2 * pad});
   g_layout = {x0, y0, x1, y1, row_h, top};
 }
 }  // namespace host

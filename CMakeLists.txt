@@ -36,6 +36,7 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MELEE_PORT_INPUT_MANIFEST}")
 file(SHA256 "${MELEE_PORT_INPUT_MANIFEST}" MELEE_PORT_INPUT_MANIFEST_SHA256)
 file(STRINGS "${PROJECT_SOURCE_DIR}/VERSION" MELEE_PORT_VERSION LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/VERSION")   # a version bump reconfigures
 
 # ---- Runtime link group (after project(); the devkitPro platform file overwrites an earlier value) ----
 # Everything cyclic between the C/C++ runtime, libnx and the portlibs resolves in one rescan group;

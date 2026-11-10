@@ -405,6 +405,9 @@ int main(int argc, char** argv) {
   // uber=1: a draw whose pipeline is still compiling uses Aurora's uber-shader instead of waiting
   // for it (a first-seen pipeline otherwise stalls the renderer and then the game); 2 always.
   // The uber pipelines share one shader, so they need the shared Vulkan pipeline cache.
+  // Screenshot aids: menu_open=<retrace> opens the in-game menu then, menu_page=controls|remap picks the page.
+  if (const std::string v = get("menu_open", ""); !v.empty()) setenv("MELEE_MENU_OPEN", v.c_str(), 1);
+  if (const std::string v = get("menu_page", ""); !v.empty()) setenv("MELEE_MENU_PAGE", v.c_str(), 1);
   if (const std::string v = get("uber", ""); !v.empty()) {
     setenv("AURORA_UBER", v.c_str(), 1);
     if (v != "0") setenv("AURORA_MONOLITHIC_PIPELINE_CACHE", "1", 1);

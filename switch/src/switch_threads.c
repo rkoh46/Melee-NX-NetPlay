@@ -167,29 +167,28 @@ __attribute__((noreturn)) static void fast_exit(void) {
     __builtin_unreachable();
 }
 
-extern void __real_exit(int code);
 // A normal exit must go back through libnx so nx-hbloader regains control and returns to the
 // Homebrew Menu; svcExitProcess from an NRO ends hbloader itself, which the system reports as
 // "The software was closed because an error occurred". abort/_exit keep the fast path.
-extern void __real__exit(int code);
-// exit() runs the hook once, then newlib's atexit handlers and static destructors, then _exit.
-// That _exit must stay on libnx's path back to hbloader: fast_exit would run the hook a second
-// time over destroyed objects (card_flush walked a freed vector: a Data Abort on every quit) and
-// end with svcExitProcess, which the system reports as an error.
-static volatile int normal_exit;
+// exit() (quitting from the menu, or the end of a measured run) asks the system to close the
+// whole application, as a game quitting to the HOME menu does: the process ends with every thread
+// in it, and no error is reported. Two earlier routes failed: svcExitProcess from the NRO is
+// reported as "The software was closed because an error occurred", and returning to hbloader
+// left the renderer, audio and writer threads running inside the same process, corrupting the
+// heap of whatever hbloader loaded next (every second launch crashed in malloc at startup).
 __attribute__((noreturn)) void __wrap_exit(int code) {
+    (void)code;
     switch_exit_hook_fn hook = exit_hook;
     exit_hook = NULL;
     if (hook) hook();
     fflush(NULL);
-    normal_exit = 1;
-    __real_exit(code);
+    if (R_SUCCEEDED(appletRequestExitToSelf())) {
+        for (;;) svcSleepThread(1000000000LL);   // the system terminates the process
+    }
+    svcExitProcess();
     __builtin_unreachable();
 }
-__attribute__((noreturn)) void __wrap__exit(int code) {
-    if (normal_exit) __real__exit(code);
-    fast_exit();
-}
+__attribute__((noreturn)) void __wrap__exit(int code) { (void)code; fast_exit(); }
 __attribute__((noreturn)) void __wrap_abort(void) { fast_exit(); }
 
 int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr, void* (*start)(void*), void* arg) {

@@ -30,6 +30,9 @@ float fitted_size(ImFont* font, float size, const char* text, float max_w) {
 
 bool game_overlay(OverlayFrame& out) {
   out = {};
+  // Full opacity: alpha is the touch layer's fade and defaults to 0, which drew every panel,
+  // highlight and backdrop of the menu and HUD fully transparent (only the text showed).
+  out.alpha = 1.0f;
   int w = 1280, h = 720;
   window_client_size(&w, &h);
   menu_overlay(out, w, h, false);
