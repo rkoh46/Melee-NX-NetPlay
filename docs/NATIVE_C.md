@@ -76,4 +76,13 @@ frames 1254 -> 17), Fountain of Dreams 12.3 -> 10.2, 4-player Battlefield 17.0 -
 The match fingerprint counts from the frame the match scene starts on the retrace clock, so a build
 that is faster or slower can shift it by a frame; compare per-frame traces aligned by content.
 
-Next: the fighter, item and stage code (ft, it, gr, lb).
+Fighter, item, map-collision and library code (26 more files, 1510 hooked functions): replays
+from the pure translation and the native build have identical pre-frame (inputs, RNG seed) and
+post-frame (fighter state) records on 4-player Fountain of Dreams, 4-player Battlefield, a team
+battle on Pokemon Stadium, Mute City and Yoshi's Story (tools/slp-diff.py). Match averages,
+pure -> native: 4-player Fountain of Dreams 19.3 -> 14.6 ms, 4-player Battlefield 16.8 -> 12.8,
+Mute City 18.2 -> 13.2, Yoshi's Story 12.9 -> 10.2. The draw traces had missed a -0.0/+0.0
+difference in a knockback speed that the replay comparison caught (MWCC's fnmsubs; fixed in the
+lowering pass), so replays are the exactness check now.
+
+Next: the stage code (gr) and the rest of ft, it and lb.
