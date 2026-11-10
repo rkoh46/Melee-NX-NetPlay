@@ -5,3 +5,6 @@ src/sysdolphin/baselib/tobj.c
 src/sysdolphin/baselib/mobj.c
 src/sysdolphin/baselib/dobj.c
 src/sysdolphin/baselib/pobj.c
+src/sysdolphin/baselib/jobj.c
+src/sysdolphin/baselib/fobj.c
+src/sysdolphin/baselib/aobj.c

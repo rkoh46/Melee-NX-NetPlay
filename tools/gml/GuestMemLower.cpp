@@ -41,6 +41,7 @@ static cl::opt<std::string> DolPath("gml-dol", cl::desc("main.dol: constant data
 static cl::opt<std::string> SplitsPath("gml-splits", cl::desc("the decomp's splits.txt (per-file address ranges)"), cl::init(""));
 static cl::opt<std::string> TranslationUnit("gml-tu", cl::desc("this module's source file as splits.txt names it"), cl::init(""));
 static cl::opt<std::string> NativeList("gml-native", cl::desc("functions defined natively in any module (direct calls)"), cl::init(""));
+static cl::opt<std::string> GuestReport("gml-report-guest", cl::desc("append the functions that stay translated to this file"), cl::init(""));
 
 namespace {
 [[noreturn]] void fail(const Twine& msg) {
@@ -513,6 +514,10 @@ struct Lowerer {
       b.CreateCall(helper("gml_panic", Type::getVoidTy(C), {}), {});
       return;
     }
+    if (callee && callee->getName() == "sqrtf") {   // MSL's inline frsqrte sequence, exact (gml_glue.cpp)
+      def(b.CreateCall(helper("gml_sqrtf", Type::getFloatTy(C), {Type::getFloatTy(C)}), {V(s, cb.getArgOperand(0), b)}));
+      return;
+    }
     if (callee && (callee->getName() == "fabsf" || callee->getName() == "fabs")) {   // exact natively
       def(b.CreateUnaryIntrinsic(Intrinsic::fabs, V(s, cb.getArgOperand(0), b)));
       return;
@@ -634,6 +639,42 @@ struct Lowerer {
     // code calls Melee's copies, so even overlapping or odd uses behave exactly as on the GameCube.
     for (const char* n : {"memcpy", "memmove", "memset", "memcmp", "strlen", "strcpy", "strncpy", "strcmp", "strncmp", "strcat"})
       if (Function* f = M.getFunction(n); f && !f->isDeclaration()) { f->deleteBody(); f->setLinkage(GlobalValue::ExternalLinkage); }
+    // A function that refers to something with no guest address (an MWCC builtin, data the image
+    // does not hold) stays translated: its body is dropped and calls to it go to the game.
+    std::set<Function*> keepGuest;
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (auto& F : M) {
+        if (F.isDeclaration() || keepGuest.count(&F)) continue;
+        std::string why;
+        for (auto& I : instructions(F)) {
+          if (auto* cb = dyn_cast<CallBase>(&I))   // assertion arguments: the call becomes a native panic
+            if (Function* cf = cb->getCalledFunction(); cf && (cf->getName() == "__assert" || cf->getName() == "__assert_func" ||
+                                                               cf->getName() == "HSD_Panic" || cf->getName() == "OSPanic")) continue;
+          for (Value* op : I.operands()) {
+            auto* g = dyn_cast<GlobalValue>(op->stripPointerCasts());
+            if (!g) continue;
+            if (auto* f = dyn_cast<Function>(g)) {
+              if (f->isIntrinsic() || !f->isDeclaration() || natives.count(f->getName().str())) continue;
+              static const std::set<std::string> special = {"sqrtf", "fabsf", "fabs", "__assert", "__assert_func", "HSD_Panic", "OSPanic"};
+              if (special.count(f->getName().str())) continue;
+            } else if (auto* gv = dyn_cast<GlobalVariable>(g); gv && hostConst.count(gv)) continue;
+            uint32_t a;
+            if (!resolveAddr(g, a)) { why = g->getName().str(); break; }
+          }
+          if (!why.empty()) break;
+        }
+        if (!why.empty()) {
+          errs() << "gml-lower: " << F.getName() << " stays translated (" << why << " has no guest address)\n";
+          if (!GuestReport.empty()) { std::ofstream rep(GuestReport, std::ios::app); rep << F.getName().str() << "\n"; }
+          keepGuest.insert(&F);
+          F.deleteBody();
+          F.setLinkage(GlobalValue::ExternalLinkage);
+          changed = true;
+        }
+      }
+    }
     std::vector<Function*> defined;
     for (auto& F : M) if (!F.isDeclaration()) defined.push_back(&F);
     for (Function* F : defined) {

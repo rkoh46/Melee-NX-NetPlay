@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gml_glue.h"
 #include "gx_core.h"
+#include "numeric.h"
 #include "host.h"
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +28,21 @@ void gml_guest_call(uint32_t addr) {
   uint8_t* m = gml_ram;
   ppc::call(c, m, addr);
   gml_enter(c, m);
+}
+// MSL's sqrtf (math_ppc.h), which MWCC inlines everywhere: Gekko's frsqrte estimate and three
+// Newton steps in double, exactly as the compiled code does them (fmul, fnmsub fused, final x * g
+// rounded to single by the volatile store), with the translation's exact instruction helpers.
+float gml_sqrtf(float xf) {
+  const double x = xf;
+  if (!(x > 0.0)) return xf;
+  double g = ppc::frsqrte(x);
+  for (int i = 0; i < 3; ++i) {
+    double t = ppc::fmul(g, g);
+    g = ppc::fmul(0.5, g);
+    t = ppc::fnmsub(x, t, 3.0);
+    g = ppc::fmul(g, t);
+  }
+  return float(ppc::fs(ppc::fmul(x, g)));
 }
 void gml_panic(void) { ppc::fatal(*host::cpu, "native decomp code reached an assertion or panic", host::cpu->lr); }
 }
