@@ -1,4 +1,5 @@
 """C++ emitter: one host function per guest function, explicit portable numeric helpers."""
+import re
 from gekko import LOAD_OPS, STORE_OPS
 
 
@@ -60,6 +61,40 @@ def cond_expr(bo, bi):
     return " && ".join(parts) if parts else None
 
 
+CR_ALL = 0xFF
+CR_VOLATILE_KILL = (1 << 0) | (1 << 5) | (1 << 6) | (1 << 7)   # undefined after a call (cr1 carries the varargs bit)
+CR_NONVOLATILE = (1 << 2) | (1 << 3) | (1 << 4)
+FUSE_CMP = re.compile(r"^ppc::cr_set_([su])\(c, (\d), (.+), ([^,]+)\);$")
+FUSE_RC = re.compile(r"\s*ppc::cr0\(c, (c\.r\[\d+\])\);")
+CR_KNOWN = re.compile(r"cr_set_[su]\(c, \d|ppc::cr0\(c,|ppc::fcmp\(c, \d|ppc::mtcrf\(c, 0x[0-9A-F]+u|c\.cr\[\d\]|crbit(?:_set)?\(c, \d+|ppc::mfcr\(c\)")
+
+
+def cr_effects(text):
+    """CR fields an emitted line reads and writes (8-bit masks), read from the line itself."""
+    use = dfn = 0
+    for m in re.finditer(r"cr_set_[su]\(c, (\d)", text):
+        dfn |= 1 << int(m.group(1))
+    if "ppc::cr0(c," in text:
+        dfn |= 1
+    for m in re.finditer(r"ppc::fcmp\(c, (\d)", text):
+        dfn |= 1 << int(m.group(1))
+    for m in re.finditer(r"ppc::mtcrf\(c, 0x([0-9A-F]+)u", text):
+        crm = int(m.group(1), 16)
+        dfn |= sum(1 << k for k in range(8) if crm & (0x80 >> k))
+    for m in re.finditer(r"c\.cr\[(\d)\] = ", text):
+        dfn |= 1 << int(m.group(1))
+    for m in re.finditer(r"c\.cr\[(\d)\](?! = )", text):
+        use |= 1 << int(m.group(1))
+    for m in re.finditer(r"crbit(?:_set)?\(c, (\d+)", text):
+        use |= 1 << (int(m.group(1)) >> 2)
+    if "ppc::mfcr(c)" in text:
+        use |= CR_ALL
+    # Anything else that touches the CR counts as reading all of it.
+    if re.search(r"c\.cr|\bcr\w*\(", CR_KNOWN.sub("", text)):
+        use |= CR_ALL
+    return use, dfn
+
+
 class Emitter:
     def __init__(self, dol, symbols, infos, hle_names, func_names):
         self.dol = dol
@@ -69,6 +104,14 @@ class Emitter:
         self.hot = set()   # guest addresses placed in .text.hot.* (recomp.py loads hot_functions.txt)
         self.func_names = func_names  # addr -> C identifier
         self.referenced = set()
+        # Branch profile (recomp.py): "gen" counts every conditional guest branch at run time
+        # (ppc::brc, dumped to Logs/branch_counts.txt); "use" turns measured counts into branch
+        # probabilities, so the compiler lays each function's executed path out contiguously and
+        # moves the blocks the game never runs to the end instead of between the hot ones.
+        self.branch_mode = None
+        self.branch_addrs = []
+        self.branch_profile = {}
+        self._fused = None   # condition text for the branch of a fused compare (emit_function)
 
     def fname(self, addr):
         self.referenced.add(addr)
@@ -109,6 +152,9 @@ class Emitter:
             for e in sorted(info.entries):
                 out.append("    if (e == %s) goto L_%08X;" % (hexs(e), e))
             out.append("    ppc::fatal(c, \"bad function entry\", e); }")
+        pairs = self._fusion_pairs(info)
+        fused_at = {j: (field, bit, a, b) for (_, j, field, bit, a, b) in pairs.values()}
+        self.fused_count = getattr(self, "fused_count", 0) + len(pairs)
         for idx, ins in enumerate(info.insns):
             addr = info.addrs[idx]
             if addr in info.labels:
@@ -126,7 +172,17 @@ class Emitter:
                 out.append("  ppc::fatal(c, \"undecodable instruction\", %s);" % hexs(addr))
                 continue
             try:
-                line = self.emit_insn(info, idx, ins)
+                if idx in pairs:
+                    line = pairs[idx][0]   # the compare's CR store is dead; its test moves into the branch
+                elif idx in fused_at:
+                    field, bit, a, b = fused_at[idx]
+                    self._fused = self._fused_cond(ins, field, bit, a, b)
+                    try:
+                        line = self.emit_insn(info, idx, ins)
+                    finally:
+                        self._fused = None
+                else:
+                    line = self.emit_insn(info, idx, ins)
                 if addr in info.optional_text:
                     patched, flag = info.optional_text[addr]
                     line = "if (gecko::option_%s) { %s } else { %s }" % (flag, self.emit_insn(info, idx, patched) if patched is not None else "", line)
@@ -143,6 +199,170 @@ class Emitter:
         return "\n".join(out) + "\n"
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Compare/branch fusion. A compare (or a record-form op setting cr0) directly followed by the
+    # branch that tests it, whose CR field nothing reads afterwards, becomes the test itself:
+    # "if ((int32_t)r3 < 8)" instead of building the field's four bits, storing them and testing
+    # one. Liveness follows the PowerPC ABI: after a call and at a return cr0/cr5-7 are undefined
+    # (cr1 carries the varargs flag), cr2-4 are preserved. Functions with anything unusual (Slippi
+    # caves, extra entries, local subroutines, setjmp, adjusted returns) are left alone.
+    def _fusion_pairs(self, info):
+        if (info.func.name.startswith("gecko_") or info.aliases or info.optional_hooks or info.optional_text
+                or info.local_returns or info.has_blrl or info.entries or info.setjmp_returns
+                or info.adjusted_returns or info.unresolved_bctr or info.bad or any(i is None for i in info.insns)):
+            return {}
+        n = len(info.insns)
+        if any(info.addrs[k] != info.func.addr + 4 * k for k in range(n)):
+            return {}
+        idx = {a: k for k, a in enumerate(info.addrs)}
+        succ = [[] for _ in range(n)]
+        use = [0] * n
+        dfn = [0] * n
+        texts = [None] * n
+        saved_mode = self.branch_mode
+        self.branch_mode = None
+        try:
+            for k, ins in enumerate(info.insns):
+                text = self.emit_insn(info, k, ins) or ""
+                texts[k] = text
+                u, d = cr_effects(text)
+                op, f = ins.op, ins.f
+                nxt = [k + 1] if k + 1 < n else []
+                if op == "b":
+                    t = ins.branch_target
+                    if ins.lk:
+                        succ[k] = nxt
+                        d |= CR_VOLATILE_KILL
+                        u |= 1 << 1
+                    elif t in idx:
+                        succ[k] = [idx[t]]
+                    else:
+                        succ[k] = []
+                        u |= (1 << 1) | CR_NONVOLATILE
+                elif op == "bc":
+                    t = ins.branch_target
+                    always = (f["bo"] & 0x14) == 0x14
+                    if ins.lk:
+                        succ[k] = nxt
+                        u |= 1 << 1
+                        if always:
+                            d |= CR_VOLATILE_KILL
+                    elif t in idx:
+                        succ[k] = ([] if always else nxt) + [idx[t]]
+                    else:
+                        succ[k] = [] if always else nxt
+                        u |= (1 << 1) | CR_NONVOLATILE
+                elif op == "bclr":
+                    if ins.lk:
+                        return {}
+                    always = (f["bo"] & 0x14) == 0x14
+                    succ[k] = [] if always else nxt
+                    u |= CR_NONVOLATILE
+                elif op == "bcctr":
+                    always = (f["bo"] & 0x14) == 0x14
+                    if ins.lk:
+                        succ[k] = nxt
+                        u |= 1 << 1
+                        if always:
+                            d |= CR_VOLATILE_KILL
+                    elif ins.addr in info.ctr_targets and info.ctr_targets[ins.addr] in idx:
+                        succ[k] = ([] if always else nxt) + [idx[info.ctr_targets[ins.addr]]]
+                    elif ins.addr in info.jumptables:
+                        targets = set(info.jumptables[ins.addr].targets)
+                        succ[k] = ([] if always else nxt) + [idx[t] for t in targets if t in idx]
+                        if any(t not in idx for t in targets):
+                            u |= CR_ALL
+                    else:
+                        succ[k] = [] if always else nxt
+                        u |= CR_ALL
+                elif op in ("sc", "rfi"):
+                    succ[k] = nxt if op == "sc" else []
+                    u |= CR_ALL
+                else:
+                    succ[k] = nxt
+                    if k + 1 >= n:
+                        u |= CR_ALL   # runs off the end: unknown
+                use[k], dfn[k] = u, d
+        finally:
+            self.branch_mode = saved_mode
+        live_in = [0] * n
+        changed = True
+        while changed:
+            changed = False
+            for k in range(n - 1, -1, -1):
+                out = 0
+                for s2 in succ[k]:
+                    out |= live_in[s2]
+                v = use[k] | (out & ~dfn[k])
+                if v != live_in[k]:
+                    live_in[k] = v
+                    changed = True
+        pairs = {}
+        branch_ops = ("b", "bc", "bclr", "bcctr", "sc", "rfi")
+        for k in range(n - 1):
+            ins = info.insns[k]
+            text = texts[k]
+            m = FUSE_CMP.match(text) if ins.op in ("cmp", "cmpi", "cmpl", "cmpli") else None
+            if m:
+                cfield, a, b = int(m.group(2)), m.group(3), m.group(4)
+                stripped = ""
+            else:
+                rc = FUSE_RC.search(text) if ins.rc or ins.op.endswith("_rc") else None
+                if not rc or text.count("ppc::cr0(c,") != 1:
+                    continue
+                cfield, a, b = 0, "(int32_t)%s" % rc.group(1), "0"
+                stripped = FUSE_RC.sub("", text, count=1)
+            regs = set(re.findall(r"c\.r\[(\d+)\]", a + " " + b))
+            # The branch may sit a few instructions later (the compiler scheduled the compare early):
+            # nothing in between may be a label, a branch, touch the CR, or write a compared register.
+            j = k + 1
+            ok = False
+            while j < n and j <= k + 8:
+                if info.addrs[j] in info.labels:
+                    break
+                if info.insns[j].op in branch_ops:
+                    ok = True
+                    break
+                t = texts[j]
+                if use[j] or dfn[j] or "c.r[i]" in t or re.search(r"lswi|stswi|interpret|hle::|longjmp|ppc::call", t) or any(re.search(r"c\.r\[%s\] =[^=]" % r, t) for r in regs):
+                    break
+                j += 1
+            if not ok:
+                continue
+            br = info.insns[j]
+            if br.op not in ("bc", "bclr", "bcctr") or (br.f["bo"] & 16) or (br.op != "bc" and br.lk):
+                continue
+            field, bit = br.f["bi"] >> 2, br.f["bi"] & 3
+            if field != cfield or field == 1 or bit == 3:
+                continue
+            out = 0
+            for s2 in succ[j]:
+                out |= live_in[s2]
+            if out & (1 << field):
+                continue
+            pairs[k] = (stripped, j, field, bit, a, b)
+        return pairs
+
+    def _fused_cond(self, br, field, bit, a, b):
+        bo = br.f["bo"]
+        expr = "(%s %s %s)" % (a, ("<", ">", "==")[bit], b)
+        parts = []
+        if not (bo & 4):
+            parts.append("--c.ctr %s 0" % ("==" if bo & 2 else "!="))
+        parts.append(expr if bo & 8 else "!" + expr)
+        return " && ".join(parts)
+
+    def _cond(self, addr, cond):
+        if self.branch_mode == "gen":
+            self.branch_addrs.append(addr)
+            return "ppc::brc(%d, %s)" % (len(self.branch_addrs) - 1, cond)
+        if self.branch_mode == "use":
+            counts = self.branch_profile.get(addr)
+            if counts and counts[1] > 0:
+                p = min(0.9999, max(0.0001, counts[0] / counts[1]))
+                return "__builtin_expect_with_probability(!!(%s), 1, %.4f)" % (cond, p)
+        return cond
+
     def rc(self, ins, dest):
         return " ppc::cr0(c, %s);" % dest if ins.rc else ""
 
@@ -275,7 +495,7 @@ class Emitter:
         if op == "lwarx":
             return "%s = ppc::ld32(c, m, %s);" % (rd, ea_x(f))
         if op == "stwcx":
-            return "ppc::st32(c, m, %s, %s); c.cr[0] = (uint8_t)(2 | c.so);" % (ea_x(f), rs)
+            return "ppc::st32(c, m, %s, %s); c.cr[0] = 2;" % (ea_x(f), rs)
         if op == "lmw":
             return "{ uint32_t ea = %s; for (int i = %d; i < 32; ++i, ea += 4) c.r[i] = ppc::ld32(c, m, ea); }" % (ea_d(f), f["rd"])
         if op == "stmw":
@@ -354,7 +574,7 @@ class Emitter:
             return self._tail(t)
         if op == "bc":
             t = ins.branch_target
-            cond = cond_expr(f["bo"], f["bi"])
+            cond = self._fused or cond_expr(f["bo"], f["bi"])
             if ins.lk and (ins.addr + 4) in info.local_returns:
                 body = "c.lr = %s; goto L_%08X;" % (hexs(ins.addr + 4), t)
             elif ins.lk:
@@ -364,9 +584,9 @@ class Emitter:
                 body = "%sgoto L_%08X;" % (poll, t)
             else:
                 body = self._tail(t)
-            return body if cond is None else "if (%s) { %s }" % (cond, body)
+            return body if cond is None else "if (%s) { %s }" % (self._cond(ins.addr, cond), body)
         if op == "bclr":
-            cond = cond_expr(f["bo"], f["bi"])
+            cond = self._fused or cond_expr(f["bo"], f["bi"])
             # Local subroutine returns: dispatch on LR with a plain if-chain (a switch here trips
             # the MSVC backend). Only functions containing cave-local calls have any.
             local = " ".join("if (t == %s) goto L_%08X;" % (hexs(r), r) for r in sorted(info.local_returns))
@@ -374,9 +594,9 @@ class Emitter:
                 body = "{ uint32_t t = c.lr; c.lr = %s; %s if (t == entry_lr) return; ppc::call(c, m, t); }" % (hexs(ins.addr + 4), local)
             else:
                 body = "{ uint32_t t = c.lr; %s return; }" % local if local else "return;"
-            return body if cond is None else "if (%s) { %s }" % (cond, body)
+            return body if cond is None else "if (%s) { %s }" % (self._cond(ins.addr, cond), body)
         if op == "bcctr":
-            cond = cond_expr(f["bo"], f["bi"])
+            cond = self._fused or cond_expr(f["bo"], f["bi"])
             if ins.lk and ins.addr in info.ctr_calls:
                 t = info.ctr_calls[ins.addr]
                 if (ins.addr + 4) in info.local_returns:
@@ -399,7 +619,7 @@ class Emitter:
                     body = "switch (c.ctr) { %s default: ppc::call(c, m, c.ctr); return; }" % cases
                 else:
                     body = "ppc::call(c, m, c.ctr); return;"
-            return body if cond is None else "if (%s) { %s }" % (cond, body)
+            return body if cond is None else "if (%s) { %s }" % (self._cond(ins.addr, cond), body)
         if op == "sc":
             return "ppc::syscall(c, m);"
         if op == "rfi":
@@ -498,7 +718,8 @@ class Emitter:
 
     def _spr_write(self, n, v):
         if n == 1:
-            return "c.so = (%s >> 31) & 1; c.ov = (%s >> 30) & 1; c.ca = (%s >> 29) & 1;" % (v, v, v)
+            # XER[SO] stays 0 (nothing in the game sets it; compares no longer fold it into CR).
+            return "{ const uint32_t x_ = %s; if (x_ >> 31) ppc::fatal(c, \"XER[SO] set\", x_); c.ov = (x_ >> 30) & 1; c.ca = (x_ >> 29) & 1; }" % v
         if n == 8:
             return "c.lr = %s;" % v
         if n == 9:

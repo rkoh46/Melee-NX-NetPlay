@@ -491,3 +491,12 @@ void psq_store_slow(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w
 }
 
 }  // namespace ppc
+
+void ppc::dump_branch_counts(const char* path) {
+  if (!g_br_count_n) return;
+  FILE* f = std::fopen(path, "w");
+  if (!f) return;
+  for (uint32_t k = 0; k < g_br_count_n; ++k)
+    if (g_br_counts[k][1]) std::fprintf(f, "%08X %u %u\n", g_br_addrs[k], g_br_counts[k][0], g_br_counts[k][1]);
+  std::fclose(f);
+}

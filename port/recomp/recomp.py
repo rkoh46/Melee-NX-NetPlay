@@ -4,6 +4,7 @@ Usage: python recomp.py [--out DIR] [--dol PATH] [--hle hle_list.txt] [--tu-insn
 Generated code is not committed (see .gitignore); rerun after changing the emitter.
 """
 import argparse
+import os
 from dataclasses import dataclass
 import hashlib
 import re
@@ -272,6 +273,20 @@ def main():
     if hot_path.exists():
         emitter.hot = {int(l.strip(), 16) for l in hot_path.read_text().splitlines() if l.strip() and not l.startswith("#")}
         print("hot functions: %d" % len(emitter.hot))
+    # Branch profile: MELEE_BRANCH_PROFILE=gen builds the counting variant; otherwise
+    # port/recomp/branch_profile.txt (tools/nx-branches.py, "addr taken total" per line) gives the
+    # compiler measured branch probabilities.
+    branch_path = ROOT / "port/recomp/branch_profile.txt"
+    if os.environ.get("MELEE_BRANCH_PROFILE") == "gen":
+        emitter.branch_mode = "gen"
+        print("branch profile: counting build")
+    elif branch_path.exists() and os.environ.get("MELEE_BRANCH_PROFILE") != "off":
+        for line in branch_path.read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 3 and not line.startswith("#"):
+                emitter.branch_profile[int(parts[0], 16)] = (int(parts[1]), int(parts[2]))
+        emitter.branch_mode = "use"
+        print("branch profile: %d measured branches" % len(emitter.branch_profile))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     changed = 0
@@ -355,10 +370,19 @@ def main():
     text.append("};\nconst size_t fn_table_count = sizeof(fn_table) / sizeof(fn_table[0]);\n}\n")
     changed += write_if_changed(out / "guest_table.cpp", "".join(text))
 
+    n_br = max(1, len(emitter.branch_addrs))
+    text = ["// Generated: the counting build's branch table (ppc::brc, ppc::dump_branch_counts).\n#include <cstdint>\nnamespace ppc {\n",
+            "uint32_t g_br_counts[%d][2];\nextern const uint32_t g_br_addrs[%d] = {\n" % (n_br, n_br)]
+    addrs = emitter.branch_addrs or [0]
+    for i in range(0, len(addrs), 8):
+        text.append("  " + ", ".join("0x%08Xu" % a for a in addrs[i:i + 8]) + ",\n")
+    text.append("};\nextern const uint32_t g_br_count_n = %d;\n}\n" % len(emitter.branch_addrs))
+    changed += write_if_changed(out / "branch_table.cpp", "".join(text))
+
     text = ["set(GUEST_SOURCES\n"]
     for p in written:
         text.append("  \"${CMAKE_CURRENT_LIST_DIR}/%s\"\n" % p.name)
-    text.append("  \"${CMAKE_CURRENT_LIST_DIR}/guest_table.cpp\"\n)\n")
+    text.append("  \"${CMAKE_CURRENT_LIST_DIR}/guest_table.cpp\"\n  \"${CMAKE_CURRENT_LIST_DIR}/branch_table.cpp\"\n)\n")
     changed += write_if_changed(out / "guest_sources.cmake", "".join(text))
 
     # Names for diagnostics.
@@ -370,6 +394,7 @@ def main():
     text.append("};\nconst size_t name_table_count = sizeof(name_table) / sizeof(name_table[0]);\n}\n")
     changed += write_if_changed(out / "function_names.cpp", "".join(text))
 
+    print("compare/branch fusion: %d compares tested directly by their branch" % getattr(emitter, "fused_count", 0))
     digest = hashlib.sha1(dol.ram).hexdigest()[:12]
     print("generated %d TUs, %d functions, %d HLE overrides, %d files changed, image %s, %.1fs" % (
         len(written), len(infos), len(hle_funcs), changed, digest, time.time() - t0))

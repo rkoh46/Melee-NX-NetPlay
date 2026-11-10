@@ -13,7 +13,7 @@ ip="${1:?ip}"; frames="${2:?frames}"; shift 2
 out="${MATRIX_OUT:-$repo/build/matrix}"; mkdir -p "$out"
 ini_src="$repo/dist/sd/switch/melee-nx-netplay/launcher.ini"
 results="$out/results.tsv"
-[[ -f "$results" ]] || printf "config\texit\tmatch_frames\tavg_ms\tworst_ms\tlate\tdropped\tlog\n" > "$results"
+[[ -f "$results" ]] || printf "config\texit\tmatch_frames\tavg_ms\tworst_ms\tlate\tdropped\tlog\tfingerprint\n" > "$results"
 for cfg in "$@"; do
   IFS=: read -r stage players teams <<< "$cfg"
   tmp="$(mktemp)"
@@ -38,7 +38,7 @@ for cfg in "$@"; do
     if [[ -n "$newest" && "$newest" != "$before" ]]; then log="$newest"; break; fi
     echo "$cfg: no run log (attempt $attempt)"
   done
-  [[ -n "$log" ]] || { printf "%s\tnorun\t0\t0\t0\t0\t0\t-\n" "$cfg" >> "$results"; continue; }
+  [[ -n "$log" ]] || { printf "%s\tnorun\t0\t0\t0\t0\t0\t-\t-\n" "$cfg" >> "$results"; continue; }
   # Some runs need the pushed launcher.ini again after a retry; it is unchanged, so nothing to redo.
   cp "$log" "$out/$tag.log"
   python3 - "$out/$tag.log" "$cfg" "$results" <<'EOF'
@@ -64,9 +64,15 @@ for l in lines:
         d = int(m.group(1))
         if late1 is None: drop0 = d
         drop1 = d
+# Fingerprint: the GX command, draw and vertex counts at frame 1800. The CPU match is deterministic,
+# so any change to how the game plays (a translation bug) changes these; equal across builds = same game.
+fp = "-"
+for l in lines:
+    m = re.match(r"\[frame 1800\] gx: (\d+) cmds (\d+) draws (\d+) verts", l)
+    if m: fp = "%s/%s/%s" % m.groups(); break
 mf = (avg_n * 60)
 row = [cfg, exit_code, str(mf), "%.2f" % (avg_s / avg_n if avg_n else 0), "%.1f" % worst,
-       str((late1 or 0) - (late0 or 0)), str((drop1 or 0) - (drop0 or 0)), log.split("/")[-1]]
+       str((late1 or 0) - (late0 or 0)), str((drop1 or 0) - (drop0 or 0)), log.split("/")[-1], fp]
 open(results, "a").write("\t".join(row) + "\n")
 print("\t".join(row))
 EOF

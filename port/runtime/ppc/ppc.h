@@ -223,6 +223,13 @@ inline uint8_t* slowptr(uint32_t ea) {
   if (uint8_t* p = slowptr(ea)) { const uint64_t s = bswap64(v); std::memcpy(p, &s, 8); return; }
   mmio_write64(c, ea, v);
 }
+// Branch counting build (MELEE_BRANCH_PROFILE=gen at generation): every conditional guest branch
+// counts taken and executed; dump_branch_counts writes "addr taken total" lines at exit.
+extern uint32_t g_br_counts[][2];
+extern const uint32_t g_br_addrs[];
+extern const uint32_t g_br_count_n;
+[[gnu::always_inline]] inline bool brc(uint32_t k, bool t) { g_br_counts[k][0] += t; ++g_br_counts[k][1]; return t; }
+void dump_branch_counts(const char* path);
 [[gnu::always_inline]] inline bool in_ram(uint32_t ea, uint32_t& off) { off = ea & 0x3FFFFFFFu; return __builtin_expect(off < RAM_SIZE, 1); }
 inline uint32_t ld8(Context& c, uint8_t* m, uint32_t ea) {
   uint32_t off; if (in_ram(ea, off)) return m[off];
@@ -307,11 +314,12 @@ void psq_store_slow(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w
 }
 
 // ---- condition register ----
+// XER[SO] is always 0 here (the translated mtxer refuses to set it), so it is not folded in.
 inline void cr_set_s(Context& c, int field, int32_t a, int32_t b) {
-  c.cr[field] = (uint8_t)((a < b ? 8 : a > b ? 4 : 2) | c.so);
+  c.cr[field] = (uint8_t)(a < b ? 8 : a > b ? 4 : 2);
 }
 inline void cr_set_u(Context& c, int field, uint32_t a, uint32_t b) {
-  c.cr[field] = (uint8_t)((a < b ? 8 : a > b ? 4 : 2) | c.so);
+  c.cr[field] = (uint8_t)(a < b ? 8 : a > b ? 4 : 2);
 }
 inline void cr0(Context& c, uint32_t v) { cr_set_s(c, 0, (int32_t)v, 0); }
 inline uint32_t mfcr(const Context& c) {
