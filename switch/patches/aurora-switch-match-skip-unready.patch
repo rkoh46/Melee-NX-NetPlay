@@ -1,0 +1,20 @@
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -1773,10 +1773,15 @@
+     const char* value = std::getenv("AURORA_GX_SKIP_UNREADY");
+     return value != nullptr && value[0] == '1';
+   }();
++  // During a match (the game's background pause is on) a draw whose pipeline is still compiling
++  // is skipped until it is ready: the piece appears a few frames late instead of the whole picture
++  // freezing. Pokemon Stadium's first transformation to a new form froze the picture for 805 ms
++  // while its pipelines compiled. Menus and splashes keep waiting (see above).
++  const bool skip = skipUnready || g_backgroundPaused.load(std::memory_order_relaxed);
+   // An uber pipeline is what a draw falls back on, so it must exist when asked for.
+   return find_pipeline_impl(type, config, std::move(cb),
+-                            skipUnready && !gx::is_uber_config(config) ? PipelinePriority::Normal
+-                                                                       : PipelinePriority::Blocking);
++                            skip && !gx::is_uber_config(config) ? PipelinePriority::Normal
++                                                                : PipelinePriority::Blocking);
+ #else
+   return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);
+ #endif

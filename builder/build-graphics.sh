@@ -106,6 +106,7 @@ prepare() {
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-compiler-cores.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-background-pause.patch"
   apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-match-io-hold.patch"
+  apply_patch_once "$aurora"                      "$repo/switch/patches/aurora-switch-match-skip-unready.patch"
 }
 
 build_dawn() {

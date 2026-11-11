@@ -862,8 +862,12 @@ int effective_delay() {
   if (!g_config.delay_auto) return g_config.delay;
   const unsigned rtt = g_netplay ? g_netplay->RoundTripMs() : 0;
   const int d = rtt ? std::clamp((int)std::lround(rtt / 33.3), 2, 5) : 2;
-  static int last = -1; static unsigned last_rtt = 0;
-  if (d != last) { host::log("slippi: automatic input delay %d frames (round trip %u ms, was %d at %u ms)", d, rtt, last, last_rtt); last = d; last_rtt = rtt; }
+  static int last = -1;
+  if (d != last) {
+    if (rtt) host::log("slippi: automatic input delay %d frames (round trip %u ms in the last game, was %d)", d, rtt, last);
+    else host::log("slippi: automatic input delay %d frames (no ping measured with this opponent yet)", d);
+    last = d;
+  }
   return d;
 }
 

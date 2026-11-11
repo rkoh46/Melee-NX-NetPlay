@@ -16,12 +16,15 @@
 #endif
 
 namespace {
-constexpr size_t Capacity = 256 * 1024;
-// During a match (melee_nx_log_set_quiet) the writer touches the SD card every 3 s, or when the buffer
-// is half full, instead of every 100 ms with a sync each second: SD traffic kept the console's system
-// core busy and the game's socket calls waited behind it (online freezes, Nov 2026).
+constexpr size_t Capacity = 2 * 1024 * 1024;
+// During a match (melee_nx_log_set_quiet) the writer does not touch the SD card at all: the log stays
+// in this buffer (an online game logs ~650 KB) and the replay's chunks stay queued, and both are
+// written when the match ends. Writing every 3 s still stalled the game's socket calls ~130 ms each
+// time (271 times in one session, every 180-190 frames, each a 7-frame rollback); before that the
+// writer ran every 100 ms with a sync each second (online freezes, Nov 2026). Only a nearly full
+// buffer, a flush request or a closed file wakes it in a match.
 std::atomic<bool> quiet{false};
-size_t wake_bytes() { return quiet.load(std::memory_order_relaxed) ? Capacity / 2 : 16384; }
+size_t wake_bytes() { return quiet.load(std::memory_order_relaxed) ? Capacity / 8 * 7 : 16384; }
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t wake = PTHREAD_COND_INITIALIZER, flushed = PTHREAD_COND_INITIALIZER;
 pthread_t worker;
@@ -71,7 +74,7 @@ void* writer(void*) {
         if (used < wake_bytes() && requested == completed && !stopping) {
             timespec deadline{};
             clock_gettime(CLOCK_REALTIME, &deadline);
-            if (quiet.load(std::memory_order_relaxed)) deadline.tv_sec += 3;
+            if (quiet.load(std::memory_order_relaxed)) deadline.tv_sec += 900;   // woken by the match's end
             else deadline.tv_nsec += 100000000;
             if (deadline.tv_nsec >= 1000000000) {
                 ++deadline.tv_sec;

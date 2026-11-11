@@ -82,7 +82,9 @@ devkitPro's curl over mbedTLS (`runtime/hle/slippi_http_curl.cpp`, the one HTTP 
 every caller). Shift-JIS player names need an iconv replacement (`slippi_text.cpp`). `user.json`
 (connect code, play key) lives in `sdmc:/switch/melee-nx-netplay/User/Slippi`; the sign-in
 screen drives `slippi_login.*` exactly as Dashdance's dashboard does. The online input delay is a
-player setting (`online_delay`: `auto`, 2..5 frames from the measured ping at each game's start, or a
+player setting (`online_delay`: `auto`, 2 frames for the first game of a set, then 2..5 from the round trip of the game's own pad
+acknowledgements in the previous game (ENet's roundTripTime starts at 500 ms and is useless right after
+connecting), or a
 fixed 1..9) and is never hardcoded.
 
 ## What is deliberately not here

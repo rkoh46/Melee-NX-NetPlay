@@ -40,7 +40,7 @@ else
 fi
 
 python3 "$repo/tools/bootstrap_port.py" --decomp-root "$decomp" --dol "$dol" \
-  --build-dir "$game" "${playback_args[@]}" --gct-base 0x8065CC80 --frontend switch --stage generate
+  --build-dir "$game" ${playback_args[@]+"${playback_args[@]}"} --gct-base 0x8065CC80 --frontend switch --stage generate
 # Native GX from the decompilation's matching source (compiled with GCC; see the script).
 python3 "$repo/tools/generate_gx_native.py" "$game/generated/gxnative" --decomp-root "$decomp"
 cp "$repo/port/runtime/gx/gxnative/gxn_glue.h" "$game/generated/gxnative/"

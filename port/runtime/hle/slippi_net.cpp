@@ -341,6 +341,15 @@ void NetplayClient::OnData(Packet& packet, ENetPeer* peer) {
       ping_sample_sum_us_.fetch_add(ping_us_[pidx], std::memory_order_relaxed);
       ping_sample_count_.fetch_add(1, std::memory_order_relaxed);
       if (pidx == 0) host::set_online_ping_ms((int)(ping_us_[0] / 1000));
+      if (pidx == 0) {
+        // The automatic input delay's round trip: the game's own pad acknowledgements, averaged
+        // (1/16 per sample). ENet's roundTripTime is useless for this: it starts at 500 ms and
+        // each sample moves it an eighth of the way, so right after connecting it read 444 ms for
+        // a 52 ms opponent and picked 5 frames of delay. Unknown (0) until a game has run.
+        const unsigned sample = (unsigned)(ping_us_[0] / 1000);
+        const unsigned cur = rtt_ms_.load(std::memory_order_relaxed);
+        rtt_ms_.store(cur == 0 ? (sample ? sample : 1) : (cur * 15 + sample + 8) / 16, std::memory_order_relaxed);
+      }
       if (frame % 600 == 0 && pidx == 0) host::log("slippi: ping %llu ms", (unsigned long long)(ping_us_[0] / 1000));
       break;
     }
@@ -569,11 +578,6 @@ void NetplayClient::ThreadFunc() {
       net_diag::on_queue_depth(async_queue_.size());
     }
     net_diag::maybe_sample(time_us());
-    {   // the connection in use's smoothed round trip, for the automatic input delay (game thread reads it)
-      unsigned rtt = 0;
-      for (auto* sp : server_) if (sp->state == ENET_PEER_STATE_CONNECTED && sp->roundTripTime > rtt) rtt = sp->roundTripTime;
-      if (rtt) rtt_ms_.store(rtt, std::memory_order_relaxed);
-    }
     {   // every 5 s: is each peer's reliable channel being acknowledged? (issue 9: the connection in use times out at 30 s)
       static uint64_t last_health_ms = 0;
       const uint64_t now_ms = time_ms();

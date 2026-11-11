@@ -724,6 +724,24 @@ static double phase_lock_shift_ms() {
 }
 double phase_lock_total_ms() { return g_phase_total_ms; }
 
+// Melee's sound banks (lbaudio_ax.c): 55 .ssm files, each wanted (lbl_804338A4 == 1) or not, and
+// loaded into ARAM (lbl_80433984: -1 none, 1 loaded, 2 ready). A sound whose bank is not loaded is
+// silently skipped, so one line per change shows which sounds a scene could not play: `.` not
+// wanted, `w` wanted but not loaded, `l` loaded, `L` ready, `x` loaded though no longer wanted.
+static void log_sound_banks() {
+  static char last[56] = "";
+  char now[56];
+  for (int i = 0; i < 55; ++i) {
+    const int32_t wanted = (int32_t)rd32(0x804338A4 + 4u * i), loaded = (int32_t)rd32(0x80433984 + 4u * i);
+    now[i] = loaded == 2 ? (wanted == 1 ? 'L' : 'x') : loaded == 1 ? (wanted == 1 ? 'l' : 'x') : wanted == 1 ? 'w' : '.';
+  }
+  now[55] = 0;
+  if (std::memcmp(now, last, 56) != 0) {
+    std::memcpy(last, now, 56);
+    log("sound banks: %s (scene %02X/%02X, frame %u)", now, rd8(0x80479D30), rd8(0x80479D33), g_retraces);
+  }
+}
+
 void retrace() {
   struct Guard { Guard() { g_in_retrace = true; } ~Guard() { g_in_retrace = false; } } guard;
   if (g_sim_thread.load(std::memory_order_relaxed) == std::thread::id()) g_sim_thread.store(std::this_thread::get_id());
@@ -796,6 +814,7 @@ void retrace() {
   g_mmio[0x2030] = (uint8_t)(di0 >> 8); g_mmio[0x2031] = (uint8_t)di0;
   deliver_interrupt(24);  // __OS_INTERRUPT_PI_VI
   observe_scene();
+  log_sound_banks();
   trace_state();
   // MELEE_FRAME_TRACE=1: the GX counters every frame, so two builds' logs show the first frame where
   // their output differs (the CPU match is deterministic).
