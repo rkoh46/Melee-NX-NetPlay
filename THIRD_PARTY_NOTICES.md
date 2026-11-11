@@ -24,6 +24,7 @@ the Aurora tree vendored there.
 |---|---|---|---|
 | [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked) | Dashdance's base: the recompiler, runtime and HLE layers (pinned in `tools/port_source_pins.json`) | GPL-2.0-or-later | Its README, section "License": "GPL-2.0-or-later." |
 | [Dolphin](https://github.com/dolphin-emu/dolphin) | Ports: GX register layouts and shader generation (`gx_regs.h`, `gx_shader.cpp`), AX audio (`ax_ucode.cpp`), memory-card layout | GPL-2.0-or-later | Ported files carry `SPDX-License-Identifier: GPL-2.0-or-later`. |
+| [Slippi Dolphin](https://github.com/project-slippi/dolphin) | The playback Sys files in `port/slippi_sys_playback` (the Melee-NX Replays app) | GPL-2.0-or-later, per file | Same COPYING and SPDX scheme as Dolphin. |
 | [Slippi Ishiiruka](https://github.com/project-slippi/Ishiiruka) | Ports: the Slippi EXI device, netplay, matchmaking, user record, savestates and playback; SlippiLib (`port/third_party/slippilib`); the Sys files in `port/slippi_sys` (from `Data/Sys`) | GPL-2.0-or-later | Its Readme: "licensed under the terms of the GNU General Public License, version 2 or later (GPLv2+)". |
 | [slippi-rust-extensions](https://github.com/project-slippi/slippi-rust-extensions) | A C++ port of the jukebox (`jukebox.cpp`) | GPL-2.0, no version stated | Ships the GPLv2 text as `LICENSE`; section 9 of GPLv2 lets any published version be chosen. |
 

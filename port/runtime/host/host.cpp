@@ -638,8 +638,11 @@ static double g_render_ema_ms = 6.0;
 static bool g_render_skipped_last = false;
 uint64_t render_skip_count() { return g_render_skips; }
 void render_pass_done(double ms) { if (ms < 30.0) g_render_ema_ms += (ms - g_render_ema_ms) * 0.1; }
+static int g_render_skip_on = -1;   // -1: not decided yet (MELEE_RENDER_SKIP); the in-game menu sets it
+void set_render_skip(bool on) { g_render_skip_on = on ? 1 : 0; }
 bool render_should_skip() {
-  static const bool on = [] { const char* e = std::getenv("MELEE_RENDER_SKIP"); return !(e && e[0] == '0'); }();
+  if (g_render_skip_on < 0) { const char* e = std::getenv("MELEE_RENDER_SKIP"); g_render_skip_on = (e && e[0] == '0') ? 0 : 1; }
+  const bool on = g_render_skip_on != 0;
   static const double limit = [] { const char* e = std::getenv("MELEE_RENDER_SKIP_MS"); return e ? std::atof(e) : 5.0; }();
   if (!on || options.fast || g_retraces < 300 || g_render_skipped_last) { g_render_skipped_last = false; return false; }
   const double since_slot = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_next_frame).count();

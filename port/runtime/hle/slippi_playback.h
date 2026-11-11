@@ -12,6 +12,10 @@ namespace slippi::playback {
 void set_replay(const std::string& path);   // --replay <file.slp>
 void set_translated_code_list(const std::string& path);   // --replay-codes <gecko_list.bin>: the list this build was translated with
 bool enabled();
+void set_browse_mode(bool on);              // console replay app: replays are picked in the menu, one after another
+void queue_replay(const std::string& path); // the next replay to play (browse mode)
+bool waiting_for_replay();                  // the playback scene is waiting for a pick
+const std::string& current_replay();
 void prepare_game_info(const uint8_t* payload, std::vector<uint8_t>& q);     // CMD_PREPARE_REPLAY
 void prepare_frame_data(const uint8_t* payload, std::vector<uint8_t>& q);    // CMD_READ_FRAME
 void prepare_is_stock_steal(const uint8_t* payload, std::vector<uint8_t>& q);// CMD_IS_STOCK_STEAL

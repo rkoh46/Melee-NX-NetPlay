@@ -1,33 +1,36 @@
 --- a/src/joystick/switch/SDL_sysjoystick.c
 +++ b/src/joystick/switch/SDL_sysjoystick.c
-@@ -219,6 +219,26 @@
- static bool SWITCH_JoystickSetSensorsEnabled(SDL_Joystick *joystick, bool enabled)
- {
+@@ -221,6 +221,29 @@
      return SDL_Unsupported();
-+}
-+
+ }
+ 
 +/* GameCube trigger range. Measured in replays: the system reports a GameCube trigger's analog
 + * travel as 0 .. about 0x1F00 (a full pull without the click read 0.23 of the axis unscaled, in
 + * steps of ~0xDA), and jumps to 0x7FFF only at the digital click. Scaled by 8, half a pull already
 + * saturated, so every light press was a full-strength shield; scaled by 4 the full travel reaches
 + * the top of a real controller's analog range (~248 of 255) and the game's own clamp (30..180)
 + * sees the whole light-shield range. The click saturates. The largest analog value seen without
-+ * the click is kept per slot (melee_nx_gc_trigger_travel) so the app can log it. */
++ * the click is kept per slot (melee_nx_gc_trigger_travel) so the app can log it, and the app can
++ * change the factor (melee_nx_gc_trigger_scale, its Light shield range setting). */
 +int melee_nx_gc_trigger_travel[8];
++int melee_nx_gc_trigger_scale = 4;   /* the app's "Light shield range" setting, 2..8 */
 +static int gc_trigger_axis(int slot, Uint32 pos)
 +{
 +    if ((int)pos < 0x7000 && slot >= 0 && slot < 8 && (int)pos > melee_nx_gc_trigger_travel[slot]) {
 +        melee_nx_gc_trigger_travel[slot] = (int)pos;
 +    }
-+    int full = (int)pos * 4;
++    const int k = melee_nx_gc_trigger_scale < 1 ? 1 : (melee_nx_gc_trigger_scale > 16 ? 16 : melee_nx_gc_trigger_scale);
++    int full = (int)pos * k;
 +    if (full > 32767) {
 +        full = 32767;
 +    }
 +    return full * 2 - 32768;
- }
- 
++}
++
  static Sint16 clamp_axis(int v)
-@@ -282,8 +302,8 @@
+ {
+     if (v > SDL_JOYSTICK_AXIS_MAX) {
+@@ -282,8 +305,8 @@
       * axes from the L/R buttons would turn GC Z into a shoulder pull; without the GC
       * style the axes stay released and the buttons carry the mapping (misc3/misc4). */
      const bool has_gc_triggers = (padGetStyleSet(pad) & HidNpadStyleTag_NpadGc) != 0;

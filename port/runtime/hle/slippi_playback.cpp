@@ -1,6 +1,8 @@
 // Port of the playback half of Dolphin's CEXISlippi (mode "normal", rollback display off, no
 // fast-forward, no seeking): enough to replay a file frame-exact and record it again.
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <atomic>
+#include <mutex>
 #include "slippi_playback.h"
 #include "slippi_playback_legacy.h"
 #include "host.h"
@@ -176,11 +178,36 @@ static bool same_translation(const std::vector<uint8_t>& a, const std::vector<ui
   return true;
 }
 void set_replay(const std::string& path) { g_path = path; }
+// Browse mode (the console's replay app): no replay at start; the player picks one from the menu
+// while the playback scene waits, and after each replay the scene waits for the next pick instead of
+// the app exiting. queue_replay is called from the menu (simulation thread or another).
+namespace {
+std::mutex g_queue_mutex;
+std::string g_queued;
+bool g_browse = false;
+std::atomic<bool> g_waiting{false};
+}
+void set_browse_mode(bool on) { g_browse = on; }
+void queue_replay(const std::string& path) { std::lock_guard<std::mutex> lock(g_queue_mutex); g_queued = path; }
+bool waiting_for_replay() { return g_waiting.load(); }
+const std::string& current_replay() { return g_path; }
 void set_translated_code_list(const std::string& path) { g_translated_list_path = path; }
-bool enabled() { return !g_path.empty(); }
+bool enabled() { return !g_path.empty() || g_browse; }
 
 void prepare_is_file_ready(std::vector<uint8_t>& q) {
   q.clear();
+  if (g_browse) {
+    std::string next;
+    { std::lock_guard<std::mutex> lock(g_queue_mutex); next.swap(g_queued); }
+    if (next.empty()) {   // nothing picked yet (or the last replay just ended): keep the scene waiting
+      if (!g_waiting.exchange(true) && g_loaded_once) host::log("playback: replay finished; waiting for the next pick");
+      q.push_back(0);
+      return;
+    }
+    g_waiting.store(false);
+    g_path = next; g_loaded_once = false; g_finished = false; g_resync = false; g_gecko_list.clear();
+    g_current_frame = Slippi::GAME_FIRST_FRAME;
+  }
   if (!enabled() || g_loaded_once) {
     q.push_back(0);
     if (g_loaded_once && !g_finished) { g_finished = true; host::log("playback: replay finished; exiting"); host::request_exit(0); }

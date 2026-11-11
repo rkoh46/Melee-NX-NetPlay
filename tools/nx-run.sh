@@ -19,7 +19,8 @@ repo="$(cd "$here/.." && pwd -P)"
 ip="${1:?usage: tools/nx-run.sh <switch-ip> [aurora|headless]}"; shift
 frontend="${1:-aurora}"; [[ $# -gt 0 ]] && shift
 [[ "${1:-}" == "--" ]] && shift
-nro="$repo/build/switch-$frontend${NX_BUILD_SUFFIX:-}/port/melee-nx-netplay.nro"   # NX_BUILD_SUFFIX=-exp runs a second build tree
+name=melee-nx-netplay; [[ "${NX_BUILD_SUFFIX:-}" == -playback ]] && name=melee-nx-replays   # -playback: the Melee-NX Replays app
+nro="$repo/build/switch-$frontend${NX_BUILD_SUFFIX:-}/port/$name.nro"   # NX_BUILD_SUFFIX=-exp runs a second build tree
 [[ -f "$nro" ]] || { echo "no $nro (build it: MELEE_NX_FRONTEND=$frontend bash builder/docker.sh game all)" >&2; exit 66; }
 [[ -x "$here/bin/nxlink" ]] || bash "$here/build-nxlink.sh"
 mkdir -p "$repo/build/nxlink-logs"
@@ -27,7 +28,7 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 log="$repo/build/nxlink-logs/$stamp-$frontend.log"
 # The profile of this run resolves against this ELF. One copy per distinct build (named by its hash,
 # ~140 MB each); the run gets a symlink, and only the newest five builds are kept.
-src_elf="$repo/build/switch-$frontend${NX_BUILD_SUFFIX:-}/port/melee-nx-netplay.elf"
+src_elf="$repo/build/switch-$frontend${NX_BUILD_SUFFIX:-}/port/$name.elf"
 mkdir -p "$repo/build/nxlink-logs/elf"
 sum="$(shasum -a 1 "$src_elf" | cut -c1-12)"
 [[ -f "$repo/build/nxlink-logs/elf/$sum.elf" ]] || cp "$src_elf" "$repo/build/nxlink-logs/elf/$sum.elf"

@@ -99,6 +99,7 @@ double last_sim_frame_ms();            // work time of the most recent simulatio
 // simulation (and the sound) keep full speed. render_should_skip() is asked once per frame, before
 // the draw pass; render_pass_done() reports how long a pass took, for the prediction.
 bool render_should_skip();
+void set_render_skip(bool on);   // in-game menu "Keep full speed"
 void render_pass_done(double ms);
 uint64_t render_skip_count();
 uint64_t late_frame_count();           // simulation frames that took longer than one 60 Hz period

@@ -15,6 +15,10 @@ case "$frontend" in headless|aurora) ;;
 
 game="$repo/build/game"
 build_dir="$repo/build/switch-$frontend${MELEE_NX_BUILD_SUFFIX:-}"   # suffix: a second tree for experiments while a sweep uses the main NRO
+playback_flag=OFF
+if [[ "${MELEE_NX_PLAYBACK:-0}" == 1 ]]; then   # the Melee-NX Replays app: its own translation and tree
+  game="$repo/build/game-playback"; build_dir="$repo/build/switch-$frontend-playback"; playback_flag=ON
+fi
 require_file() { [[ -f "$1" ]] || { echo "Required file missing: $1 ($2)" >&2; exit 66; }; }
 
 do_configure() {
@@ -55,6 +59,7 @@ do_configure() {
     -DMELEE_DECOMP_ROOT="$repo/ref/melee" \
     -DMELEE_PORT_GENERATED_DIR="$game/generated/guest" \
     -DMELEE_PORT_INPUT_MANIFEST="$game/port-inputs.json" \
+    -DMELEE_NX_PLAYBACK="$playback_flag" \
     "${extra[@]}"
 }
 
@@ -65,4 +70,4 @@ case "$stage" in
   build)     do_build ;;
   all)       do_configure; do_build ;;
 esac
-echo "build-game.sh [$stage] done: $build_dir/port/melee-nx-netplay.nro (frontend: $frontend)"
+echo "build-game.sh [$stage] done: $(ls "$build_dir"/port/*.nro 2>/dev/null | tr '\n' ' ')(frontend: $frontend)"

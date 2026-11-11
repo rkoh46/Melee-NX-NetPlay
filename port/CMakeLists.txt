@@ -115,7 +115,20 @@ target_link_options(melee_nx_netplay PRIVATE
   -Wl,--allow-multiple-definition
   -Wl,--wrap=pthread_create -Wl,--wrap=pthread_detach -Wl,--wrap=pthread_join
   -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit)
-set_target_properties(melee_nx_netplay PROPERTIES OUTPUT_NAME melee-nx-netplay)
+# MELEE_NX_PLAYBACK: the Melee-NX Replays app, the same program translated with Slippi's playback
+# code set (port/slippi_sys_playback), built in its own tree (builder: MELEE_NX_PLAYBACK=1).
+option(MELEE_NX_PLAYBACK "Build the replay app (Slippi playback code set)" OFF)
+if(MELEE_NX_PLAYBACK)
+  set(MELEE_NX_OUTPUT melee-nx-replays)
+  set(MELEE_NX_TITLE "Melee-NX Replays")
+  set(MELEE_NX_SYS "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys_playback")
+  target_compile_definitions(melee_nx_netplay PRIVATE MELEE_NX_PLAYBACK=1)
+else()
+  set(MELEE_NX_OUTPUT melee-nx-netplay)
+  set(MELEE_NX_TITLE "Melee-NX-NetPlay")
+  set(MELEE_NX_SYS "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys")
+endif()
+set_target_properties(melee_nx_netplay PROPERTIES OUTPUT_NAME ${MELEE_NX_OUTPUT})
 if(MELEE_NX_FRONTEND STREQUAL "aurora")
   target_compile_definitions(runtime_switch PUBLIC MELEE_NX_AURORA=1)
   # gx_aurora.cpp writes Aurora's FIFO directly (lib/gx/fifo.hpp).
@@ -135,9 +148,17 @@ endif()
 # romfs:/Sys. Nothing from the disc is in it.
 set(PORT_ROMFS "${PROJECT_BINARY_DIR}/romfs")
 file(MAKE_DIRECTORY "${PORT_ROMFS}/Sys")
-file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys/" DESTINATION "${PORT_ROMFS}/Sys")
-file(GLOB_RECURSE PORT_SYS_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys/*")
+file(COPY "${MELEE_NX_SYS}/" DESTINATION "${PORT_ROMFS}/Sys")
+file(GLOB_RECURSE PORT_SYS_FILES CONFIGURE_DEPENDS "${MELEE_NX_SYS}/*")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PORT_SYS_FILES})
 
-nx_generate_nacp(melee-nx-netplay.nacp NAME "Melee-NX-NetPlay" AUTHOR "rkoh" VERSION "${MELEE_PORT_VERSION}")
-nx_create_nro(melee_nx_netplay NACP melee-nx-netplay.nacp ICON "${PROJECT_SOURCE_DIR}/switch/icon.jpg" ROMFS "${PORT_ROMFS}")
+nx_generate_nacp(${MELEE_NX_OUTPUT}.nacp NAME "${MELEE_NX_TITLE}" AUTHOR "rkoh" VERSION "${MELEE_PORT_VERSION}")
+# build/icon.jpg / build/icon-replays.jpg (tools/make_switch_icon.py, drawn at generation time, never
+# committed) when present; the unbranded switch/icon.jpg otherwise.
+set(MELEE_NX_ICON "${PROJECT_SOURCE_DIR}/switch/icon.jpg")
+if(MELEE_NX_PLAYBACK AND EXISTS "${PROJECT_SOURCE_DIR}/build/icon-replays.jpg")
+  set(MELEE_NX_ICON "${PROJECT_SOURCE_DIR}/build/icon-replays.jpg")
+elseif(NOT MELEE_NX_PLAYBACK AND EXISTS "${PROJECT_SOURCE_DIR}/build/icon.jpg")
+  set(MELEE_NX_ICON "${PROJECT_SOURCE_DIR}/build/icon.jpg")
+endif()
+nx_create_nro(melee_nx_netplay NACP ${MELEE_NX_OUTPUT}.nacp ICON "${MELEE_NX_ICON}" ROMFS "${PORT_ROMFS}")

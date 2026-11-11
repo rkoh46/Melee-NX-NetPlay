@@ -25,8 +25,16 @@ constexpr uint16_t BTN_LEFT = 0x0001, BTN_RIGHT = 0x0002, BTN_DOWN = 0x0004, BTN
 constexpr int kEscapeScancode = 41;   // SDL_SCANCODE_ESCAPE
 constexpr int kSkipFrames = 6 * 60;   // remap: a control left untouched for 6 s keeps its binding
 
-enum class Page { Main, Controls, Remap };
-enum MainRow { ROW_SCALE, ROW_ANISO, ROW_UPSCALE, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN, ROW_ONLINE_DELAY, ROW_CONTROLS, ROW_HUD, ROW_RESUME, ROW_QUIT, ROW_MAIN_COUNT };
+enum class Page { Main, Controls, Remap, Replays };
+enum MainRow { ROW_SCALE, ROW_ANISO, ROW_UPSCALE, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_FILTER, ROW_MSAA, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN,
+               ROW_ONLINE_DELAY, ROW_FULLSPEED, ROW_TRIGGER, ROW_CONTROLS, ROW_REPLAYS, ROW_HUD, ROW_RESUME, ROW_QUIT, ROW_MAIN_COUNT };
+// Rows that are actions (A opens or does something), not values stepped with left/right.
+bool action_row(int r) { return r == ROW_RESUME || r == ROW_CONTROLS || r == ROW_QUIT || r == ROW_REPLAYS; }
+// Watch replays page (console).
+std::function<std::vector<std::string>()> g_replay_list;
+std::function<void(const std::string&)> g_replay_watch;
+std::vector<std::string> g_replays;   // full paths, newest first, while the page is open
+std::string g_notice;                 // one line shown in place of the hint (set by the watch callback)
 // Quit asks for a second A press so a stray one cannot end the session.
 bool g_quit_armed = false;
 enum ControlsRow { C_DEVICE, C_REMAP, C_STICK_DZ, C_CSTICK_DZ, C_TRIGGER, C_SWAP, C_RUMBLE, C_TEST_RUMBLE, C_MODIFIER, C_RESET, C_BACK };
@@ -71,11 +79,14 @@ std::vector<int> main_rows() {
     if ((r == ROW_FULLSCREEN || r == ROW_VSYNC) && g_touch_visible) continue;   // macOS-only controls
     if (r == ROW_UPSCALE && !apple_graphics()) continue;                       // Metal only
 #if defined(__SWITCH__)
-    // The console's renderer has no resolution, filtering, sharpening, sync, widescreen or window
-    // settings yet: rows that change nothing only made the menu longer and harder to read.
-    if (r == ROW_SCALE || r == ROW_ANISO || r == ROW_SHARPEN || r == ROW_VSYNC || r == ROW_WIDESCREEN || r == ROW_FULLSCREEN) continue;
+    // The console has no sharpening pass, display-sync choice or window; everything else listed works.
+    // Internal resolution: Aurora's frame-buffer scale crops the picture with this renderer (measured),
+    // so the console renders at the screen's own size until that is fixed.
+    if (r == ROW_SCALE || r == ROW_SHARPEN || r == ROW_VSYNC || r == ROW_FULLSCREEN) continue;
+    if (r == ROW_REPLAYS && !g_replay_list) continue;
 #else
     if (r == ROW_QUIT) continue;   // a GameCube controller has no HOME button; elsewhere the system quits
+    if (r == ROW_FILTER || r == ROW_MSAA || r == ROW_FULLSPEED || r == ROW_TRIGGER || r == ROW_REPLAYS) continue;   // console rows
 #endif
     v.push_back(r);
   }
@@ -83,12 +94,27 @@ std::vector<int> main_rows() {
 }
 const char* main_name(int r) {
   switch (r) {
+#if defined(__SWITCH__)
+    case ROW_SCALE: return "Internal resolution";
+    case ROW_ANISO: return "Texture filtering *";
+    case ROW_WIDESCREEN: return "Aspect ratio";
+#else
     case ROW_SCALE: return "Internal resolution";
     case ROW_ANISO: return "Anisotropic filtering";
+    case ROW_WIDESCREEN: return "Widescreen (next launch)";
+#endif
+    case ROW_FILTER: return "Screen filter";
+#if defined(__SWITCH__)
+    case ROW_MSAA: return "Antialiasing *";
+#else
+    case ROW_MSAA: return "Antialiasing (next launch)";
+#endif
+    case ROW_FULLSPEED: return "Keep full speed";
+    case ROW_TRIGGER: return "Light shield range";
+    case ROW_REPLAYS: return "Watch replays";
     case ROW_UPSCALE: return "MetalFX upscaling";
     case ROW_SHARPEN: return "Sharpen";
     case ROW_VSYNC: return "Display sync";
-    case ROW_WIDESCREEN: return "Widescreen (next launch)";
     case ROW_VOLUME: return "Volume";
     case ROW_TOUCH_OPACITY: return "Touch controls opacity";
     case ROW_TOUCH_SIZE: return "Touch controls size";
@@ -104,12 +130,25 @@ const char* main_name(int r) {
 std::string main_value(int r, const RuntimeSettings& s) {
   char b[48];
   switch (r) {
+#if defined(__SWITCH__)
+    case ROW_SCALE: return s.scale == 0 ? "Screen (720p)" : s.scale == 1 ? "GameCube (480p)" : s.scale == 2 ? "2x (960p)" : "3x (1440p)";
+    case ROW_WIDESCREEN: return s.widescreen ? "16:9 widescreen" : "4:3 (original)";
+#endif
+    case ROW_FILTER: return s.filter == 1 ? "Area" : s.filter == 2 ? "CRT" : s.filter == 3 ? "Vibrant" : "Smooth";
+    case ROW_MSAA: return s.msaa > 1 ? "4x" : "Off";
+    case ROW_FULLSPEED: return s.full_speed ? "On" : "Off";
+    case ROW_TRIGGER: std::snprintf(b, sizeof b, "%s (%dx)", s.trigger_range <= 3 ? "Wide" : s.trigger_range == 4 ? "Normal" : "Short", s.trigger_range); return b;
+    case ROW_REPLAYS: return ">";
+#if !defined(__SWITCH__)
     case ROW_SCALE: if (s.scale == 0) return "Auto"; std::snprintf(b, sizeof b, "%dx", s.scale); return b;
+#endif
     case ROW_ANISO: return s.anisotropy >= 16 ? "16x" : s.anisotropy >= 4 ? "4x" : "Off";
     case ROW_UPSCALE: return s.upscaler == 2 ? "MetalFX (quality)" : s.upscaler == 1 ? "MetalFX (balanced)" : "Off";
     case ROW_SHARPEN: std::snprintf(b, sizeof b, "%d%%", (int)std::lround(s.sharpness * 100)); return b;
     case ROW_VSYNC: return s.vsync ? "On" : "Off (lowest latency)";
+#if !defined(__SWITCH__)
     case ROW_WIDESCREEN: return s.widescreen ? "16:9" : "4:3";
+#endif
     case ROW_VOLUME: std::snprintf(b, sizeof b, "%d%%", s.volume); return b;
     case ROW_TOUCH_OPACITY: std::snprintf(b, sizeof b, "%d%%", (int)std::lround(s.overlay_opacity * 100)); return b;
     case ROW_TOUCH_SIZE: std::snprintf(b, sizeof b, "%.2fx", s.overlay_scale); return b;
@@ -124,8 +163,18 @@ std::string main_value(int r, const RuntimeSettings& s) {
 int main_step(int r, int dir, RuntimeSettings& s) {
   static const int scales[] = {0, 1, 2, 3, 4, 6, 8};
   switch (r) {
+#if defined(__SWITCH__)
+    case ROW_SCALE: { const int v = std::clamp(s.scale + dir, 0, 3); if (v == s.scale) return -1; s.scale = v; return (int)MenuChange::Graphics; }
+    case ROW_ANISO: { const int a[] = {1, 4, 16}; int i = s.anisotropy >= 16 ? 2 : s.anisotropy >= 4 ? 1 : 0; i = std::clamp(i + dir, 0, 2); if (a[i] == s.anisotropy) return -1; s.anisotropy = a[i]; return (int)MenuChange::Anisotropy; }
+#endif
+    case ROW_FILTER: s.filter = (s.filter + 4 + dir) % 4; return (int)MenuChange::Filter;
+    case ROW_MSAA: s.msaa = s.msaa > 1 ? 1 : 4; return (int)MenuChange::Msaa;   // Aurora offers off or 4x
+    case ROW_FULLSPEED: s.full_speed = !s.full_speed; return (int)MenuChange::FullSpeed;
+    case ROW_TRIGGER: { const int v = std::clamp(s.trigger_range + dir, 2, 8); if (v == s.trigger_range) return -1; s.trigger_range = v; return (int)MenuChange::Trigger; }
+#if !defined(__SWITCH__)
     case ROW_SCALE: { int i = 0; for (int k = 0; k < 7; ++k) if (scales[k] == s.scale) i = k; i = std::clamp(i + dir, 0, 6); s.scale = scales[i]; return (int)MenuChange::Graphics; }
     case ROW_ANISO: { const int a[] = {1, 4, 16}; int i = s.anisotropy >= 16 ? 2 : s.anisotropy >= 4 ? 1 : 0; i = std::clamp(i + dir, 0, 2); s.anisotropy = a[i]; return (int)MenuChange::Graphics; }
+#endif
     case ROW_UPSCALE: s.upscaler = (s.upscaler + 3 + dir) % 3; return (int)MenuChange::Graphics;
     case ROW_SHARPEN: s.sharpness = std::clamp(s.sharpness + 0.1f * dir, 0.0f, 1.0f); return (int)MenuChange::Graphics;
     case ROW_VSYNC: s.vsync = !s.vsync; return (int)MenuChange::Graphics;
@@ -262,7 +311,24 @@ void quit_to_home() {
   log("menu: quit to HOME Menu");
   std::exit(0);
 }
-std::vector<int> page_rows() { return g_page == Page::Main ? main_rows() : g_page == Page::Controls ? controls_rows() : std::vector<int>{}; }
+std::vector<int> replay_rows() { std::vector<int> v; for (int i = 0; i < (int)g_replays.size(); ++i) v.push_back(i); v.push_back(-1); return v; }   // -1: Back
+std::vector<int> page_rows() { return g_page == Page::Main ? main_rows() : g_page == Page::Controls ? controls_rows() : g_page == Page::Replays ? replay_rows() : std::vector<int>{}; }
+void open_replays() {
+  g_notice.clear();
+  g_replays = g_replay_list ? g_replay_list() : std::vector<std::string>{};
+  g_page = Page::Replays; g_selected = 0;
+}
+// "Game_20261110T215517.slp" -> "Nov 10  21:55"
+std::string replay_label(const std::string& path) {
+  const size_t slash = path.find_last_of('/');
+  const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+  int y, mo, d, h, mi, sec;
+  if (std::sscanf(name.c_str(), "Game_%4d%2d%2dT%2d%2d%2d", &y, &mo, &d, &h, &mi, &sec) == 6 && mo >= 1 && mo <= 12) {
+    static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    char b[48]; std::snprintf(b, sizeof b, "%s %d  %02d:%02d:%02d", months[mo - 1], d, h, mi, sec); return b;
+  }
+  return name;
+}
 void set_open(bool open) {
   if (open != g_open.load()) log("menu: %s", open ? "opened" : "closed");
   g_open.store(open);
@@ -290,6 +356,7 @@ RuntimeSettings menu_settings() { std::lock_guard<std::mutex> lock(g_mutex); ret
 void menu_toggle() { g_toggle_request.store(true); }
 
 void menu_frame(PadState pads[4]) {
+  std::string watch;
   int apply_what = -1;
   bool quit = false;
   RuntimeSettings snapshot;
@@ -372,8 +439,8 @@ void menu_frame(PadState pads[4]) {
       if (fire && dir_y && !rows.empty()) g_selected = (g_selected + dir_y + (int)rows.size()) % (int)rows.size();
       else if (fire && dir_x && !rows.empty()) {
         const int r = rows[g_selected];
-        if (g_page == Page::Main) { if (r != ROW_RESUME && r != ROW_CONTROLS && r != ROW_QUIT) main_change(r, dir_x); }
-        else if (value_row(r) && controls_act(r, dir_x)) g_changed.store(true);
+        if (g_page == Page::Main) { if (!action_row(r)) main_change(r, dir_x); }
+        else if (g_page == Page::Controls && value_row(r) && controls_act(r, dir_x)) g_changed.store(true);
       }
       if (!combo && !rows.empty()) {
         const int r = rows[g_selected];
@@ -381,11 +448,16 @@ void menu_frame(PadState pads[4]) {
           if (g_page == Page::Main) {
             if (r == ROW_RESUME) set_open(false);
             else if (r == ROW_CONTROLS) open_controls();
+            else if (r == ROW_REPLAYS) open_replays();
             else if (r == ROW_QUIT) { quit = g_quit_armed; g_quit_armed = true; }
             else main_change(r, 1);
+          } else if (g_page == Page::Replays) {
+            if (r < 0) { g_page = Page::Main; g_selected = index_of(main_rows(), ROW_REPLAYS); }
+            else watch = g_replays[(size_t)r];
           } else if (controls_act(r, 1)) g_changed.store(true);
         } else if (pressed & BTN_B) {
           if (g_page == Page::Controls) { g_page = Page::Main; g_selected = index_of(main_rows(), ROW_CONTROLS); }
+          else if (g_page == Page::Replays) { g_page = Page::Main; g_selected = index_of(main_rows(), ROW_REPLAYS); }
           else set_open(false);
         } else if (pressed & BTN_START) set_open(false);
       }
@@ -394,7 +466,21 @@ void menu_frame(PadState pads[4]) {
     for (int i = 0; i < 4; ++i) { const int8_t err = pads[i].err; pads[i] = {}; pads[i].err = err; }
   }
   if (apply_what >= 0 && apply) apply(snapshot, (MenuChange)apply_what);
+  if (!watch.empty() && g_replay_watch) g_replay_watch(watch);
   if (quit) quit_to_home();
+}
+
+void menu_set_notice(const std::string& text) { std::lock_guard<std::mutex> lock(g_mutex); g_notice = text; }
+void menu_open_replays() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!g_replay_list) return;
+  set_open(true);
+  open_replays();
+}
+void menu_close() { std::lock_guard<std::mutex> lock(g_mutex); set_open(false); }
+void menu_set_replays(std::function<std::vector<std::string>()> list, std::function<void(const std::string&)> watch) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_replay_list = std::move(list); g_replay_watch = std::move(watch);
 }
 
 bool menu_touch(float px, float py) {
@@ -421,9 +507,14 @@ bool menu_touch(float px, float py) {
     g_selected = row;
     const int r = rows[row];
     const bool left = px < l.x0 + (l.x1 - l.x0) / 3.0f;   // left third lowers, the rest raises
+    if (g_page == Page::Replays) {
+      if (r < 0) { g_page = Page::Main; g_selected = index_of(main_rows(), ROW_REPLAYS); }
+      return true;
+    }
     if (g_page == Page::Main) {
       if (r == ROW_RESUME) set_open(false);
       else if (r == ROW_CONTROLS) open_controls();
+      else if (r == ROW_REPLAYS) open_replays();
       else if (r == ROW_QUIT) { quit = g_quit_armed; g_quit_armed = true; }
       else {
         const int what = main_step(r, left ? -1 : 1, g_settings);
@@ -443,9 +534,9 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
 #if defined(__SWITCH__)
   // A television seen from the couch: lines scale with the picture (1/24 of its height, 30 px
   // at 720p, 45 px at 1080p). The phone-sized 18 px lines were unreadable on a TV.
-  const float unit = std::max(18.0f, wh / 24.0f);
+  float unit = std::max(18.0f, wh / 24.0f);
 #else
-  const float unit = std::min(18.0f * std::max(window_pixels_per_point(), 1.0f), std::min(ww, wh) / 22.0f);   // 18 pt lines on every display, smaller only when the window is tiny
+  float unit = std::min(18.0f * std::max(window_pixels_per_point(), 1.0f), std::min(ww, wh) / 22.0f);   // 18 pt lines on every display, smaller only when the window is tiny
 #endif
   float safe_t = 0, safe_l = 0, safe_r = 0, safe_b = 0;
   window_safe_insets(safe_t, safe_l, safe_r, safe_b);   // keep clear of the island, the rounded corners and the home indicator
@@ -478,6 +569,10 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   out.shapes.push_back({0, 0, (float)ww, (float)wh, 0, 0, 0, 0.72f, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});   // dim the game enough that the panel reads at a glance
   const std::vector<int> rows = page_rows();
   const int body_rows = g_page == Page::Remap ? 9 : (int)rows.size();
+  {   // a long page shrinks its lines until the panel fits the screen
+    const float need = 5.1f + 1.5f * body_rows, room = (float)wh - 2.0f * std::max(0.0f, 0.0f);
+    if (unit * need > room * 0.96f) unit = std::max(12.0f, room * 0.96f / need);
+  }
   const float row_h = unit * 1.5f, pad = unit * 0.8f, title_h = unit * 1.4f;
   const float avail_w = (float)ww - safe_l - safe_r, avail_h = (float)wh - safe_t - safe_b;
   const float panel_w = std::min(avail_w - 2 * pad, unit * 26.0f);
@@ -509,7 +604,8 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   out.shapes.push_back({x0, y0, x1, y1, 0.04f, 0.06f, 0.16f, 1.0f, unit * 0.5f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.shapes.push_back({x0, y0, x1, y1, 0.55f, 0.65f, 1.0f, 0.6f, unit * 0.5f, std::max(2.0f, unit * 0.08f), 0.0f, 0, 0.0f, 0.0f});
   // Title bar in Melee's angled yellow.
-  const std::string title = g_page == Page::Main ? "MELEE-NX-NETPLAY  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
+  const std::string title = g_page == Page::Main ? "MELEE-NX-NETPLAY  SETTINGS" : g_page == Page::Controls ? "CONTROLS"
+                          : g_page == Page::Replays ? "WATCH REPLAYS" : "REMAP  " + upper(device() ? device()->name : "");
   out.shapes.push_back({x0 + pad, y0 + pad, x0 + pad + panel_w * 0.72f, y0 + pad + title_h, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.15f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.14f, title_h * 0.72f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title, panel_w * 0.72f - unit * 1.0f});
 #ifdef MELEE_PORT_VERSION
@@ -545,14 +641,21 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     if (sel) out.shapes.push_back({x0 + pad * 0.5f, ry + unit * 0.06f, x1 - pad * 0.5f, ry + row_h - unit * 0.06f, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.25f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
     const float ty = ry + (row_h - unit) * 0.5f;
     const bool main = g_page == Page::Main;
-    const std::string value = main ? main_value(r, s) : controls_value(r);
+    const bool replays = g_page == Page::Replays;
+    const std::string value = main ? main_value(r, s) : replays ? std::string() : controls_value(r);
     const float lr = sel ? 0.08f : 1.0f, lg = sel ? 0.06f : 1.0f, lb = sel ? 0.02f : 1.0f;
-    out.texts.push_back({x0 + pad * 1.2f, ty, unit, lr, lg, lb, sel ? 1.0f : 0.92f, 0, main ? main_name(r) : controls_name(r), value.empty() ? panel_w - 2 * pad : panel_w * 0.56f - pad});
-    const bool steppable = main ? (r != ROW_RESUME && r != ROW_CONTROLS && r != ROW_QUIT) : value_row(r);
+    const std::string label = main ? main_name(r) : replays ? (r < 0 ? std::string("Back") : replay_label(g_replays[(size_t)r])) : controls_name(r);
+    out.texts.push_back({x0 + pad * 1.2f, ty, unit, lr, lg, lb, sel ? 1.0f : 0.92f, 0, label, value.empty() ? panel_w - 2 * pad : panel_w * 0.56f - pad});
+    const bool steppable = main ? !action_row(r) : g_page == Page::Controls && value_row(r);
     if (!value.empty()) out.texts.push_back({x1 - pad * 1.2f, ty, unit, sel ? 0.08f : 0.97f, sel ? 0.06f : 0.85f, sel ? 0.02f : 0.45f, 1.0f, 2, sel && steppable ? "<  " + value + "  >" : value, panel_w * 0.42f - pad});
   }
   const char* hint = touch_controls_visible ? "Tap a row's left or right side to change it"
+#if defined(__SWITCH__)
+                   : g_page == Page::Main ? "Left/Right change   B resume   * after restart"
+#else
                    : g_page == Page::Main ? "Up/Down select   Left/Right change   B resume"
+#endif
+                   : g_page == Page::Replays ? (!g_notice.empty() ? g_notice.c_str() : g_replays.empty() ? "No replays yet: play a match first   B back" : "A watch   B back")
                                           : "Up/Down select   Left/Right change   B back";
   out.texts.push_back({cx, y1 - pad - unit * 1.05f, unit * 0.72f, 1, 1, 1, 0.8f, 1, hint, panel_w - 2 * pad});
   g_layout = {x0, y0, x1, y1, row_h, top};

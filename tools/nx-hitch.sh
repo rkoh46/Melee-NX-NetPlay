@@ -13,7 +13,7 @@ image="${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}"
 tc=/opt/devkitpro/devkitA64/bin/aarch64-none-elf
 anchor_elf=$(docker run --rm -v "$repo:/project" "$image" $tc-nm "/project/$relelf" </dev/null | awk '$3 ~ /switch_hitch_start/ && !f {print $1; f=1}')
 [[ -n "$anchor_elf" ]] || { echo "switch_hitch_start not in $elf" >&2; exit 65; }
-grep "hitch: frame" "$log" | while IFS= read -r line; do
+grep -E "hitch: frame [0-9]+ (at|thread)" "$log" | while IFS= read -r line; do
   anchor_rt=$(sed -E 's/.*switch_hitch_start=([0-9a-f]+).*/\1/' <<< "$line")
   addrs=$(sed -E 's/.*pc=([0-9a-f]+) lr=([0-9a-f]+) up=([0-9a-f,]*).*/\1 \2 \3/' <<< "$line" | tr ',' ' ')
   elfaddrs=""

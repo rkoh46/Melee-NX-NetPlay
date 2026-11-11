@@ -115,5 +115,10 @@ void switch_frontend_set_overlay(std::function<void()> draw);
 void switch_frontend_set_draw_dump(const std::string& path, uint8_t scene_major, uint8_t scene_minor, unsigned after);
 // Logs/gfx_debug.txt: live render experiment bits (gx::AuroraBackend::set_debug_file).
 void switch_frontend_set_debug_file(const std::string& path);
+// Live picture settings (in-game menu): internal resolution (0 = the screen's own, k = k times the
+// GameCube's 640x480), 4:3 or 16:9 framing, and the filter that scales the picture to the screen.
+void switch_frontend_set_scale(int scale);
+void switch_frontend_set_aspect(bool widescreen);
+void switch_frontend_set_filter(int filter);
 
 } // namespace host

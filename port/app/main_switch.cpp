@@ -19,6 +19,9 @@
 #include "audio.h"
 #include "audio_headless.h"
 #include "exi_slippi.h"
+#include "slippi_playback.h"
+#include <dirent.h>
+#include <algorithm>
 #include "gx_core.h"
 #include "hle_dvd.h"
 #include "host.h"
@@ -63,6 +66,26 @@ std::atomic<int> g_exit_code{-1};
 std::string g_result = "running";
 int g_volume = 100;
 bool g_hud = false;
+host::RuntimeSettings g_rs;   // the in-game menu's settings as read from launcher.ini
+std::string g_replay_arg;     // --replay <file.slp> (replay app), or Cache/playback_request.txt
+// Replays in Replays/, newest first (their names are timestamps), at most 12 for one screen.
+std::vector<std::string> list_replays() {
+  std::vector<std::string> names;
+  if (DIR* d = opendir((std::string(kBaseDir) + "/Replays").c_str())) {
+    while (dirent* e = readdir(d)) {
+      const std::string n = e->d_name;
+      if (n.size() > 4 && n.compare(n.size() - 4, 4, ".slp") == 0 && n[0] != '.') names.push_back(n);
+    }
+    closedir(d);
+  }
+  std::sort(names.rbegin(), names.rend());
+  if (names.size() > 12) names.resize(12);
+  for (auto& n : names) n = std::string(kBaseDir) + "/Replays/" + n;
+  return names;
+}
+#if MELEE_NX_AURORA
+extern "C" int melee_nx_gc_trigger_scale;   // SDL's Switch joystick backend (sdl-dusklight-gc-trigger-range.patch)
+#endif
 std::string g_base;
 bool g_profiling = false;
 std::map<std::string, std::string> g_ini;
@@ -185,10 +208,26 @@ void simulation_thread(void*) {
           }
         }
         {
-          host::RuntimeSettings rs;
+          host::RuntimeSettings rs = g_rs;
           rs.volume = g_volume; rs.hud = g_hud; rs.online_delay = online.delay; rs.vsync = true;
+          // Live picture settings from launcher.ini.
+          if (rs.scale) host::switch_frontend_set_scale(rs.scale);
+          if (!rs.widescreen) { host::switch_frontend_set_aspect(false); slippi::request_widescreen(false); }
+          if (rs.filter) host::switch_frontend_set_filter(rs.filter);
+          host::set_render_skip(rs.full_speed);
           host::menu_init(rs, [](const host::RuntimeSettings& st, host::MenuChange what) {
             switch (what) {
+              case host::MenuChange::Graphics: host::switch_frontend_set_scale(st.scale); g_ini["scale"] = std::to_string(st.scale); break;
+              case host::MenuChange::Widescreen:
+                host::switch_frontend_set_aspect(st.widescreen); slippi::request_widescreen(st.widescreen);
+                g_ini["widescreen"] = st.widescreen ? "1" : "0"; break;
+              case host::MenuChange::Filter: host::switch_frontend_set_filter(st.filter); g_ini["filter"] = std::to_string(st.filter); break;
+              case host::MenuChange::Msaa: g_ini["msaa"] = std::to_string(st.msaa); break;
+              case host::MenuChange::Anisotropy: g_ini["anisotropy"] = std::to_string(st.anisotropy); break;
+              case host::MenuChange::FullSpeed: host::set_render_skip(st.full_speed); g_ini["render_skip"] = st.full_speed ? "1" : "0"; break;
+              case host::MenuChange::Trigger:
+                melee_nx_gc_trigger_scale = st.trigger_range; g_ini["trigger_range"] = std::to_string(st.trigger_range);
+                host::log("pad: light shield range %dx", st.trigger_range); break;
               case host::MenuChange::Volume: host::audio_set_volume(st.volume); g_ini["volume"] = std::to_string(st.volume); break;
               case host::MenuChange::Hud: g_ini["hud"] = st.hud ? "1" : "0"; break;
               case host::MenuChange::OnlineDelay:
@@ -200,6 +239,21 @@ void simulation_thread(void*) {
             }
             write_ini(g_base + "/launcher.ini", g_ini);
           });
+#if MELEE_NX_PLAYBACK
+          host::menu_set_replays(list_replays, [](const std::string& path) {
+            slippi::playback::queue_replay(path);
+            host::log("playback: next replay %s", path.c_str());
+            host::menu_close();
+          });
+#else
+          // The game itself cannot switch to replay playback (a separate translation of the game, the
+          // Melee-NX Replays app). The pick is saved; that app starts with it.
+          host::menu_set_replays(list_replays, [](const std::string& path) {
+            if (FILE* f = std::fopen((std::string(kBaseDir) + "/Cache/playback_request.txt").c_str(), "w")) { std::fprintf(f, "%s\n", path.c_str()); std::fclose(f); }
+            host::log("menu: replay %s saved for Melee-NX Replays", path.c_str());
+            host::menu_set_notice("Saved. Quit, then open Melee-NX Replays in the Homebrew Menu");
+          });
+#endif
         }
         // draw_dump=MM:SS:N writes Logs/draws.txt for the N-th frame of scene MM/SS (hex), one
         // line per draw with the registers the bridge saw: the way to find what Aurora renders wrongly.
@@ -211,6 +265,13 @@ void simulation_thread(void*) {
         // Logs/gfx_debug.txt holds render experiment bits, re-read every second (upload a new one over FTP).
         host::switch_frontend_set_debug_file(g_base + "/Logs/gfx_debug.txt");
         host::switch_frontend_set_overlay([] {
+#if MELEE_NX_PLAYBACK
+          // The playback scene is waiting for a replay: show the picker (again after each replay).
+          static bool was_waiting = false;
+          const bool waiting = slippi::playback::waiting_for_replay();
+          if (waiting && !was_waiting) host::menu_open_replays();
+          was_waiting = waiting;
+#endif
           host::OverlayFrame overlay;
           if (host::game_overlay(overlay)) host::overlay_imgui_draw(overlay);
         });
@@ -320,7 +381,8 @@ extern "C" void userAppExit() {
 namespace slippi { void finish_replay(); }   // exi_slippi.cpp: completes a replay cut off by quitting
 
 int main(int argc, char** argv) {
-  (void)argc; (void)argv;
+  for (int i = 1; i + 1 < argc; ++i)
+    if (std::string(argv[i]) == "--replay") g_replay_arg = argv[i + 1];
   // Runs on exit(), abort() and Aurora's FATAL: flush the log and, when sampling, write the profile
   // so a crash still leaves the hot-address table behind.
   switch_set_exit_hook([] { switch_hitch_stop(); slippi::finish_replay(); host::card_flush(); ppc::dump_branch_counts((std::string(kBaseDir) + "/Logs/branch_counts.txt").c_str()); switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
@@ -364,6 +426,20 @@ int main(int argc, char** argv) {
   // audio_dump=1: everything the game plays also goes to Logs/audio.wav (32 kHz stereo).
   if (get("audio_dump", "0") == "1") host::options.audio_dump = std::string(kBaseDir) + "/Logs/audio.wav";
   g_hud = get("hud", "0") == "1";
+  // Picture settings (in-game menu). Antialiasing and texture filtering are read when the graphics
+  // device is created; the rest are applied live once the renderer exists.
+  g_rs.scale = std::clamp((int)std::strtol(get("scale", "0").c_str(), nullptr, 10), 0, 3);
+  g_rs.widescreen = get("widescreen", "1") != "0";
+  g_rs.filter = std::clamp((int)std::strtol(get("filter", "0").c_str(), nullptr, 10), 0, 3);
+  g_rs.msaa = get("msaa", "1") == "4" ? 4 : 1;
+  g_rs.anisotropy = std::clamp((int)std::strtol(get("anisotropy", "16").c_str(), nullptr, 10), 1, 16);
+  g_rs.full_speed = get("render_skip", "1") != "0";
+  g_rs.trigger_range = std::clamp((int)std::strtol(get("trigger_range", "4").c_str(), nullptr, 10), 2, 8);
+  setenv("MELEE_MSAA", std::to_string(g_rs.msaa).c_str(), 1);
+  setenv("MELEE_ANISOTROPY", std::to_string(g_rs.anisotropy).c_str(), 1);
+#if MELEE_NX_AURORA
+  melee_nx_gc_trigger_scale = g_rs.trigger_range;
+#endif
   // Slippi identity: user.json (connect code, play key) in User/Slippi, the Slippi
   // Launcher's own layout, until the console has a sign-in screen. The online
   // input delay is a player setting (1..9, Slippi's default 2), never hardcoded.
@@ -377,6 +453,28 @@ int main(int argc, char** argv) {
   o.offline = true;
 #endif
   online.offline = o.offline;
+#if MELEE_NX_PLAYBACK
+  // The replay app: offline, no sign-in, replays picked in the menu one after another. Its own
+  // re-recordings (and the code list Slippi writes) go to Cache/playback, never into Replays/.
+  o.offline = online.offline = true;
+  o.replay_dir = base + "/Cache/playback";
+  ensure_dir(o.replay_dir);
+  if (DIR* d = opendir(o.replay_dir.c_str())) {   // last session's re-recordings: only this app's own files
+    while (dirent* e = readdir(d)) { const std::string n = e->d_name; if (n.rfind("Game_", 0) == 0) std::remove((o.replay_dir + "/" + n).c_str()); }
+    closedir(d);
+  }
+  slippi::playback::set_browse_mode(true);
+  if (g_replay_arg.empty()) {   // a game picked in Melee-NX-NetPlay's own menu before quitting
+    const std::string req = base + "/Cache/playback_request.txt";
+    if (FILE* f = std::fopen(req.c_str(), "r")) {
+      char line[512] = "";
+      if (std::fgets(line, sizeof line, f)) { g_replay_arg = line; while (!g_replay_arg.empty() && (g_replay_arg.back() == '\n' || g_replay_arg.back() == '\r')) g_replay_arg.pop_back(); }
+      std::fclose(f);
+    }
+    std::remove(req.c_str());
+  }
+  if (!g_replay_arg.empty()) { slippi::playback::queue_replay(g_replay_arg); host::log("playback: starting with %s", g_replay_arg.c_str()); }
+#endif
   // Code the recompiler did not translate (Slippi's Gecko routines placed in high memory, such as
   // 80BECFF0) runs in the interpreter, as on the Mac. strict_aot=1 makes such a call fatal instead.
   ppc::set_interpreter_allowed(get("strict_aot", "0") != "1");

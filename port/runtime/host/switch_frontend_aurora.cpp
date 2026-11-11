@@ -5,6 +5,7 @@
 // diagnostic; only the backend selection and the window checks differ.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "metal_frontend.h"
+namespace aurora::window { void set_frame_buffer_scale(float scale); void set_frame_buffer_aspect(float aspect); }   // aurora lib/window.cpp
 
 #include "gx_aurora.h"
 #include "host.h"
@@ -14,7 +15,9 @@
 #include <dolphin/types.h>
 #include <dolphin/vi.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -56,6 +59,9 @@ public:
     config.resourcesPath = requested.resources_path.c_str();
     config.desiredBackend = BACKEND_VULKAN;
     config.vsync = requested.vsync;
+    // Antialiasing and texture filtering are fixed when the device is created (in-game menu: next launch).
+    if (const char* m = std::getenv("MELEE_MSAA")) config.msaa = (uint32_t)std::max(1, std::atoi(m));
+    if (const char* a = std::getenv("MELEE_ANISOTROPY")) config.maxTextureAnisotropy = (uint16_t)std::max(1, std::atoi(a));
     config.windowWidth = requested.window_width;    // the console's own resolution; Aurora sizes to the NWindow
     config.windowHeight = requested.window_height;
     config.allowTextureDumps = false;
@@ -145,5 +151,15 @@ void switch_frontend_set_draw_dump(const std::string& path, uint8_t scene_major,
 }
 void switch_frontend_set_debug_file(const std::string& path) {
   if (g_switch_backend) g_switch_backend->set_debug_file(path);
+}
+void switch_frontend_set_scale(int scale) {
+  aurora::window::set_frame_buffer_scale(scale <= 0 ? 0.0f : (float)scale);
+  host::log("graphics: internal resolution %s", scale <= 0 ? "follows the screen" : scale == 1 ? "640x480 (GameCube)" : scale == 2 ? "2x" : "3x");
+}
+void switch_frontend_set_aspect(bool widescreen) {
+  aurora::window::set_frame_buffer_aspect(widescreen ? 0.0f : 4.0f / 3.0f);
+}
+void switch_frontend_set_filter(int filter) {
+  aurora_set_resampler(filter == 1 ? SAMPLER_AREA : filter == 2 ? SAMPLER_CRT : filter == 3 ? SAMPLER_VIBRANT : SAMPLER_BILINEAR);
 }
 }  // namespace host

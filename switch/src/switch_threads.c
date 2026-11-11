@@ -309,3 +309,15 @@ int switch_cpu_report(char* out, int cap, double frames) {
     mutexUnlock(&g_cpu_lock);
     return n;
 }
+
+// The registered threads (handle and name), for the hitch catcher's snapshot of every thread.
+int switch_cpu_threads(Handle* handles, char (*names)[20], int cap) {
+    int n = 0;
+    mutexLock(&g_cpu_lock);
+    for (int i = 0; i < g_cpu_count && n < cap; ++i, ++n) {
+        handles[n] = g_cpu[i].handle;
+        snprintf(names[n], 20, "%s", g_cpu[i].name);
+    }
+    mutexUnlock(&g_cpu_lock);
+    return n;
+}
