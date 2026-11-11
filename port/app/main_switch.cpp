@@ -9,6 +9,7 @@
 #include "gxn_glue_host.h"
 #include "gml_glue.h"
 #include "switch_profile.h"
+#include "switch_hitch.h"
 #include "log_switch.h"
 #if MELEE_NX_AURORA
 #include "async_backend.h"
@@ -234,6 +235,10 @@ void simulation_thread(void*) {
           if (R_FAILED(grc)) throw std::runtime_error("cannot create the guest thread");
           host::log("threads: guest on core 2 priority 0x%02X; renderer on core 1", guest_priority);
           threadStart(&guest);
+          // Hitch catcher: where the game thread is when a frame runs past 40 ms (hitch_watch=0 turns it off).
+          const auto hw = g_ini.find("hitch_watch");
+          if (!g_profiling && (hw == g_ini.end() || hw->second != "0") && switch_hitch_start(&guest, kSimulationStack))
+            host::log("hitch: watching the game thread (a frame over 40 ms logs where it is)");
           if (g_profiling) {
             // The owner thread (this one) renders; sample it alongside the guest so both sides of the
             // frame show up (pc/lr = guest, pc1/lr1 = renderer).
@@ -318,7 +323,7 @@ int main(int argc, char** argv) {
   (void)argc; (void)argv;
   // Runs on exit(), abort() and Aurora's FATAL: flush the log and, when sampling, write the profile
   // so a crash still leaves the hot-address table behind.
-  switch_set_exit_hook([] { slippi::finish_replay(); host::card_flush(); ppc::dump_branch_counts((std::string(kBaseDir) + "/Logs/branch_counts.txt").c_str()); switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
+  switch_set_exit_hook([] { switch_hitch_stop(); slippi::finish_replay(); host::card_flush(); ppc::dump_branch_counts((std::string(kBaseDir) + "/Logs/branch_counts.txt").c_str()); switch_profile_stop((std::string(kBaseDir) + "/Logs/profile.txt").c_str()); host::close_log_file(); melee_nx_log_flush(); });
 #if !MELEE_NX_AURORA
   // The text console and libnx pad are the headless build's only UI. With the
   // renderer, Aurora's SDL window owns the display and the controllers.
@@ -393,6 +398,7 @@ int main(int argc, char** argv) {
   // render_skip=0: never leave a draw pass out when the game is behind (it then runs slow instead).
   if (get("render_skip", "1") == "0") setenv("MELEE_RENDER_SKIP", "0", 1);
   if (!get("render_skip_ms", "").empty()) setenv("MELEE_RENDER_SKIP_MS", get("render_skip_ms", "").c_str(), 1);
+  if (get("hitch_test", "0") == "1") setenv("MELEE_HITCH_TEST", "1", 1);
   // copy_history=1: the Aurora bridge's EFB-copy coverage warnings (diagnostic; costs render-thread time).
   if (get("copy_history", "0") == "1") setenv("MELEE_COPY_HISTORY", "1", 1);
   // profile_thread=fifo|worker: with profile=1, sample that Aurora thread instead of the renderer (pc1).

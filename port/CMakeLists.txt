@@ -49,7 +49,7 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
 
 set(PORT_SWITCH_SOURCES
   "${PROJECT_SOURCE_DIR}/switch/src/switch_threads.c" "${PROJECT_SOURCE_DIR}/switch/src/switch_clocks.cpp"
-  "${PROJECT_SOURCE_DIR}/switch/src/switch_profile.cpp" "${PROJECT_SOURCE_DIR}/switch/src/log_switch.cpp")
+  "${PROJECT_SOURCE_DIR}/switch/src/switch_profile.cpp" "${PROJECT_SOURCE_DIR}/switch/src/switch_hitch.cpp" "${PROJECT_SOURCE_DIR}/switch/src/log_switch.cpp")
 
 if(MELEE_NX_FRONTEND STREQUAL "headless")
   set(PORT_FRONTEND_SOURCES runtime/host/input_headless.cpp runtime/host/window_headless.cpp runtime/host/audio_headless.cpp)

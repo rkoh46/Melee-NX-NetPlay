@@ -121,7 +121,9 @@ def launch_hbmenu(bot, shots_dir):
             if held_r: bot.release("R"); held_r = False
             time.sleep(0.5); bot.click("Y"); return True
         if state == "home":
-            if not held_r: bot.press("R"); held_r = True; time.sleep(0.4)
+            # HOME on the HOME menu puts the cursor back on the first tile (the player may have left it
+            # on the eShop button, and A then opened the eShop).
+            if not held_r: bot.click("HOME"); time.sleep(1.0); bot.press("R"); held_r = True; time.sleep(0.4)
             bot.click("A"); time.sleep(1.5); continue
         if state == "home-playing":
             if held_r: bot.release("R"); held_r = False

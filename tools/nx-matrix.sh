@@ -22,7 +22,9 @@ for cfg in "$@"; do
     [[ "${teams:-}" == "teams" ]] && echo "force_teams=1"
     # MATRIX_INI: extra launcher.ini lines for every run, e.g. MATRIX_INI=$'clock_cpu_mhz=2091\nclock_mem_mhz=1900'
     [[ -n "${MATRIX_INI:-}" ]] && printf '%s\n' "$MATRIX_INI"; } >> "$tmp"
-  curl -sS --connect-timeout 10 -T "$tmp" "ftp://$ip:${NX_FTP_PORT:-5000}/switch/melee-nx-netplay/launcher.ini" || { echo "$cfg: cannot push launcher.ini"; rm -f "$tmp"; continue; }
+  pushed=0   # sys-ftpd-light drops a connection now and then: retry
+  for _ in 1 2 3 4 5; do curl -sS --connect-timeout 10 --max-time 30 -T "$tmp" "ftp://$ip:${NX_FTP_PORT:-5000}/switch/melee-nx-netplay/launcher.ini" && { pushed=1; break; }; sleep 3; done
+  [[ $pushed == 1 ]] || { echo "$cfg: cannot push launcher.ini"; rm -f "$tmp"; continue; }
   rm -f "$tmp"
   tag="stage${stage}-${players}p${teams:+-$teams}"
   log=""

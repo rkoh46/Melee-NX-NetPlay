@@ -437,7 +437,19 @@ void NetplayClient::SendAsync(std::unique_ptr<Packet> packet) {
   wakeup_thread(client_);
 }
 
+#if defined(__SWITCH__)
+extern "C" __attribute__((weak)) void switch_set_current_thread_priority(int priority);   // switch_threads.c
+extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
+#endif
 void NetplayClient::ThreadFunc() {
+#if defined(__SWITCH__)
+  // Horizon never time-slices threads below priority 59: at the default priority this thread waited
+  // behind the graphics threads on cores 0-1 whenever they were busy, so the opponent's inputs (and
+  // ours, which this thread sends) sat in a socket for milliseconds. It works for microseconds per
+  // packet, so it now runs ahead of them (the game thread, 0x1C, still comes first).
+  if (switch_set_current_thread_priority) switch_set_current_thread_priority(0x24);
+  if (switch_cpu_register) switch_cpu_register("netplay");
+#endif
 #if defined(__APPLE__)
   // Opponent inputs are handled the moment they arrive: keep this thread on performance cores (an efficiency core can
   // take milliseconds to wake on an iPhone), whatever thread happened to create it.
@@ -1026,7 +1038,7 @@ void Matchmaking::handleMatchmaking() {
         // The address the opponent will dial. Behind carrier-grade NAT the public port differs from the local one; if
         // matchmaking advertises a port nothing forwards, the opponent's own attempt dies and Slippi Dolphin closes the
         // healthy connection when it expires (docs/MAC_FIXES.md issue 9).
-        host::log("slippi: matchmaking advertises this Mac as %s (local port %d)", ip.c_str(), host_port_);
+        host::log("slippi: matchmaking advertises this device as %s (local port %d)", ip.c_str(), host_port_);
       }
     }
     for (auto& el : queue) {

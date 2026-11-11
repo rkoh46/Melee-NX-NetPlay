@@ -1,28 +1,33 @@
 --- a/src/joystick/switch/SDL_sysjoystick.c
 +++ b/src/joystick/switch/SDL_sysjoystick.c
-@@ -221,6 +221,21 @@
+@@ -219,6 +219,26 @@
+ static bool SWITCH_JoystickSetSensorsEnabled(SDL_Joystick *joystick, bool enabled)
+ {
      return SDL_Unsupported();
- }
- 
-+/* The system reports a GameCube trigger's analog travel as 0..0xFFF (the controller's 8-bit
-+ * value shifted left by 4), not the 0..0x7FFF libnx documents, and jumps to 0x7FFF only at the
-+ * digital click. Read unscaled, a full analog pull was 1/8 of the axis and light shield was
-+ * impossible. The analog range is scaled by 8 to the full axis; the click saturates. (An earlier
-+ * adaptive version switched back to unscaled the first time a click reported 0x7FFF.) */
++}
++
++/* GameCube trigger range. Measured in replays: the system reports a GameCube trigger's analog
++ * travel as 0 .. about 0x1F00 (a full pull without the click read 0.23 of the axis unscaled, in
++ * steps of ~0xDA), and jumps to 0x7FFF only at the digital click. Scaled by 8, half a pull already
++ * saturated, so every light press was a full-strength shield; scaled by 4 the full travel reaches
++ * the top of a real controller's analog range (~248 of 255) and the game's own clamp (30..180)
++ * sees the whole light-shield range. The click saturates. The largest analog value seen without
++ * the click is kept per slot (melee_nx_gc_trigger_travel) so the app can log it. */
++int melee_nx_gc_trigger_travel[8];
 +static int gc_trigger_axis(int slot, Uint32 pos)
 +{
-+    (void)slot;
-+    int full = (int)pos * 8;
++    if ((int)pos < 0x7000 && slot >= 0 && slot < 8 && (int)pos > melee_nx_gc_trigger_travel[slot]) {
++        melee_nx_gc_trigger_travel[slot] = (int)pos;
++    }
++    int full = (int)pos * 4;
 +    if (full > 32767) {
 +        full = 32767;
 +    }
 +    return full * 2 - 32768;
-+}
-+
+ }
+ 
  static Sint16 clamp_axis(int v)
- {
-     if (v > SDL_JOYSTICK_AXIS_MAX) {
-@@ -282,8 +297,8 @@
+@@ -282,8 +302,8 @@
       * axes from the L/R buttons would turn GC Z into a shoulder pull; without the GC
       * style the axes stay released and the buttons carry the mapping (misc3/misc4). */
      const bool has_gc_triggers = (padGetStyleSet(pad) & HidNpadStyleTag_NpadGc) != 0;

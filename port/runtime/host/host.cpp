@@ -44,6 +44,7 @@ Options options;
 extern "C" __attribute__((weak)) void aurora_pipeline_background_pause(bool paused);   // Aurora (console)
 extern "C" __attribute__((weak)) int switch_cpu_report(char* out, int cap, double frames);   // switch_threads.c
 extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
+extern "C" __attribute__((weak)) void switch_hitch_frame_begin(void);   // switch_hitch.cpp
 extern "C" __attribute__((weak)) double switch_thread_cpu_ms(void);                  // switch_threads.c
 uint8_t* ram = nullptr;
 uint8_t* aram = nullptr;
@@ -779,6 +780,10 @@ void retrace() {
   // game saw it. The GameCube adapter has its own 1 ms reader thread and is unaffected.
   if (g_has_window) { SimCostScope pump(SIM_PUMP); window_pump(); }
   g_sim_frame_start = now_seconds();
+  if (switch_hitch_frame_begin) switch_hitch_frame_begin();
+  // MELEE_HITCH_TEST=1 (hitch_test=1): one deliberate 70 ms stall at frame 600, to check the hitch catcher.
+  static const bool hitch_test = [] { const char* e = std::getenv("MELEE_HITCH_TEST"); return e && e[0] == '1'; }();
+  if (hitch_test && g_retraces == 600) std::this_thread::sleep_for(std::chrono::milliseconds(70));
   fire_due_alarms(true);
   hle::audio_tick(true);
   // VI: mark display-interrupt 0 as pending (bit 15 of DI0 status, VI reg index 0x18).
@@ -797,15 +802,17 @@ void retrace() {
   {
     static uint32_t match_start = 0; static uint64_t c0 = 0, d0 = 0, v0 = 0;
     const bool in_match = rd8(SCENE_MODE_ADDRESS) == 0x02 && rd8(SCENE_STATE_ADDRESS) == 0x02;
+    // Any match, offline (VS, major 02) or online (Slippi, major 08), in play (minor 02).
+    const bool in_any_match = (rd8(SCENE_MODE_ADDRESS) == 0x02 || rd8(SCENE_MODE_ADDRESS) == 0x08) && rd8(SCENE_STATE_ADDRESS) == 0x02;
     uint64_t commands, draws, vertices; uint32_t copies;
     if (in_match && !match_start) { gx_stats(&c0, &d0, &v0, &copies); match_start = g_retraces; }
     // Background pipeline pre-warm (Aurora) runs only outside a match: in one it competed with the
     // renderer for its core and the game waited on the graphics threads (4-player stages).
     static bool prewarm_paused = false;
-    if (in_match != prewarm_paused && aurora_pipeline_background_pause) {
-      prewarm_paused = in_match;
-      aurora_pipeline_background_pause(in_match);
-      log("pipelines: background pre-warm %s", in_match ? "paused for the match" : "resumed");
+    if (in_any_match != prewarm_paused && aurora_pipeline_background_pause) {
+      prewarm_paused = in_any_match;
+      aurora_pipeline_background_pause(in_any_match);
+      log("pipelines: background pre-warm %s", in_any_match ? "paused for the match" : "resumed");
     }
     if (match_start && g_retraces == match_start + 1200) {
       gx_stats(&commands, &draws, &vertices, &copies);

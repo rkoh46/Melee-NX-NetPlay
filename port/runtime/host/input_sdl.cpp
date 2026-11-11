@@ -52,6 +52,9 @@ void keyboard(PadState& p) {
   if (cx || cy) { p.sub_x = int8_t(cx); p.sub_y = int8_t(cy); }
 }
 
+#if defined(__SWITCH__)
+extern "C" int melee_nx_gc_trigger_travel[8];   // SDL's Switch joystick backend
+#endif
 // Aurora maps every connected SDL gamepad to a GameCube layout per port.
 uint32_t gamepads(PadState out[4]) {
   if (!g_pad_initialized) { PADInit(); g_pad_initialized = true; }
@@ -83,6 +86,14 @@ uint32_t gamepads(PadState out[4]) {
       log("pad %d: L=%u R=%u Z=%u analog L=%u R=%u", port + 1, (status[port].button & GC_L) ? 1 : 0, (status[port].button & GC_R) ? 1 : 0,
           (status[port].button & GC_Z) ? 1 : 0, status[port].triggerLeft, status[port].triggerRight);
     }
+    // The furthest analog trigger travel the system has reported without the click (SDL backend,
+    // sdl-dusklight-gc-trigger-range.patch), logged when it grows by a step: the scale is set from it.
+    static int logged_travel[8];
+    for (int slot = 0; slot < 8; ++slot)
+      if (melee_nx_gc_trigger_travel[slot] > logged_travel[slot] + 0x200) {
+        logged_travel[slot] = melee_nx_gc_trigger_travel[slot];
+        log("pad: controller slot %d trigger travel reaches 0x%X of 0x7FFF without the click", slot + 1, logged_travel[slot]);
+      }
 #endif
   }
   return connected;
