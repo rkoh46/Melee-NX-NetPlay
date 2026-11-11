@@ -308,3 +308,8 @@ __GXSetTmemConfig
 __GXSetVAT
 __GXSetVCD
 __GXUpdateBPMask
+
+# --- render skip when the simulation is behind (hle_stubs.cpp) ---
+HSD_StartRender
+HSD_PerfSetDrawTime
+HSD_VICopyEFB2XFBPtr

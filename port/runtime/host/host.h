@@ -95,6 +95,12 @@ bool state_trace_output_ok();
 enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RECORD, SIM_RENDER, SIM_TEXTURE, SIM_PUMP, SIM_GPUWAIT, SIM_DRAWABLE, SIM_SAVESTATE, SIM_COST_COUNT };
 void sim_cost_add(int slot, double seconds);
 double last_sim_frame_ms();            // work time of the most recent simulation frame (sleep excluded)
+// Render skip: when the game is behind its 60 Hz grid, one frame's draw pass is left out so the
+// simulation (and the sound) keep full speed. render_should_skip() is asked once per frame, before
+// the draw pass; render_pass_done() reports how long a pass took, for the prediction.
+bool render_should_skip();
+void render_pass_done(double ms);
+uint64_t render_skip_count();
 uint64_t late_frame_count();           // simulation frames that took longer than one 60 Hz period
 
 // ---- time ----

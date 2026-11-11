@@ -25,4 +25,4 @@ done
 echo "== sending the NRO"
 NX_WAIT=120 "$here/nx-run.sh" "$ip" "$frontend"
 echo "== run over; fetching the profile if there is one"
-"$here/nx-profile.sh" "$ip" "$frontend" 30 2>/dev/null || echo "(no profile this run)"
+"$here/nx-profile.sh" "$ip" "$frontend" "${NX_PROFILE_TOP:-30}" 2>/dev/null || echo "(no profile this run)"

@@ -46,9 +46,9 @@ void AsyncBackend::run(const std::atomic<bool>& stop) {
     if (frame.time > 0.0) { const double age = (t1 - frame.time) * 1000.0; age_sum += age; if (age > age_worst) age_worst = age; }
     ++rendered_;
     if (++stat_frames_ == 120) {
-      host::log("renderer: %.1f ms/frame on the render thread (worst %.1f), %llu stale frames dropped so far; "
+      host::log("renderer: %.1f ms/frame on the render thread (worst %.1f), %llu stale frames dropped so far, %llu given up while the renderer was stuck; "
                 "frame age at hand-off %.1f ms (worst %.1f)",
-                stat_ms_ / stat_frames_, stat_worst_ms_, (unsigned long long)dropped_.load(), age_sum / stat_frames_, age_worst);
+                stat_ms_ / stat_frames_, stat_worst_ms_, (unsigned long long)dropped_.load(), (unsigned long long)queue_.overflow_dropped.load(), age_sum / stat_frames_, age_worst);
       stat_frames_ = 0; stat_ms_ = stat_worst_ms_ = 0.0; age_sum = age_worst = 0.0;
     }
     queue_.recycle(std::move(frame));

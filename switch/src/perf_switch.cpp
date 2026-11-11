@@ -108,7 +108,14 @@ extern "C" void melee_nx_perf_init(void) {
 
 extern "C" void switch_profile_second_thread_here(void);   // switch_profile.cpp
 
+extern "C" void switch_cpu_register(const char* name);      // switch_threads.c
+
 extern "C" void melee_nx_perf_thread(const char* name) {
+    {   // short names for the frame log's per-thread CPU times
+        const char* tag = name;
+        if (std::strncmp(tag, "Aurora ", 7) == 0) tag += 7;
+        switch_cpu_register(tag);
+    }
     int role;
     if (std::strcmp(name, "Main thread") == 0)
         role = 0;

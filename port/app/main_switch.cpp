@@ -388,6 +388,11 @@ int main(int argc, char** argv) {
   if (get("hle_verify", "0") == "1") setenv("MELEE_HLE_VERIFY", "1", 1);
   // bridge_verify=1: the Aurora bridge also converts every draw with full state comparison and logs any difference.
   if (get("bridge_verify", "0") == "1") setenv("MELEE_BRIDGE_VERIFY", "1", 1);
+  // draw_merge=0: every primitive stays its own draw (the parser otherwise joins consecutive ones with identical state).
+  if (get("draw_merge", "1") == "0") setenv("MELEE_DRAW_MERGE", "0", 1);
+  // render_skip=0: never leave a draw pass out when the game is behind (it then runs slow instead).
+  if (get("render_skip", "1") == "0") setenv("MELEE_RENDER_SKIP", "0", 1);
+  if (!get("render_skip_ms", "").empty()) setenv("MELEE_RENDER_SKIP_MS", get("render_skip_ms", "").c_str(), 1);
   // copy_history=1: the Aurora bridge's EFB-copy coverage warnings (diagnostic; costs render-thread time).
   if (get("copy_history", "0") == "1") setenv("MELEE_COPY_HISTORY", "1", 1);
   // profile_thread=fifo|worker: with profile=1, sample that Aurora thread instead of the renderer (pc1).

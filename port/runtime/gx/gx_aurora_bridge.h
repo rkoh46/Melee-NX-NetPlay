@@ -1,6 +1,7 @@
 // Pure, owned conversion at the decoded Frame seam. No guest pointers or GPU calls.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include <functional>
 #include "gx_core.h"
 #include <array>
 #include <map>
@@ -30,6 +31,10 @@ struct Draw {
   uint8_t primitive = 0;
   uint16_t vertex_count = 0;
   uint32_t vertex_stride = 0;
+  // The vertex bytes to send: `vertices`, or for raw draws the game's own bytes in the source Frame
+  // (not copied; the frame outlives the submission).
+  const uint8_t* vertex_data = nullptr;
+  uint32_t vertex_bytes = 0;
 };
 
 struct PreparedFrame {
@@ -46,6 +51,10 @@ struct PreparedFrame {
 PreparedFrame prepare_frame(const Frame& frame, Extent extent = {});
 // Reusing form: `out` keeps its buffers between frames (no per-draw allocation on the render thread).
 void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out);
+// Streaming form: `emit(i)` is called for command i as soon as it is ready (a draw right after its
+// conversion, a copy in its place), after the whole command list has been validated. The renderer
+// hands each draw to Aurora from there, so Aurora's FIFO thread decodes while the rest converts.
+void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out, const std::function<void(size_t)>& emit);
 
 struct CopyRecord {
   uint32_t width = 0, height = 0, bytes = 0;

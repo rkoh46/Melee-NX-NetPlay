@@ -7,6 +7,7 @@
 // that stall froze the game itself, which in an online match means rollback past its limit.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include <atomic>
 #include "gx_core.h"
 #include <chrono>
 #include <condition_variable>
@@ -15,6 +16,7 @@
 #include <thread>
 // Console: lowers the calling thread's priority (switch_threads.c); absent elsewhere.
 extern "C" __attribute__((weak)) void switch_set_current_thread_priority(int priority);
+extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
 namespace gx {
 class FrameQueue {
   std::mutex mutex;
@@ -30,6 +32,7 @@ class FrameQueue {
   // the render thread that was 15% of a 4-player frame. A low-priority thread does it instead.
   void cleaner_main() {
     if (switch_set_current_thread_priority) switch_set_current_thread_priority(0x2E);
+    if (switch_cpu_register) switch_cpu_register("clean");
     std::unique_lock<std::mutex> lock(mutex);
     for (;;) {
       clean_wake.wait(lock, [&] { return stopping || !returned.empty(); });
@@ -43,6 +46,7 @@ class FrameQueue {
     }
   }
 public:
+  std::atomic<uint64_t> overflow_dropped{0};   // frames given up because the renderer was stuck
   FrameQueue() = default;
   FrameQueue(const FrameQueue&) = delete;
   FrameQueue& operator=(const FrameQueue&) = delete;
@@ -58,7 +62,7 @@ public:
   // Fox-against-Marth match in std::bad_alloc; 12 bounds the backlog near 100 MB and the
   // simulation waits for the compile instead. Compiled pipelines are persisted, so this is once per
   // variant per install.
-  static constexpr size_t capacity = 12;
+  static constexpr size_t capacity = 4;   // push_and_recycle gives up the oldest frame beyond this
 #else
   static constexpr size_t capacity = 64;   // > 1 s at 60 Hz: longer than the longest drawable wait the system allows
 #endif
@@ -75,7 +79,23 @@ public:
   // thread refills them instead of reallocating every frame.
   bool push_and_recycle(Frame& frame) {
     std::unique_lock<std::mutex> lock(mutex);
+#if defined(__SWITCH__)
+    // A stuck renderer (NVK compiling a shader it has not seen: up to a second) must not stop the
+    // game. The renderer only ever shows the newest queued frame, so when the queue is full the
+    // oldest one is given up here instead of the simulation waiting: the picture holds for the
+    // length of the compile while the game and its sound carry on.
+    while (!finished && frames.size() >= capacity) {
+      Frame old = std::move(frames.front()); frames.pop_front();
+      overflow_dropped.fetch_add(1, std::memory_order_relaxed);
+      if (recycled.size() + returned.size() < 6) {
+        if (!cleaner.joinable()) cleaner = std::thread([this] { cleaner_main(); });
+        returned.push_back(std::move(old));
+        clean_wake.notify_one();
+      } else { lock.unlock(); { Frame drop = std::move(old); } lock.lock(); }
+    }
+#else
     changed.wait(lock, [&] { return finished || frames.size() < capacity; });
+#endif
     if (finished) return false;
     frames.push_back(std::move(frame));
     if (!recycled.empty()) { frame = std::move(recycled.back()); recycled.pop_back(); }

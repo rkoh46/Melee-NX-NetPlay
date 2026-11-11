@@ -138,8 +138,10 @@ void switch_set_pthread_cores(int preferred, uint64_t mask) {
     pthread_core_mask = mask;
 }
 
+void switch_cpu_register(const char* name);
 static void* thread_trampoline(void* raw) {
     switch_sync_clang_tls();
+    { static int serial; char tag[12]; snprintf(tag, sizeof tag, "t%d", __atomic_add_fetch(&serial, 1, __ATOMIC_RELAXED)); switch_cpu_register(tag); }
     if (pthread_core_mask) svcSetThreadCoreMask(CUR_THREAD_HANDLE, pthread_core_preferred, pthread_core_mask);
     TrampolineCtx ctx = *(TrampolineCtx*)raw;
     free(raw);
@@ -269,4 +271,41 @@ double switch_thread_cpu_ms(void) {
 // Sets the calling thread's priority (higher numbers run later). Background cleanup threads.
 void switch_set_current_thread_priority(int priority) {
     svcSetThreadPriority(CUR_THREAD_HANDLE, (u32)priority);
+}
+
+// Per-thread running time for the frame log: threads register themselves by name, and the report
+// prints each one's CPU time per frame since the previous report ("name 3.2").
+#define CPU_SLOTS 24
+static struct { char name[20]; Handle handle; u64 last; } g_cpu[CPU_SLOTS];
+static int g_cpu_count;
+static Mutex g_cpu_lock;
+void switch_cpu_register(const char* name) {
+    mutexLock(&g_cpu_lock);
+    for (int i = 0; i < g_cpu_count; ++i)
+        if (g_cpu[i].handle == threadGetCurHandle()) {   // already listed (every pthread is): rename
+            snprintf(g_cpu[i].name, sizeof g_cpu[0].name, "%s", name);
+            mutexUnlock(&g_cpu_lock);
+            return;
+        }
+    if (g_cpu_count < CPU_SLOTS) {
+        snprintf(g_cpu[g_cpu_count].name, sizeof g_cpu[0].name, "%s", name);
+        g_cpu[g_cpu_count].handle = threadGetCurHandle();
+        g_cpu[g_cpu_count].last = 0;
+        ++g_cpu_count;
+    }
+    mutexUnlock(&g_cpu_lock);
+}
+int switch_cpu_report(char* out, int cap, double frames) {
+    int n = 0;
+    if (frames <= 0) frames = 1;
+    mutexLock(&g_cpu_lock);
+    for (int i = 0; i < g_cpu_count && n < cap - 32; ++i) {
+        u64 ticks = 0;
+        if (R_FAILED(svcGetInfo(&ticks, InfoType_ThreadTickCount, g_cpu[i].handle, UINT64_MAX))) continue;
+        const double ms = (double)(ticks - g_cpu[i].last) * 1000.0 / 19200000.0 / frames;
+        g_cpu[i].last = ticks;
+        if (ms >= 0.05) n += snprintf(out + n, cap - n, " %s %.1f", g_cpu[i].name, ms);
+    }
+    mutexUnlock(&g_cpu_lock);
+    return n;
 }

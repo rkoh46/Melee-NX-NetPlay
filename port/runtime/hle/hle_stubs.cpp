@@ -230,3 +230,42 @@ HLE(ARQPostRequest) {
 }
 
 // CARD: see hle_card.cpp (GCI-folder memory card in slot A).
+
+// ---------------- render skip ----------------
+// The scene loop (gm_801A4D34) draws with HSD_StartRender, HSD_GObj_80390FC0 (walks one GX link list
+// and calls every render callback), HSD_PerfSetDrawTime, then HSD_VICopyXFBAsync, whose
+// HSD_VICopyEFB2XFBPtr copies the picture out. To leave a draw pass out, the list head that walk
+// reads is emptied for its duration and the copy is not made, so the picture on screen stays.
+// (HSD_VICopyXFBAsync itself carries a Slippi hook and stays the game's.) See host::render_should_skip.
+namespace guest {
+void f_80375538_orig(ppc::Context& c, uint8_t* m); void f_8037E2B0_orig(ppc::Context& c, uint8_t* m);
+void f_80375F74_orig(ppc::Context& c, uint8_t* m);
+}
+namespace {
+uint32_t g_skip_slot = 0, g_skip_saved = 0;   // guest address of the emptied list head and its value
+bool g_skip_copy = false;
+double g_render_pass_start = 0.0;
+}
+HLE(HSD_StartRender) {
+  const uint32_t pass = ARG0;
+  guest::f_80375538_orig(c, m);
+  g_render_pass_start = 0.0; g_skip_copy = false;
+  if (pass != 0 || g_skip_slot) return;                 // HSD_RP_SCREEN only
+  if (!host::render_should_skip()) { g_render_pass_start = host::now_seconds(); return; }
+  const uint32_t heads = host::rd32(0x804D7824u);       // HSD_GObjGXLinkHead
+  const uint32_t max = host::rd8(0x804CE381u);          // HSD_GObjLibInitData.gx_link_max
+  if (heads < 0x80000000u || heads >= 0x81800000u) return;
+  g_skip_slot = heads + (max + 1) * 4;
+  g_skip_saved = host::rd32(g_skip_slot);
+  host::wr32(g_skip_slot, 0);
+  g_skip_copy = true;
+}
+HLE(HSD_PerfSetDrawTime) {
+  if (g_skip_slot) { host::wr32(g_skip_slot, g_skip_saved); g_skip_slot = 0; }
+  guest::f_8037E2B0_orig(c, m);
+}
+HLE(HSD_VICopyEFB2XFBPtr) {
+  if (g_skip_copy) { g_skip_copy = false; return; }
+  guest::f_80375F74_orig(c, m);
+  if (g_render_pass_start > 0.0) { host::render_pass_done((host::now_seconds() - g_render_pass_start) * 1000.0); g_render_pass_start = 0.0; }
+}

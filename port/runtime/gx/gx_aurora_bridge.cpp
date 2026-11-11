@@ -207,6 +207,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
           "indirect stage source was not captured");
 
   out.state.clear(); out.vertices.clear();   // the caller's Draw keeps its buffers between frames
+  out.vertex_data = nullptr; out.vertex_bytes = 0;
   out.arrays.fill(nullptr);
   out.primitive = uint8_t(d.primitive); out.vertex_count = uint16_t(d.vertex_count);
   for (unsigned i = 0; i < 8; ++i) out.textures[i] = &d.textures[i];
@@ -338,7 +339,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
       cp(state, uint8_t(0xB0 + i), a.stride);
     }
     out.primitive = uint8_t(d.primitive | fmt);
-    out.vertices.assign(frame.raw_vertices.begin() + d.raw_offset, frame.raw_vertices.begin() + d.raw_offset + d.raw_size);
+    out.vertex_data = frame.raw_vertices.data() + d.raw_offset; out.vertex_bytes = d.raw_size;
     out.vertex_stride = d.raw_size / d.vertex_count;
     return;
   }
@@ -376,6 +377,7 @@ void convert_draw(const Frame& frame, size_t index, Extent extent, const DrawSta
       for (float x : v.uv[t]) { check(std::isfinite(x), "non-finite texture coordinate"); f32(out.vertices, x); }
   }
   out.vertex_stride = uint32_t(out.vertices.size() / d.vertex_count);
+  out.vertex_data = out.vertices.data(); out.vertex_bytes = uint32_t(out.vertices.size());
 }
 
 void validate_copy(const Frame& frame, size_t index, Extent extent) {
@@ -425,7 +427,8 @@ PreparedFrame prepare_frame(const Frame& frame, Extent extent) {
   return out;
 }
 
-void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
+void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) { prepare_frame(frame, extent, out, {}); }
+void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out, const std::function<void(size_t)>& emit) {
   out.skipped_copies.clear();
   if (!extent.width || !extent.height || extent.width > EFB_WIDTH || extent.height > EFB_HEIGHT)
     fail(frame, "extent", "invalid logical framebuffer dimensions");
@@ -455,6 +458,8 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
       std::find(seen_copy.begin(), seen_copy.end(), false) != seen_copy.end())
     fail(frame, "commands", "missing final XFB or unreferenced captured work");
   if (out.draws.size() < frame.draws.size()) out.draws.resize(frame.draws.size());   // grows only; buffers persist
+  out.copies = frame.copies;       // before the draws: the streaming renderer reads them from `emit`
+  out.commands = frame.commands;
   // Draw state is rebuilt in order from each draw's record (apply_state): `state` is the current draw's,
   // `emitted` that of the last draw handed to Aurora, which the next draw's register deltas compare with.
   // Both live as long as the thread (two 4.4 KB blocks, reused every frame).
@@ -471,7 +476,7 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
   };
   for (size_t c = 0; c < frame.commands.size(); ++c) {
     const auto& cmd = frame.commands[c];
-    if (cmd.kind != FrameCommand::Draw) { previous = nullptr; continue; }   // copies rewrite BP state
+    if (cmd.kind != FrameCommand::Draw) { previous = nullptr; if (emit) emit(c); continue; }   // copies rewrite BP state
     const size_t i = cmd.index;
     for (size_t look = c + 1; look < frame.commands.size() && look <= c + 2; ++look)
       if (frame.commands[look].kind == FrameCommand::Draw) { prefetch_draw(frame.commands[look].index); break; }
@@ -507,9 +512,8 @@ void prepare_frame(const Frame& frame, Extent extent, PreparedFrame& out) {
       out.draws[i].vertex_count = 0;   // the renderer skips it
       out.draws[i].state.clear(); out.draws[i].vertices.clear();
     }
+    if (emit) emit(c);
   }
-  out.copies = frame.copies;
-  out.commands = frame.commands;
 }
 
 namespace {

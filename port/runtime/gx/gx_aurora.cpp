@@ -394,34 +394,20 @@ struct AuroraBackend::Impl {
     if (last_sequence && input.sequence <= *last_sequence)
       throw CoverageError("Aurora coverage: repeated/reversed source frame; reset_epoch is required after rollback");
     poll_debug_file();
-    aurora_bridge::prepare_frame(input, {options.logical_width, options.logical_height}, prepared);
-    const auto& frame = prepared;
-    if (dump_armed && input.scene_major == dump_major && input.scene_minor == dump_minor && ++dump_seen == dump_after) {
-      dump_armed = false;
-      write_draw_dump(input, frame);
-    }
-    if (dump_now) {
-      dump_now = false;
-      const auto slash = debug_path.find_last_of('/');
-      const std::string saved = dump_path;
-      dump_path = (slash == std::string::npos ? std::string() : debug_path.substr(0, slash + 1)) + "draws-now.txt";
-      write_draw_dump(input, frame);
-      dump_path = saved;
-    }
-    // Copy-history coverage warnings (MELEE_COPY_HISTORY=1 / copy_history=1). Diagnostic only: it compares
-    // every copy-sampling draw's texture bytes with the copy, ~15% of a 4-player frame on the render thread.
-    static const bool copy_history_on = [] { const char* v = std::getenv("MELEE_COPY_HISTORY"); return v && v[0] == '1'; }();
-    if (copy_history_on) aurora_bridge::advance_copy_history_in_place(frame, copy_history);
     if (!aurora_begin_frame()) throw std::runtime_error("Aurora frame unavailable; owner must service the window before submission");
-    for (const auto& cmd : frame.commands) {
+    // Each draw goes to Aurora as soon as it is converted: Aurora's FIFO thread decodes the frame
+    // while this thread is still converting it (it used to start only after the whole frame was ready).
+    const auto& frame = prepared;
+    const auto emit = [&](size_t command_index) {
+      const auto& cmd = frame.commands[command_index];
       if (cmd.kind == FrameCommand::Draw) {
         const auto& d = frame.draws[cmd.index];
-        if (d.vertex_count == 0) continue;   // skipped by the bridge
+        if (d.vertex_count == 0) return;   // skipped by the bridge
         if (g_debug & kDebugSkipCopyDraws) {
           bool samples_copy = false;
           for (unsigned unit = 0; unit < 8; ++unit)
             if (d.textures[unit]->used && copy_tokens.count(d.textures[unit]->addr)) samples_copy = true;
-          if (samples_copy) continue;
+          if (samples_copy) return;
         }
         for (unsigned unit = 0; unit < 8; ++unit) {
           const auto& t = *d.textures[unit];
@@ -435,11 +421,11 @@ struct AuroraBackend::Impl {
         // therefore restored last, before canonical direct vertex bytes.
         fifo::write_data(d.state.data(), uint32_t(d.state.size()));
         fifo::write_u8(d.primitive); fifo::write_u16(d.vertex_count);
-        fifo::write_data(d.vertices.data(), uint32_t(d.vertices.size()));
+        fifo::write_data(d.vertex_data, d.vertex_bytes);
         fifo::finish_draw();
         ++counters.draws;
       } else {
-        if (std::find(frame.skipped_copies.begin(), frame.skipped_copies.end(), cmd.index) != frame.skipped_copies.end()) continue;
+        if (std::find(frame.skipped_copies.begin(), frame.skipped_copies.end(), cmd.index) != frame.skipped_copies.end()) return;
         const auto& c = frame.copies[cmd.index];
         bp(BP_ZMODE, c.zmode); bp(BP_BLENDMODE, c.blendmode);
         bp(BP_CONSTANTALPHA, c.dstalpha); bp(BP_ZCOMPARE, c.zcontrol);
@@ -458,7 +444,24 @@ struct AuroraBackend::Impl {
         // by aurora_end_frame; the next aurora_begin_frame performs its full
         // clear using the copy-time values just loaded. Never clear before blit.
       }
+    };
+    aurora_bridge::prepare_frame(input, {options.logical_width, options.logical_height}, prepared, emit);
+    if (dump_armed && input.scene_major == dump_major && input.scene_minor == dump_minor && ++dump_seen == dump_after) {
+      dump_armed = false;
+      write_draw_dump(input, frame);
     }
+    if (dump_now) {
+      dump_now = false;
+      const auto slash = debug_path.find_last_of('/');
+      const std::string saved = dump_path;
+      dump_path = (slash == std::string::npos ? std::string() : debug_path.substr(0, slash + 1)) + "draws-now.txt";
+      write_draw_dump(input, frame);
+      dump_path = saved;
+    }
+    // Copy-history coverage warnings (MELEE_COPY_HISTORY=1 / copy_history=1). Diagnostic only: it compares
+    // every copy-sampling draw's texture bytes with the copy, ~15% of a 4-player frame on the render thread.
+    static const bool copy_history_on = [] { const char* v = std::getenv("MELEE_COPY_HISTORY"); return v && v[0] == '1'; }();
+    if (copy_history_on) aurora_bridge::advance_copy_history_in_place(frame, copy_history);
     if (g_debug & kDebugShowCopies) show_copies(frame);
     if (g_debug & kDebugShowTextures) show_textures(input); else if (!debug_textures.empty()) debug_textures.clear();
     if (overlay) overlay();

@@ -42,6 +42,8 @@ namespace host {
 
 Options options;
 extern "C" __attribute__((weak)) void aurora_pipeline_background_pause(bool paused);   // Aurora (console)
+extern "C" __attribute__((weak)) int switch_cpu_report(char* out, int cap, double frames);   // switch_threads.c
+extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
 extern "C" __attribute__((weak)) double switch_thread_cpu_ms(void);                  // switch_threads.c
 uint8_t* ram = nullptr;
 uint8_t* aram = nullptr;
@@ -576,9 +578,12 @@ void sim_cost_add(int slot, double seconds) {
   std::lock_guard<std::mutex> lock(g_render_costs_mutex);
   g_render_costs_window[slot] += seconds;
 }
+static uint64_t g_render_skips = 0;   // draw passes left out (render_should_skip)
+static double g_behind_worst_ms = 0.0;   // furthest a frame started after its 60 Hz slot, this log window
+static uint64_t g_grid_resets = 0;       // times the game fell over two frames behind and gave the time up (it ran slow)
 // "sim: 3.1 ms/frame (worst 12.4) | observe 0.9 texsnap 0.4" for the periodic frame log.
 static std::string sim_cost_line(uint32_t frames) {
-  char buf[512];
+  char buf[1024];
   // late: frames of this window over the 16.7 ms budget (after boot warm-up); the run total follows.
   static uint64_t late_reported = 0;
   const uint64_t late_total = late_frame_count();
@@ -591,7 +596,16 @@ static std::string sim_cost_line(uint32_t frames) {
     if (last_cpu >= 0) n += (size_t)std::snprintf(buf + n, sizeof buf - n, " cpu %.1f ms/frame", (cpu - last_cpu) / std::max(1u, frames));
     last_cpu = cpu;
   }
+  if (switch_cpu_report && switch_cpu_register) {   // every thread's running time per frame
+    static bool registered = false;
+    if (!registered) { switch_cpu_register("sim"); registered = true; }
+    n += (size_t)std::snprintf(buf + n, sizeof buf - n, " | threads:");
+    n += (size_t)switch_cpu_report(buf + n, (int)(sizeof buf - n) - 200, frames);
+  }
   late_reported = late_total;
+  n += (size_t)std::snprintf(buf + n, sizeof buf - n, " | behind %.1f ms at worst, %llu slowdowns", g_behind_worst_ms, (unsigned long long)g_grid_resets);
+  g_behind_worst_ms = 0.0;
+  if (g_render_skips) n += (size_t)std::snprintf(buf + n, sizeof buf - n, " | %llu draw passes skipped", (unsigned long long)g_render_skips);
   bool first = true;
   for (int i = 0; i < SIM_COST_COUNT; ++i) {
     double ms = g_sim_costs_window[i] * 1000.0 / std::max(1u, frames);
@@ -613,6 +627,25 @@ static std::string sim_cost_line(uint32_t frames) {
     std::memset(g_render_costs_window, 0, sizeof g_render_costs_window);
   }
   return buf;
+}
+// Render skip. The game's loop is update, then draw. When the update finished so late that drawing
+// would end more than kSkipLateMs past this frame's slot, the draw pass is left out (never twice in
+// a row): the next update starts on time again. Game state does not depend on the draw pass (Slippi's
+// rollback re-simulates frames without it), so this only repeats one picture where the alternative
+// was the whole game and its sound running slow. MELEE_RENDER_SKIP=0 (render_skip=0) turns it off.
+static double g_render_ema_ms = 6.0;
+static bool g_render_skipped_last = false;
+uint64_t render_skip_count() { return g_render_skips; }
+void render_pass_done(double ms) { if (ms < 30.0) g_render_ema_ms += (ms - g_render_ema_ms) * 0.1; }
+bool render_should_skip() {
+  static const bool on = [] { const char* e = std::getenv("MELEE_RENDER_SKIP"); return !(e && e[0] == '0'); }();
+  static const double limit = [] { const char* e = std::getenv("MELEE_RENDER_SKIP_MS"); return e ? std::atof(e) : 5.0; }();
+  if (!on || options.fast || g_retraces < 300 || g_render_skipped_last) { g_render_skipped_last = false; return false; }
+  const double since_slot = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_next_frame).count();
+  if (since_slot + g_render_ema_ms - 16.667 / g_emulation_speed <= limit) return false;
+  g_render_skipped_last = true;
+  ++g_render_skips;
+  return true;
 }
 static uint64_t g_late_frames = 0;
 uint64_t late_frame_count() { return g_late_frames; }
@@ -730,7 +763,12 @@ void retrace() {
     }
     auto now = std::chrono::steady_clock::now();
     if (g_next_frame > now) std::this_thread::sleep_until(g_next_frame);
-    else if (now - g_next_frame > std::chrono::milliseconds(34)) g_next_frame = now;   // after a stall, resume at 60 Hz instead of sprinting to catch up (audio would crackle)
+    else {
+      const double behind = std::chrono::duration<double, std::milli>(now - g_next_frame).count();
+      if (behind > g_behind_worst_ms) g_behind_worst_ms = behind;
+      if (behind > 34.0 && g_retraces > 300) ++g_grid_resets;
+    }
+    if (g_next_frame <= now && now - g_next_frame > std::chrono::milliseconds(34)) g_next_frame = now;   // after a stall, resume at 60 Hz instead of sprinting to catch up (audio would crackle)
     g_frame_time = std::chrono::duration<double>(g_next_frame.time_since_epoch()).count();
   } else {
     g_frame_time = now_seconds();

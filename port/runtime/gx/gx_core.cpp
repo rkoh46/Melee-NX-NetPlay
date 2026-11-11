@@ -446,8 +446,61 @@ void snapshot_textures(DrawCall& dc) {
   }
 }
 
+// Draw merging. A model's display list is dozens of triangle strips drawn one after another with no
+// register, matrix, array or texture write between them; each used to become its own draw record,
+// its own state comparison in the bridge, its own draw in Aurora and in the GPU driver (~3,300 a frame
+// in a 4-player match). A primitive that follows the previous one with nothing written in between is
+// appended to it instead: lists are concatenated, strips are joined with repeated vertices (zero-area
+// triangles, which rasterise to nothing; the count is padded so the second strip keeps its winding).
+// The picture is the same, triangle for triangle and in the same order. MELEE_DRAW_MERGE=0 turns it off.
+uint64_t g_merge_cp_version = ~uint64_t(0);   // g_cp_version when the last draw was recorded
+bool g_draw_merge = true;
+bool dirty_is_empty(const StateDelta& d) {
+  return !(d.bp[0] | d.bp[1] | d.bp[2] | d.bp[3] | d.pos | d.post | d.xf[0] | d.xf[1] | d.nrm | d.lights) && !d.tev;
+}
+bool merge_into_previous(uint32_t primitive, uint32_t count) {
+  if (!g_draw_merge || !g_state_deltas || !g_raw_pending.valid || g_frame.draws.empty() || g_cp_version != g_merge_cp_version ||
+      !dirty_is_empty(g_dirty)) return false;
+  if (primitive != 0x98 && primitive != 0x90 && primitive != 0x80) return false;   // strips, triangles, quads
+  const FrameCommand& last = g_frame.commands.back();
+  if (last.kind != FrameCommand::Draw || last.index != g_frame.draws.size() - 1) return false;
+  DrawCall& p = g_frame.draws.back();
+  const VertexDesc& desc = *g_raw_pending.desc;
+  if (p.primitive != primitive || !p.raw_size || p.vtxfmt != g_raw_pending.fmt || p.vcd_lo != desc.vcd_lo || p.vcd_hi != desc.vcd_hi ||
+      p.raw_offset + p.raw_size != g_raw_pending.offset || p.vertex_count + count + 3 > 12000) return false;
+  for (int i = 0; i < 12; ++i) {
+    const VertexArrayRef& a = g_raw_pending.arrays[i];
+    if (a.data != p.arrays[i].data || a.stride != p.arrays[i].stride) return false;
+  }
+  auto& raw = g_frame.raw_vertices;
+  uint32_t extra = 0;
+  if (primitive == 0x98) {
+    extra = 2 + (p.vertex_count & 1);
+    const size_t stride = desc.size, at = g_raw_pending.offset;
+    uint8_t join[3 * 256];
+    if (stride > 256 || count < 1) return false;
+    std::memcpy(join, raw.data() + at - stride, stride);                                  // the first strip's last vertex
+    for (uint32_t k = 1; k < extra; ++k) std::memcpy(join + k * stride, raw.data() + at, stride);   // the second strip's first
+    raw.insert(raw.begin() + at, join, join + extra * stride);
+  }
+  p.vertex_count += count + extra;
+  p.raw_size = uint32_t(raw.size()) - p.raw_offset;
+  for (int i = 0; i < 12; ++i) {
+    VertexArrayRef& a = g_raw_pending.arrays[i];
+    if (a.data) { p.arrays[i].count = std::max(p.arrays[i].count, a.count); p.arrays[i].bytes = std::max(p.arrays[i].bytes, a.bytes); a.data.reset(); }
+  }
+  g_raw_pending.valid = false;
+  return true;
+}
+
 void record_draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t components) {
   host::SimCostScope record_cost(host::SIM_RECORD);
+  {
+    static uint64_t merged = 0, seen = 0;
+    if ((++seen % 200000) == 0) host::log("gx: %llu draws so far, %llu joined to the draw before them", (unsigned long long)seen, (unsigned long long)merged);
+    if (merge_into_previous(primitive, count)) { ++merged; ++g_draws; g_vertices += count; return; }
+    g_merge_cp_version = g_cp_version;
+  }
   // Filled in place: the recycled frame buffers keep their storage warm between frames, and the
   // 5 KB move of a stack copy was a measurable share of the simulation thread on the console.
   g_frame.draws.emplace_back(DrawCall::SkipInit{});
@@ -739,6 +792,7 @@ void init(Backend* backend) {
   g_backend = backend;
   g_raw_vertices = backend && backend->wants_raw_vertices();
   g_state_deltas = backend && backend->wants_state_deltas();
+  if (const char* e = std::getenv("MELEE_DRAW_MERGE")) g_draw_merge = e[0] != '0';
   set_render_observe(!g_state_deltas);   // Aurora uses no draw identities, authored poses or owner tints
   std::memset(&g_bp, 0, sizeof g_bp);
   std::memset(&g_cp, 0, sizeof g_cp);
@@ -830,6 +884,7 @@ const uint8_t* tmem() { return g_tmem; }
 // parse state above belongs to the worker in this mode; the guest touches only the producer buffer.
 }  // namespace gx
 extern "C" __attribute__((weak)) void switch_pin_current_thread(int core, int priority);
+extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
 namespace gx {
 namespace {
 bool g_gpu_threaded = false;
@@ -855,6 +910,7 @@ void gpu_consume(const uint8_t* data, size_t len) {
   fifo_parse_pending();
 }
 void gpu_main() {
+  if (switch_cpu_register) switch_cpu_register("gxparse");
   if (switch_pin_current_thread) switch_pin_current_thread(0, 0x26);   // ahead of Aurora's FIFO and render workers on core 0: the guest waits for this thread at every frame end
   host::ScopedFatalBoundary boundary(true);   // a fatal error here is relayed to the guest thread
   try {
