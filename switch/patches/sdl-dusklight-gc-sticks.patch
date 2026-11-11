@@ -1,0 +1,59 @@
+--- a/src/joystick/switch/SDL_sysjoystick.c
++++ b/src/joystick/switch/SDL_sysjoystick.c
+@@ -244,6 +244,42 @@
+     return full * 2 - 32768;
+ }
+ 
++/* GameCube sticks in GameCube units. The system reports a GameCube stick calibrated to the full
++ * +-32767 range (the gate reads ~32767), while a real controller reads about +-100 at the gate
++ * around its own centre, and Melee scales by 80 with its own dead zone of 22. Passing the system's
++ * value on (/256 = +-127) made every stick 27% more sensitive than on a GameCube, and the generic
++ * gamepad dead zone above it removed 1..30 entirely. The app takes these values directly for a
++ * GameCube pad (melee_nx_switch_gc_sticks); melee_nx_gc_stick_range is its "Stick range" setting.
++ * melee_nx_gc_stick_min keeps the smallest non-zero deflection the system reported (its own dead
++ * zone), for the log. */
++int melee_nx_gc_stick_range = 100;
++int melee_nx_gc_stick_min[SWITCH_MAX_PLAYERS];
++static signed char g_gc_sticks[SWITCH_MAX_PLAYERS][4];
++static bool g_gc_style[SWITCH_MAX_PLAYERS];
++static signed char gc_stick_value(int slot, int v)
++{
++    const int mag = v < 0 ? -v : v;
++    if (mag > 0 && (melee_nx_gc_stick_min[slot] == 0 || mag < melee_nx_gc_stick_min[slot])) {
++        melee_nx_gc_stick_min[slot] = mag;
++    }
++    const int range = melee_nx_gc_stick_range < 60 ? 60 : (melee_nx_gc_stick_range > 127 ? 127 : melee_nx_gc_stick_range);
++    int r = (mag * range + 16383) / 32767;
++    if (r > 127) {
++        r = 127;
++    }
++    return (signed char)(v < 0 ? -r : r);
++}
++int melee_nx_switch_gc_sticks(SDL_JoystickID id, signed char out[4])
++{
++    for (int slot = 0; slot < SWITCH_MAX_PLAYERS; ++slot) {
++        if (id != 0 && g_connected[slot] && g_instance_ids[slot] == id && g_gc_style[slot]) {
++            SDL_memcpy(out, g_gc_sticks[slot], 4);
++            return 1;
++        }
++    }
++    return 0;
++}
++
+ static Sint16 clamp_axis(int v)
+ {
+     if (v > SDL_JOYSTICK_AXIS_MAX) {
+@@ -299,6 +335,13 @@
+     SDL_SendJoystickAxis(timestamp, joystick, 1, clamp_axis(-l.y));
+     SDL_SendJoystickAxis(timestamp, joystick, 2, clamp_axis(r.x));
+     SDL_SendJoystickAxis(timestamp, joystick, 3, clamp_axis(-r.y));
++    g_gc_style[slot] = (padGetStyleSet(pad) & HidNpadStyleTag_NpadGc) != 0;
++    if (g_gc_style[slot]) {
++        g_gc_sticks[slot][0] = gc_stick_value(slot, l.x);
++        g_gc_sticks[slot][1] = gc_stick_value(slot, l.y);   /* up is positive on both */
++        g_gc_sticks[slot][2] = gc_stick_value(slot, r.x);
++        g_gc_sticks[slot][3] = gc_stick_value(slot, r.y);
++    }
+ 
+     /* Analog triggers exist only on a GameCube controller through the adapter (NpadGc
+      * style). The system presents GC L/R as ZL/ZR and GC Z as R, so deriving the trigger

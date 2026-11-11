@@ -84,6 +84,7 @@ std::vector<std::string> list_replays() {
   return names;
 }
 #if MELEE_NX_AURORA
+extern "C" int melee_nx_gc_stick_range;     // SDL's Switch joystick backend (sdl-dusklight-gc-sticks.patch)
 extern "C" int melee_nx_gc_trigger_scale;   // SDL's Switch joystick backend (sdl-dusklight-gc-trigger-range.patch)
 #endif
 std::string g_base;
@@ -225,6 +226,9 @@ void simulation_thread(void*) {
               case host::MenuChange::Msaa: g_ini["msaa"] = std::to_string(st.msaa); break;
               case host::MenuChange::Anisotropy: g_ini["anisotropy"] = std::to_string(st.anisotropy); break;
               case host::MenuChange::FullSpeed: host::set_render_skip(st.full_speed); g_ini["render_skip"] = st.full_speed ? "1" : "0"; break;
+              case host::MenuChange::Stick:
+                melee_nx_gc_stick_range = st.stick_range; g_ini["stick_range"] = std::to_string(st.stick_range);
+                host::log("pad: GameCube stick range %d", st.stick_range); break;
               case host::MenuChange::Trigger:
                 melee_nx_gc_trigger_scale = st.trigger_range; g_ini["trigger_range"] = std::to_string(st.trigger_range);
                 host::log("pad: light shield range %dx", st.trigger_range); break;
@@ -441,6 +445,8 @@ int main(int argc, char** argv) {
   setenv("MELEE_ANISOTROPY", std::to_string(g_rs.anisotropy).c_str(), 1);
 #if MELEE_NX_AURORA
   melee_nx_gc_trigger_scale = g_rs.trigger_range;
+  g_rs.stick_range = std::clamp((int)std::strtol(get("stick_range", "100").c_str(), nullptr, 10), 80, 120);
+  melee_nx_gc_stick_range = g_rs.stick_range;
 #endif
   // Slippi identity: user.json (connect code, play key) in User/Slippi, the Slippi
   // Launcher's own layout, until the console has a sign-in screen. The online

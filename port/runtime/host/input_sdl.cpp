@@ -54,10 +54,18 @@ void keyboard(PadState& p) {
 
 #if defined(__SWITCH__)
 extern "C" int melee_nx_gc_trigger_travel[8];   // SDL's Switch joystick backend
+extern "C" int melee_nx_gc_stick_min[4];
+extern "C" int melee_nx_switch_gc_sticks(SDL_JoystickID id, signed char out[4]);
 #endif
 // Aurora maps every connected SDL gamepad to a GameCube layout per port.
 uint32_t gamepads(PadState out[4]) {
   if (!g_pad_initialized) { PADInit(); g_pad_initialized = true; }
+#if defined(__SWITCH__)
+  // Read the controllers now, on the game thread. SDL otherwise refreshes them only when the
+  // render thread pumps events between its frames, so PADRead saw a state up to a frame old (and
+  // a frozen one while the renderer stalled). SDL_UpdateJoysticks takes SDL's joystick lock.
+  SDL_UpdateJoysticks();
+#endif
   PADStatus status[4];
   std::memset(status, 0, sizeof status);
   const uint32_t mask = PADRead(status);
@@ -76,6 +84,27 @@ uint32_t gamepads(PadState out[4]) {
     p.analog_a = status[port].analogA;
     p.analog_b = status[port].analogB;
 #if defined(__SWITCH__)
+    // A GameCube controller's sticks in GameCube units, without the generic gamepad dead zone
+    // (sdl-dusklight-gc-sticks.patch): Melee applies its own, as on the console.
+    {
+      signed char gc[4];
+      const s32 index = PADGetIndexForPort(uint32_t(port));
+      SDL_Gamepad* gamepad = index >= 0 ? PADGetSDLGamepadForIndex(uint32_t(index)) : nullptr;
+      if (gamepad && melee_nx_switch_gc_sticks(SDL_GetGamepadID(gamepad), gc)) {
+        p.stick_x = gc[0]; p.stick_y = gc[1]; p.sub_x = gc[2]; p.sub_y = gc[3];
+        static bool logged[4];
+        if (!logged[port]) {
+          logged[port] = true;
+          log("pad %d: GameCube controller, sticks read directly in GameCube units", port + 1);
+        }
+      }
+      static int logged_min[4];
+      for (int slot = 0; slot < 4; ++slot)
+        if (melee_nx_gc_stick_min[slot] && melee_nx_gc_stick_min[slot] != logged_min[slot] && (logged_min[slot] == 0 || melee_nx_gc_stick_min[slot] < logged_min[slot] / 2)) {
+          logged_min[slot] = melee_nx_gc_stick_min[slot];
+          log("pad: controller slot %d smallest GameCube stick movement the system reports: %d of 32767", slot + 1, logged_min[slot]);
+        }
+    }
     // Bring-up diagnostic: what the console's controller mapping delivers for the shoulders
     // (digital L/R/Z bits and the analog pulls), at most twice a second and only on change.
     static uint32_t last_key[4]; static double next_log = 0.0;

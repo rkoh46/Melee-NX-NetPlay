@@ -76,6 +76,7 @@ prepare() {
                            "$repo/switch/patches/sdl-dusklight-melee-nx.patch" \
                            "$repo/switch/patches/sdl-dusklight-gc-layout.patch"
     apply_patch_once "$sdl"                       "$repo/switch/patches/sdl-dusklight-gc-trigger-range.patch"
+    apply_patch_once "$sdl"                       "$repo/switch/patches/sdl-dusklight-gc-sticks.patch"
   else
     apply_patch_once "$sdl"                       "$repo/switch/patches/sdl-switch-external-graphics.patch"
   fi

@@ -29,9 +29,10 @@ struct RuntimeSettings {
   int filter = 0;                // console: screen filter (0 smooth, 1 area, 2 CRT, 3 vibrant)
   int msaa = 1;                  // console: antialiasing samples (1 or 4), next launch
   bool full_speed = true;        // console: leave out a picture when the game falls behind, so it never slows down
+  int stick_range = 100;         // console: GameCube stick value at the gate (80..120; a real controller reads ~100)
   int trigger_range = 4;         // console: GameCube analog trigger scale (2..8; higher reaches full shield sooner)
 };
-enum class MenuChange { Graphics, Volume, TouchControls, Fullscreen, Hud, Widescreen, OnlineDelay, Filter, Msaa, FullSpeed, Trigger, Anisotropy };
+enum class MenuChange { Graphics, Volume, TouchControls, Fullscreen, Hud, Widescreen, OnlineDelay, Filter, Msaa, FullSpeed, Trigger, Anisotropy, Stick };
 // Console: the Watch replays page lists these (newest first) and calls `watch` with the chosen one.
 void menu_open_replays();                  // opens the menu on the Watch replays page
 void menu_close();

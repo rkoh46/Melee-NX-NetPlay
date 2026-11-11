@@ -65,7 +65,13 @@ recovery, GX CPU-side state suppression). Work items:
   `stb_truetype` or Aurora's ImGui pass;
 - SDL3 input through the Dusklight backend; the official GameCube adapter appears as a standard
   pad, with analog triggers from Melee-NX's SDL patch; Dashdance's controller mapping
-  (`input_config.*`) carries over.
+  (`input_config.*`) carries over. The system owns the adapter (usb:hs refuses it, so the 1000 Hz
+  reader in `gc_adapter_usbhs.cpp` only runs when it is free) and updates each GameCube pad 200
+  times a second. The game thread calls `SDL_UpdateJoysticks()` itself before every `PADRead`
+  (otherwise the render thread's event pump refreshed the pads, up to a frame late), and a
+  GameCube pad's sticks bypass the generic gamepad conversion: `sdl-dusklight-gc-sticks.patch`
+  scales the system's calibrated +-32767 to a real controller's ~+-100 at the gate (`stick_range`,
+  80..120) without a dead zone, which Melee applies itself.
 
 ## Phase 3: online
 

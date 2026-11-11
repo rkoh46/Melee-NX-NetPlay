@@ -27,7 +27,7 @@ constexpr int kSkipFrames = 6 * 60;   // remap: a control left untouched for 6 s
 
 enum class Page { Main, Controls, Remap, Replays };
 enum MainRow { ROW_SCALE, ROW_ANISO, ROW_UPSCALE, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_FILTER, ROW_MSAA, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN,
-               ROW_ONLINE_DELAY, ROW_FULLSPEED, ROW_TRIGGER, ROW_CONTROLS, ROW_REPLAYS, ROW_HUD, ROW_RESUME, ROW_QUIT, ROW_MAIN_COUNT };
+               ROW_ONLINE_DELAY, ROW_FULLSPEED, ROW_TRIGGER, ROW_STICK, ROW_CONTROLS, ROW_REPLAYS, ROW_HUD, ROW_RESUME, ROW_QUIT, ROW_MAIN_COUNT };
 // Rows that are actions (A opens or does something), not values stepped with left/right.
 bool action_row(int r) { return r == ROW_RESUME || r == ROW_CONTROLS || r == ROW_QUIT || r == ROW_REPLAYS; }
 // Watch replays page (console).
@@ -86,7 +86,7 @@ std::vector<int> main_rows() {
     if (r == ROW_REPLAYS && !g_replay_list) continue;
 #else
     if (r == ROW_QUIT) continue;   // a GameCube controller has no HOME button; elsewhere the system quits
-    if (r == ROW_FILTER || r == ROW_MSAA || r == ROW_FULLSPEED || r == ROW_TRIGGER || r == ROW_REPLAYS) continue;   // console rows
+    if (r == ROW_FILTER || r == ROW_MSAA || r == ROW_FULLSPEED || r == ROW_TRIGGER || r == ROW_STICK || r == ROW_REPLAYS) continue;   // console rows
 #endif
     v.push_back(r);
   }
@@ -111,6 +111,7 @@ const char* main_name(int r) {
 #endif
     case ROW_FULLSPEED: return "Keep full speed";
     case ROW_TRIGGER: return "Light shield range";
+    case ROW_STICK: return "GameCube stick range";
     case ROW_REPLAYS: return "Watch replays";
     case ROW_UPSCALE: return "MetalFX upscaling";
     case ROW_SHARPEN: return "Sharpen";
@@ -137,6 +138,7 @@ std::string main_value(int r, const RuntimeSettings& s) {
     case ROW_FILTER: return s.filter == 1 ? "Area" : s.filter == 2 ? "CRT" : s.filter == 3 ? "Vibrant" : "Smooth";
     case ROW_MSAA: return s.msaa > 1 ? "4x" : "Off";
     case ROW_FULLSPEED: return s.full_speed ? "On" : "Off";
+    case ROW_STICK: std::snprintf(b, sizeof b, "%d (%s)", s.stick_range, s.stick_range == 100 ? "GameCube" : s.stick_range > 100 ? "more sensitive" : "less sensitive"); return b;
     case ROW_TRIGGER: std::snprintf(b, sizeof b, "%s (%dx)", s.trigger_range <= 3 ? "Wide" : s.trigger_range == 4 ? "Normal" : "Short", s.trigger_range); return b;
     case ROW_REPLAYS: return ">";
 #if !defined(__SWITCH__)
@@ -170,6 +172,7 @@ int main_step(int r, int dir, RuntimeSettings& s) {
     case ROW_FILTER: s.filter = (s.filter + 4 + dir) % 4; return (int)MenuChange::Filter;
     case ROW_MSAA: s.msaa = s.msaa > 1 ? 1 : 4; return (int)MenuChange::Msaa;   // Aurora offers off or 4x
     case ROW_FULLSPEED: s.full_speed = !s.full_speed; return (int)MenuChange::FullSpeed;
+    case ROW_STICK: { const int v = std::clamp(s.stick_range + dir * 4, 80, 120); if (v == s.stick_range) return -1; s.stick_range = v; return (int)MenuChange::Stick; }
     case ROW_TRIGGER: { const int v = std::clamp(s.trigger_range + dir, 2, 8); if (v == s.trigger_range) return -1; s.trigger_range = v; return (int)MenuChange::Trigger; }
 #if !defined(__SWITCH__)
     case ROW_SCALE: { int i = 0; for (int k = 0; k < 7; ++k) if (scales[k] == s.scale) i = k; i = std::clamp(i + dir, 0, 6); s.scale = scales[i]; return (int)MenuChange::Graphics; }
