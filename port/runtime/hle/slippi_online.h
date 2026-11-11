@@ -15,10 +15,13 @@ struct Config {
   bool offline = true;
   uint32_t offline_seed = 0;     // reproducible local seed requests; no wall-clock source
   int delay = 2;                 // Slippi Online input delay (frames)
+  bool delay_auto = false;       // pick 2..5 from the opponent's ping at each game's start (delay ignored)
   int chat = 0;                  // 0 enabled, 1 direct only, 2 disabled
   bool show_local_rank = true, show_opponent_rank = true;
 };
 Config& config();
+// The input delay the next game uses: config().delay, or the automatic choice from the measured ping.
+int effective_delay();
 
 void init();
 void shutdown();

@@ -209,7 +209,7 @@ void simulation_thread(void*) {
         }
         {
           host::RuntimeSettings rs = g_rs;
-          rs.volume = g_volume; rs.hud = g_hud; rs.online_delay = online.delay; rs.vsync = true;
+          rs.volume = g_volume; rs.hud = g_hud; rs.online_delay = online.delay_auto ? 0 : online.delay; rs.vsync = true;
           // Live picture settings from launcher.ini.
           if (rs.scale) host::switch_frontend_set_scale(rs.scale);
           if (!rs.widescreen) { host::switch_frontend_set_aspect(false); slippi::request_widescreen(false); }
@@ -231,9 +231,11 @@ void simulation_thread(void*) {
               case host::MenuChange::Volume: host::audio_set_volume(st.volume); g_ini["volume"] = std::to_string(st.volume); break;
               case host::MenuChange::Hud: g_ini["hud"] = st.hud ? "1" : "0"; break;
               case host::MenuChange::OnlineDelay:
-                slippi::online::config().delay = st.online_delay;
-                g_ini["online_delay"] = std::to_string(st.online_delay);
-                host::log("slippi: online input delay now %d frame%s, from the next match", st.online_delay, st.online_delay == 1 ? "" : "s");
+                slippi::online::config().delay_auto = st.online_delay <= 0;
+                if (st.online_delay > 0) slippi::online::config().delay = st.online_delay;
+                g_ini["online_delay"] = st.online_delay <= 0 ? "auto" : std::to_string(st.online_delay);
+                if (st.online_delay <= 0) host::log("slippi: online input delay now automatic (from ping), from the next game");
+                else host::log("slippi: online input delay now %d frame%s, from the next match", st.online_delay, st.online_delay == 1 ? "" : "s");
                 break;
               default: break;   // graphics, touch and fullscreen rows have no effect on the console yet
             }
@@ -445,8 +447,11 @@ int main(int argc, char** argv) {
   // input delay is a player setting (1..9, Slippi's default 2), never hardcoded.
   auto& online = slippi::online::config();
   online.user_dir = base + "/User/Slippi";
-  int delay = static_cast<int>(std::strtol(get("online_delay", "2").c_str(), nullptr, 10));
-  online.delay = delay < 1 ? 1 : delay > 9 ? 9 : delay;
+  // "auto" (or 0): 2..5 frames from the opponent's ping at each game's start (slippi_online.cpp).
+  const std::string delay_text = get("online_delay", "auto");
+  int delay = delay_text == "auto" ? 0 : static_cast<int>(std::strtol(delay_text.c_str(), nullptr, 10));
+  online.delay_auto = delay <= 0;
+  online.delay = delay < 1 ? 2 : delay > 9 ? 9 : delay;
 #if MELEE_NX_AURORA && !defined(MELEE_PORT_OFFLINE)
   o.offline = get("offline", "0") == "1";
 #else

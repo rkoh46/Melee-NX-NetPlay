@@ -5,6 +5,8 @@ extern "C" {
 #endif
 // Start after stdout/stderr have been redirected. Before init, writes are synchronous.
 void melee_nx_log_init(void);
+// Nonzero during a match: fewer, larger SD-card writes (see log_switch.cpp).
+void melee_nx_log_set_quiet(int on);
 double melee_nx_log_now_ms(void);
 void melee_nx_log_write(const char* bytes, size_t size);
 void melee_nx_log_write_critical(const char* bytes, size_t size);

@@ -81,8 +81,8 @@ no Mesa checkout, as in Melee-NX.
 The renderer build includes the Slippi online services (`MELEE_NX_ONLINE`, on by default). Until the
 console has a sign-in screen, copy your Slippi identity from the Slippi Launcher
 (`.../Slippi Launcher/netplay/User/Slippi/user.json`: connect code and play key) to
-`sdmc:/switch/melee-nx-netplay/User/Slippi/user.json`. `launcher.ini` keys: `online_delay=` (1..9,
-default 2), `offline=1` to skip the sign-in and keep the services off, `volume=` (0..100), `hud=1`,
+`sdmc:/switch/melee-nx-netplay/User/Slippi/user.json`. `launcher.ini` keys: `online_delay=` (`auto`, the
+default: 2..5 frames from the opponent's ping; or a fixed 1..9), `offline=1` to skip the sign-in and keep the services off, `volume=` (0..100), `hud=1`,
 `overclock=` (1: ask for Erista's top clocks, CPU 1785 / GPU 921 / memory 1600 MHz, tunable with
 `clock_cpu_mhz=` `clock_gpu_mhz=` `clock_mem_mhz=`; 0: the system's clocks). The in-game menu is
 L+R+Start held half a second. Without a saved identity the renderer shows the Slippi sign-in screen first.

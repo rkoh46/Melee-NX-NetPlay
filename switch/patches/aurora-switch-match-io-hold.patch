@@ -1,0 +1,103 @@
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -273,6 +273,7 @@
+ static bool g_pipelineCacheBroken = false;
+ static std::thread g_pipelineCacheWriterThread;
+ static std::condition_variable g_pipelineCacheWriterCv;
++static bool g_pipelineCacheFlushWanted = false;   // guarded by g_pipelineCacheWriterMutex
+ static std::mutex g_pipelineCacheWriterMutex;
+ static std::deque<PipelineCacheWrite> g_pipelineCacheWriteQueue;
+ static bool g_pipelineCacheWriterStop = false;
+@@ -1364,8 +1365,15 @@
+     std::deque<PipelineCacheWrite> batch;
+     {
+       std::unique_lock lock{g_pipelineCacheWriterMutex};
+-      g_pipelineCacheWriterCv.wait(lock,
+-                                   [] { return g_pipelineCacheWriterStop || !g_pipelineCacheWriteQueue.empty(); });
++      // While the host has a match running (background pause), hold the queue in RAM: a SQLite
++      // transaction on Horizon is a journal create, two syncs and a delete on the SD card, and the
++      // console's system core then answered the game's socket calls 40-230 ms late (online
++      // freezes, Nov 2026). The held records land together when the match ends.
++      g_pipelineCacheWriterCv.wait(lock, [] {
++        return g_pipelineCacheWriterStop || g_pipelineCacheFlushWanted ||
++               (!g_pipelineCacheWriteQueue.empty() && !g_backgroundPaused.load(std::memory_order_relaxed));
++      });
++      g_pipelineCacheFlushWanted = false;
+       if (g_pipelineCacheWriterStop && g_pipelineCacheWriteQueue.empty()) {
+         return;
+       }
+@@ -1373,7 +1381,7 @@
+     }
+ 
+     bool writeFailed = false;
+-    {
++    if (!batch.empty()) {
+       // See load_pipeline_cache's SWITCH_IO_LOCK comment: this thread's sqlite
+       // writes need the same guard against DvdWorker's/file_cache's sdmc:
+       // reads on their own threads.
+@@ -1403,6 +1411,9 @@
+     if (writeFailed) {
+       return;
+     }
++    // Dawn's blob cache holds its batches during a match too (webgpu::cache_hold_writes); write
++    // them now, from this I/O thread rather than the game thread that ended the pause.
++    webgpu::cache_flush();
+   }
+ }
+ 
+@@ -2183,4 +2194,10 @@
+ // C entry point for the application: pause (true) or resume (false) background pipeline pre-warm.
+ extern "C" void aurora_pipeline_background_pause(bool paused) {
+   aurora::gfx::g_backgroundPaused.store(paused, std::memory_order_relaxed);
++  aurora::webgpu::cache_hold_writes(paused);
++  {
++    std::lock_guard lock{aurora::gfx::g_pipelineCacheWriterMutex};
++    if (!paused) aurora::gfx::g_pipelineCacheFlushWanted = true;   // the writer then flushes Dawn's held blobs
++  }
++  aurora::gfx::g_pipelineCacheWriterCv.notify_one();
+ }
+--- a/lib/webgpu/gpu_cache.cpp
++++ b/lib/webgpu/gpu_cache.cpp
+@@ -1,3 +1,4 @@
++#include <atomic>
+ #include <chrono>
+ #include <cstdio>
+ #include <cstring>
+@@ -64,6 +65,8 @@
+ // little, large enough to amortise the journal cost by ~2 orders of magnitude.
+ constexpr size_t MaxPendingCacheWrites = 64;
+ constexpr size_t MaxPendingCacheBytes = 4ull * 1024 * 1024;
++constexpr size_t MaxHeldCacheBytes = 24ull * 1024 * 1024;
++static std::atomic_bool s_holdWrites{false};
+ 
+ constexpr int CACHE_SCHEMA = 2;
+ // % of rows pruned to trigger a full VACUUM
+@@ -675,11 +678,16 @@
+   pending_writes.push_back(std::move(write));
+   cache_keys_used.push_back(keyHash);
+ 
+-  if (pending_writes.size() >= MaxPendingCacheWrites || pending_write_bytes >= MaxPendingCacheBytes) {
++  // During a match the batch waits (up to a hard cap) and lands when the host ends the pause:
++  // each commit is SD-card journal traffic that delayed the game's socket calls (online freezes).
++  const bool hold = s_holdWrites.load(std::memory_order_relaxed) && pending_write_bytes < MaxHeldCacheBytes;
++  if (!hold && (pending_writes.size() >= MaxPendingCacheWrites || pending_write_bytes >= MaxPendingCacheBytes)) {
+     flush_pending_writes_locked();
+   }
+ }
+ 
++void cache_hold_writes(bool hold) { s_holdWrites.store(hold, std::memory_order_relaxed); }
++
+ void cache_prune() {
+   std::lock_guard lock(cache_mutex);
+ #if defined(__SWITCH__)
+--- a/lib/webgpu/gpu.hpp
++++ b/lib/webgpu/gpu.hpp
+@@ -78,6 +78,8 @@
+ void cache_prune();
+ // Commit blobs store_to_cache has buffered but not yet written.
+ void cache_flush();
++// While true, store_to_cache keeps blobs in RAM instead of committing a batch (a match is running).
++void cache_hold_writes(bool hold);
+ // Nanoseconds the calling thread has spent in load_from_cache, lock wait included.
+ uint64_t cache_thread_ns();
+ void cache_shutdown();

@@ -153,7 +153,7 @@ std::string main_value(int r, const RuntimeSettings& s) {
     case ROW_TOUCH_OPACITY: std::snprintf(b, sizeof b, "%d%%", (int)std::lround(s.overlay_opacity * 100)); return b;
     case ROW_TOUCH_SIZE: std::snprintf(b, sizeof b, "%.2fx", s.overlay_scale); return b;
     case ROW_FULLSCREEN: return s.fullscreen ? "On" : "Off";
-    case ROW_ONLINE_DELAY: if (s.online_delay <= 1) return "1 frame (lowest)"; std::snprintf(b, sizeof b, "%d frames", s.online_delay); return b;
+    case ROW_ONLINE_DELAY: if (s.online_delay <= 0) return "Auto (from ping)"; if (s.online_delay == 1) return "1 frame (lowest)"; std::snprintf(b, sizeof b, "%d frames", s.online_delay); return b;
     case ROW_CONTROLS: return ">";
     case ROW_HUD: return s.hud ? "On" : "Off";
   }
@@ -183,7 +183,7 @@ int main_step(int r, int dir, RuntimeSettings& s) {
     case ROW_TOUCH_OPACITY: s.overlay_opacity = std::clamp(s.overlay_opacity + 0.1f * dir, 0.1f, 1.0f); return (int)MenuChange::TouchControls;
     case ROW_TOUCH_SIZE: s.overlay_scale = std::clamp(s.overlay_scale + 0.1f * dir, 0.7f, 1.4f); return (int)MenuChange::TouchControls;
     case ROW_FULLSCREEN: s.fullscreen = !s.fullscreen; return (int)MenuChange::Fullscreen;
-    case ROW_ONLINE_DELAY: { const int d = std::clamp(s.online_delay + dir, 1, 9); if (d == s.online_delay) return -1; s.online_delay = d; return (int)MenuChange::OnlineDelay; }
+    case ROW_ONLINE_DELAY: { const int d = std::clamp(s.online_delay + dir, 0, 9); if (d == s.online_delay) return -1; s.online_delay = d; return (int)MenuChange::OnlineDelay; }
     case ROW_HUD: s.hud = !s.hud; return (int)MenuChange::Hud;
   }
   return -1;

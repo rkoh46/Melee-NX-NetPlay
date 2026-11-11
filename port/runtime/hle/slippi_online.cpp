@@ -41,6 +41,7 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
 #include "gx_core.h"
 #include "window.h"
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -555,6 +556,7 @@ void set_match_selections(const uint8_t* payload) {
 
 void prepare_online_match_state(std::vector<uint8_t>& q);
 
+
 void prepare_online_match_state(std::vector<uint8_t>& q) {
   host::set_emulation_speed(1.0);
   static std::vector<uint8_t> block = {
@@ -740,7 +742,7 @@ void prepare_online_match_state(std::vector<uint8_t>& q) {
   if (g_recent_mm_result.items != 0) { items |= (uint64_t)g_recent_mm_result.items << 28; block[0xB] = 3; }
   for (int i = 0; i < 8; ++i) block[0x23 + i] = (uint8_t)(items >> (56 - 8 * i));
   append_u32(q, rng_offset);
-  q.push_back((uint8_t)g_config.delay);
+  q.push_back((uint8_t)effective_delay());
   q.push_back(sent_chat_message_id);
   q.push_back(chat_message_id);
   q.push_back(chat_message_player_idx);
@@ -851,6 +853,19 @@ void handle_get_player_settings(std::vector<uint8_t>& q) {
 }
 
 }  // namespace
+
+// Automatic delay: one frame of delay per ~33 ms of round trip (half of it is the one-way trip, in
+// 16.7 ms frames), at least Slippi's default 2 and at most 5. At 95 ms with delay 2 the console rolled
+// back two frames every fourth frame and fell behind 800 times in 46 s (Nov 2026); delay 3 removes most
+// of those rollbacks for one frame of input lag.
+int effective_delay() {
+  if (!g_config.delay_auto) return g_config.delay;
+  const unsigned rtt = g_netplay ? g_netplay->RoundTripMs() : 0;
+  const int d = rtt ? std::clamp((int)std::lround(rtt / 33.3), 2, 5) : 2;
+  static int last = -1; static unsigned last_rtt = 0;
+  if (d != last) { host::log("slippi: automatic input delay %d frames (round trip %u ms, was %d at %u ms)", d, rtt, last, last_rtt); last = d; last_rtt = rtt; }
+  return d;
+}
 
 Config& config() { return g_config; }
 bool available() { return true; }
@@ -976,7 +991,7 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
       return true;
     }
     case CMD_GET_PLAYER_SETTINGS: handle_get_player_settings(q); return true;
-    case CMD_GET_DELAY: q.clear(); q.push_back(1); q.push_back((uint8_t)g_config.delay); return true;
+    case CMD_GET_DELAY: q.clear(); q.push_back(1); q.push_back((uint8_t)effective_delay()); return true;
     case CMD_GET_RANK: {
       // CEXISlippi::handleGetRank: visibility, fetch status, rank, ordinal, update count, change, rank change.
       q.clear();

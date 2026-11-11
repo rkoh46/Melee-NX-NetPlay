@@ -1,4 +1,5 @@
 #include "log_switch.h"
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -15,7 +16,12 @@
 #endif
 
 namespace {
-constexpr size_t Capacity = 128 * 1024;
+constexpr size_t Capacity = 256 * 1024;
+// During a match (melee_nx_log_set_quiet) the writer touches the SD card every 3 s, or when the buffer
+// is half full, instead of every 100 ms with a sync each second: SD traffic kept the console's system
+// core busy and the game's socket calls waited behind it (online freezes, Nov 2026).
+std::atomic<bool> quiet{false};
+size_t wake_bytes() { return quiet.load(std::memory_order_relaxed) ? Capacity / 2 : 16384; }
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t wake = PTHREAD_COND_INITIALIZER, flushed = PTHREAD_COND_INITIALIZER;
 pthread_t worker;
@@ -62,10 +68,11 @@ void* writer(void*) {
     bool dirty = false;
     for (;;) {
         pthread_mutex_lock(&mutex);
-        if (used < 16384 && requested == completed && !stopping) {
+        if (used < wake_bytes() && requested == completed && !stopping) {
             timespec deadline{};
             clock_gettime(CLOCK_REALTIME, &deadline);
-            deadline.tv_nsec += 100000000;
+            if (quiet.load(std::memory_order_relaxed)) deadline.tv_sec += 3;
+            else deadline.tv_nsec += 100000000;
             if (deadline.tv_nsec >= 1000000000) {
                 ++deadline.tv_sec;
                 deadline.tv_nsec -= 1000000000;
@@ -150,7 +157,8 @@ void* writer(void*) {
             dirty = true;
             lastReport = now;
         }
-        if (request != completed || stop || (dirty && now - lastSync >= 1000000000)) {
+        const uint64_t syncEvery = quiet.load(std::memory_order_relaxed) ? 30000000000ull : 1000000000ull;
+        if (request != completed || stop || (dirty && now - lastSync >= syncEvery)) {
             const auto start = now_ns();
             if (fsync(STDOUT_FILENO) != 0)
                 ++errors;
@@ -174,6 +182,14 @@ void* writer(void*) {
 extern "C" double melee_nx_log_now_ms(void) {
     pthread_once(&clockOnce, init_clock);
     return (now_ns() - clockStart) / 1e6;
+}
+extern "C" void melee_nx_log_set_quiet(int on) {
+    const bool was = quiet.exchange(on != 0, std::memory_order_relaxed);
+    if (was && !on) {   // match over: write what was held now
+        pthread_mutex_lock(&mutex);
+        pthread_cond_signal(&wake);
+        pthread_mutex_unlock(&mutex);
+    }
 }
 extern "C" void melee_nx_log_init(void) {
     pthread_mutex_lock(&mutex);
@@ -199,7 +215,7 @@ extern "C" void melee_nx_log_write(const char* data, size_t size) {
     } else {
         std::memcpy(buffers[pending] + used, data, size);
         used += size;
-        if (used >= 16384)
+        if (used >= wake_bytes())
             pthread_cond_signal(&wake);
     }
     pthread_mutex_unlock(&mutex);

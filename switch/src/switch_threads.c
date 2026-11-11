@@ -139,6 +139,7 @@ void switch_set_pthread_cores(int preferred, uint64_t mask) {
 }
 
 void switch_cpu_register(const char* name);
+void switch_cpu_unregister(void);
 static void* thread_trampoline(void* raw) {
     switch_sync_clang_tls();
     { static int serial; char tag[12]; snprintf(tag, sizeof tag, "t%d", __atomic_add_fetch(&serial, 1, __ATOMIC_RELAXED)); switch_cpu_register(tag); }
@@ -146,6 +147,7 @@ static void* thread_trampoline(void* raw) {
     TrampolineCtx ctx = *(TrampolineCtx*)raw;
     free(raw);
     void* result = ctx.start(ctx.arg);
+    switch_cpu_unregister();   // free the slot: songs, matchmaking and netplay threads come and go all session
     if (ctx.rec != NULL) {
         pthread_mutex_lock(&thread_mutex);
         ctx.rec->finished = 1;
@@ -293,6 +295,15 @@ void switch_cpu_register(const char* name) {
         g_cpu[g_cpu_count].last = 0;
         ++g_cpu_count;
     }
+    mutexUnlock(&g_cpu_lock);
+}
+void switch_cpu_unregister(void) {
+    mutexLock(&g_cpu_lock);
+    for (int i = 0; i < g_cpu_count; ++i)
+        if (g_cpu[i].handle == threadGetCurHandle()) {
+            g_cpu[i] = g_cpu[--g_cpu_count];
+            break;
+        }
     mutexUnlock(&g_cpu_lock);
 }
 int switch_cpu_report(char* out, int cap, double frames) {

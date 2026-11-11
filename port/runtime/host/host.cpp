@@ -42,6 +42,7 @@ namespace host {
 
 Options options;
 extern "C" __attribute__((weak)) void aurora_pipeline_background_pause(bool paused);   // Aurora (console)
+extern "C" __attribute__((weak)) void melee_nx_log_set_quiet(int on);                  // switch/src/log_switch.cpp
 extern "C" __attribute__((weak)) int switch_cpu_report(char* out, int cap, double frames);   // switch_threads.c
 extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
 extern "C" __attribute__((weak)) void switch_hitch_frame_begin(void);   // switch_hitch.cpp
@@ -817,6 +818,9 @@ void retrace() {
       aurora_pipeline_background_pause(in_any_match);
       log("pipelines: background pre-warm %s", in_any_match ? "paused for the match" : "resumed");
     }
+    // SD-card writes wait for the end of the match too (log batches; the shader caches above).
+    static bool log_quiet = false;
+    if (in_any_match != log_quiet && melee_nx_log_set_quiet) { log_quiet = in_any_match; melee_nx_log_set_quiet(in_any_match); }
     if (match_start && g_retraces == match_start + 1200) {
       gx_stats(&commands, &draws, &vertices, &copies);
       log("match fingerprint: %llu/%llu/%llu (GX commands/draws/vertices in the first 1200 frames of the match)",

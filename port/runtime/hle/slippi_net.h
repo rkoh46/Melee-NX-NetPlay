@@ -5,6 +5,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -155,6 +156,8 @@ class NetplayClient {
 
   bool IsDecider() const { return is_decider_; }
   uint8_t LocalPlayerPort() const { return player_idx_; }
+  // Smoothed round trip to the opponent in ms (0 until measured); safe from any thread.
+  unsigned RoundTripMs() const { return rtt_ms_.load(std::memory_order_relaxed); }
   ConnectStatus GetSlippiConnectStatus() const { return status_.load(std::memory_order_acquire); }
   std::vector<int> GetFailedConnections() const { return failed_connections_; }
   void StartSlippiGame();
@@ -201,8 +204,17 @@ class NetplayClient {
   _ENetHost* client_ = nullptr;
   std::vector<_ENetPeer*> server_;
   std::thread thread_;
+  // Wakes the netplay thread's socket wait for the game thread. The wake-up is a loopback send, and a
+  // Horizon socket call can take 40-230 ms when the system core is busy (SD-card writes): the game
+  // thread only signals this thread, so a slow socket never stops the game (online freezes, v0.3.0).
+  std::thread waker_;
+  std::condition_variable waker_cv_;
+  bool waker_pending_ = false, waker_stop_ = false;   // guarded by async_mutex_
+  void WakerFunc();
+  void WakeNetplayThread();
   uint8_t remote_player_count_ = 0;
   std::atomic<bool> do_loop_{true};
+  std::atomic<unsigned> rtt_ms_{0};
   bool is_decider_ = false, has_game_started_ = false;
   uint8_t player_idx_ = 0;
   std::unordered_map<std::string, std::map<_ENetPeer*, ActiveConnectionInfo>> active_connections_;

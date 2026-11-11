@@ -252,6 +252,7 @@ NetplayClient::NetplayClient(std::vector<std::string> addrs, std::vector<uint16_
     player_active_[info.player_idx].store(true, std::memory_order_release);
   }
   status_.store(ConnectStatus::INITIATED, std::memory_order_release);
+  waker_ = std::thread(&NetplayClient::WakerFunc, this);
   thread_ = std::thread(&NetplayClient::ThreadFunc, this);
 }
 
@@ -259,6 +260,9 @@ NetplayClient::~NetplayClient() {
   do_loop_.store(false);
   if (client_) wakeup_thread(client_);
   if (thread_.joinable()) thread_.join();
+  { std::lock_guard<std::mutex> lk(async_mutex_); waker_stop_ = true; }
+  waker_cv_.notify_one();
+  if (waker_.joinable()) waker_.join();
   if (!server_.empty()) Disconnect();
   if (client_) { enet_host_destroy(client_); client_ = nullptr; }
   host::log("slippi: netplay client cleanup complete");
@@ -431,16 +435,42 @@ void NetplayClient::Disconnect() {
   server_.clear();
 }
 
-void NetplayClient::SendAsync(std::unique_ptr<Packet> packet) {
-  if (status_.load(std::memory_order_acquire) == ConnectStatus::DISCONNECTED) return;
-  { std::lock_guard<std::mutex> lk(async_mutex_); async_queue_.push_back(std::move(packet)); }
-  wakeup_thread(client_);
-}
-
 #if defined(__SWITCH__)
 extern "C" __attribute__((weak)) void switch_set_current_thread_priority(int priority);   // switch_threads.c
 extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
 #endif
+void NetplayClient::SendAsync(std::unique_ptr<Packet> packet) {
+  if (status_.load(std::memory_order_acquire) == ConnectStatus::DISCONNECTED) return;
+  { std::lock_guard<std::mutex> lk(async_mutex_); async_queue_.push_back(std::move(packet)); }
+  WakeNetplayThread();
+}
+
+void NetplayClient::WakeNetplayThread() {
+  if (!waker_.joinable()) { wakeup_thread(client_); return; }
+  { std::lock_guard<std::mutex> lk(async_mutex_); waker_pending_ = true; }
+  waker_cv_.notify_one();
+}
+
+void NetplayClient::WakerFunc() {
+#if defined(__SWITCH__)
+  // Same priority as the netplay thread: our inputs leave as soon as the socket call returns.
+  if (switch_set_current_thread_priority) switch_set_current_thread_priority(0x24);
+  if (switch_cpu_register) switch_cpu_register("netwake");
+#endif
+  std::unique_lock<std::mutex> lk(async_mutex_);
+  for (;;) {
+    waker_cv_.wait(lk, [this] { return waker_pending_ || waker_stop_; });
+    if (waker_stop_) return;
+    waker_pending_ = false;
+    lk.unlock();
+    const uint64_t t0 = time_ms();
+    wakeup_thread(client_);
+    const uint64_t took = time_ms() - t0;
+    if (took >= 20) host::log("slippi: socket wake-up took %llu ms (the game kept running)", (unsigned long long)took);
+    lk.lock();
+  }
+}
+
 void NetplayClient::ThreadFunc() {
 #if defined(__SWITCH__)
   // Horizon never time-slices threads below priority 59: at the default priority this thread waited
@@ -539,6 +569,11 @@ void NetplayClient::ThreadFunc() {
       net_diag::on_queue_depth(async_queue_.size());
     }
     net_diag::maybe_sample(time_us());
+    {   // the connection in use's smoothed round trip, for the automatic input delay (game thread reads it)
+      unsigned rtt = 0;
+      for (auto* sp : server_) if (sp->state == ENET_PEER_STATE_CONNECTED && sp->roundTripTime > rtt) rtt = sp->roundTripTime;
+      if (rtt) rtt_ms_.store(rtt, std::memory_order_relaxed);
+    }
     {   // every 5 s: is each peer's reliable channel being acknowledged? (issue 9: the connection in use times out at 30 s)
       static uint64_t last_health_ms = 0;
       const uint64_t now_ms = time_ms();
@@ -761,7 +796,7 @@ void NetplayClient::ForceDisconnectPlayer(uint8_t player_idx) {
     host::log("slippi: all remote players force-disconnected");
     status_.store(ConnectStatus::DISCONNECTED, std::memory_order_release);
   }
-  if (client_) wakeup_thread(client_);
+  if (client_) WakeNetplayThread();
 }
 void NetplayClient::ForceDisconnect(DisconnectReason reason) {
   pending_disconnect_reason_.store((uint32_t)reason, std::memory_order_release);
