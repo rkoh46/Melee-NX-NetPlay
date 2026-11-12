@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec "$(dirname "$0")/../build/venv/bin/python" "$(dirname "$0")/nx-bot.py" "${NX_IP:-192.168.50.221}" "$@"
+exec "$(dirname "$0")/../build/venv/bin/python" "$(dirname "$0")/nx-bot.py" "${NX_IP:?set NX_IP to the console address}" "$@"
