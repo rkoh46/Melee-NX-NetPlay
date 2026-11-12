@@ -332,3 +332,20 @@ int switch_cpu_threads(Handle* handles, char (*names)[20], int cap) {
     mutexUnlock(&g_cpu_lock);
     return n;
 }
+
+/* Memory for the frame log: the newlib heap in use (every malloc/new, NVK's allocations included: libnx
+ * hands the whole heap to newlib up front, so the process's own used-memory figure never moves) and its
+ * high-water mark. A number that keeps climbing from match to match is a leak. */
+int switch_mem_report(char* out, int cap) {
+    struct mallinfo mi = mallinfo();
+    static size_t high = 0;
+    const size_t used = (size_t)mi.uordblks;
+    if (used > high) high = used;
+    u64 total = 0, sys_used = 0;
+    svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&sys_used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+    return snprintf(out, (size_t)cap, " | mem %.1f MiB in use (high %.1f, heap %.1f, process %llu of %llu MiB)",
+                    used / 1048576.0, high / 1048576.0, (double)mi.arena / 1048576.0,
+                    (unsigned long long)(sys_used >> 20), (unsigned long long)(total >> 20));
+}
+

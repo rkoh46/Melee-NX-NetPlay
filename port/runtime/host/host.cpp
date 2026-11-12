@@ -44,6 +44,7 @@ Options options;
 extern "C" __attribute__((weak)) void aurora_pipeline_background_pause(bool paused);   // Aurora (console)
 extern "C" __attribute__((weak)) void melee_nx_log_set_quiet(int on);                  // switch/src/log_switch.cpp
 extern "C" __attribute__((weak)) int switch_cpu_report(char* out, int cap, double frames);   // switch_threads.c
+extern "C" __attribute__((weak)) int switch_mem_report(char* out, int cap);                    // switch_threads.c
 extern "C" __attribute__((weak)) void switch_cpu_register(const char* name);
 extern "C" __attribute__((weak)) void switch_hitch_frame_begin(void);   // switch_hitch.cpp
 extern "C" __attribute__((weak)) double switch_thread_cpu_ms(void);                  // switch_threads.c
@@ -628,6 +629,7 @@ static std::string sim_cost_line(uint32_t frames) {
     }
     std::memset(g_render_costs_window, 0, sizeof g_render_costs_window);
   }
+  if (switch_mem_report && n < sizeof buf - 160) n += (size_t)switch_mem_report(buf + n, (int)(sizeof buf - n));
   return buf;
 }
 // Render skip. The game's loop is update, then draw. When the update finished so late that drawing

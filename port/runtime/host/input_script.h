@@ -44,5 +44,9 @@ private:
   std::vector<SceneGate> gates_;
   uint32_t ports_ = 1;
   uint32_t loop_ = 0;
+  // @rearm: a scene block starts over each time the game enters its scene again (soak runs that play match
+  // after match); without it a block runs once per run, from the first entry.
+  bool rearm_ = false;
+  mutable int last_gate_ = -1;
 };
 }  // namespace host

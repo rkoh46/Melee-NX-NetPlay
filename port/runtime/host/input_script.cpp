@@ -53,6 +53,12 @@ bool InputScript::load(std::istream& stream, std::string* error) {
       scene_gated = false;  // scene gates drive menus only
       continue;
     }
+    if (first == "@rearm") {
+      std::string extra;
+      if (fields >> extra) return fail("@rearm takes no value");
+      parsed.rearm_ = true;
+      continue;
+    }
     if (first == "@loop") {
       std::string value, extra;
       if (!(fields >> value) || !number(value, parsed.loop_) || (fields >> extra)) return fail("invalid @loop frame count");
@@ -131,16 +137,22 @@ std::array<ScriptPad, 4> InputScript::sample(uint32_t retrace, uint32_t match_st
 
   const SceneGate* active = nullptr;
   uint32_t gate_relative = 0;
-  for (const auto& gate : gates_) {
+  int active_index = -1;
+  for (size_t g = 0; g < gates_.size(); ++g) {
+    const SceneGate& gate = gates_[g];
     if (gate.mode != scene_mode || gate.state != scene_state) continue;
-    if (!gate.origin_set) {
+    if (!gate.origin_set || (rearm_ && last_gate_ != int(g))) {
       gate.origin = retrace;
       gate.origin_set = true;
     }
     gate_relative = retrace - gate.origin;
     active = &gate;
+    active_index = int(g);
     break;
   }
+  last_gate_ = active_index;
+  // A rearming script plays match after match: when a menu scene's block is up, the match is over.
+  if (rearm_ && active) { in_match = false; relative = 0; }
 
   for (unsigned port = 0; port < result.size(); ++port) {
     if (!(ports_ & (1u << port))) continue;

@@ -73,6 +73,15 @@ recovery, GX CPU-side state suppression). Work items:
   scales the system's calibrated +-32767 to a real controller's ~+-100 at the gate (`stick_range`,
   80..120) without a dead zone, which Melee applies itself.
 
+Memory: the frame log ends with `mem X MiB in use (high Y, ...)`, the newlib heap every allocation
+(NVK's included) comes from. EFB-to-texture copies get one Aurora texture per guest destination;
+a destination neither copied into nor sampled for 10 s is destroyed (`gx_aurora.cpp`), and a new size
+at the same destination replaces the old texture instead of adding one. Soak runs check it:
+`script=soak_nx.txt` (`@rearm` replays a scene's block on every visit) with `force_css` and a
+stage list (`force_stage=31,2,3,8,28,32`, the next stage at each stage select) plays match after
+match offline. Heap use grows once per new stage (its shaders) and the background pipeline pre-warm
+adds ~230 MiB after the first match, then stays flat on repeat visits.
+
 ## Phase 3: online
 
 The Slippi host half is portable: ENet 1.3.13 over BSD sockets (IPv4), matchmaking at

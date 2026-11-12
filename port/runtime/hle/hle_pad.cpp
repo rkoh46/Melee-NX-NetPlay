@@ -1,5 +1,6 @@
 // PAD HLE: controller state from the host input layer.
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <vector>
 #include "hle.h"
 #include "pad_rumble.h"
 #include "slippi_online.h"
@@ -86,9 +87,27 @@ HLE(PADRead) {
   // every frame, so patching that did nothing (every "stage" ran Battlefield); its own forcing path is
   // SSSData.force_stage_id (gmVsMelee_SssData + 3, what the random/ordered stage rules use): when it is
   // 0 or more, the select's next frame sets that stage and starts the match (mnStageSel_Scene_OnFrame).
-  static const uint16_t force_stage = [] { const char* v = std::getenv("MELEE_FORCE_STAGE"); const int n = v ? std::atoi(v) : 0; return (uint16_t)(n > 0 && n < 64 ? n : 0); }();
-  if (force_stage && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01)
-    host::wr8(0x80480668 + 0x3, uint8_t(force_stage));
+  // A comma list (force_stage=31,2,3,8) takes the next stage each time the stage select opens: soak runs
+  // that play match after match load a different stage every time.
+  static const std::vector<uint8_t> force_stages = [] {
+    std::vector<uint8_t> out;
+    if (const char* v = std::getenv("MELEE_FORCE_STAGE"))
+      for (const char* p = v; *p;) {
+        const int n = std::atoi(p);
+        if (n > 0 && n < 64) out.push_back(uint8_t(n));
+        while (*p && *p != ',') ++p;
+        if (*p == ',') ++p;
+      }
+    return out;
+  }();
+  static size_t force_stage_next = 0;
+  static bool in_sss = false;
+  const bool sss_now = host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01;
+  if (!force_stages.empty() && sss_now) {
+    if (!in_sss) ++force_stage_next;
+    host::wr8(0x80480668 + 0x3, force_stages[(force_stage_next - 1) % force_stages.size()]);
+  }
+  in_sss = sss_now;
   if (force_cpu && !force_css && host::rd8(0x80479D30) == 0x02 && host::rd8(0x80479D33) == 0x01) {
     for (uint32_t i = 0; i < 2; ++i) {
       const uint32_t player = 0x80480668 + 0x8 + 0x68 + i * 0x24;

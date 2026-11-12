@@ -1,0 +1,55 @@
+# Soak run on the Switch: level 9 CPUs play match after match, offline (launcher.ini offline=1, force_css=1|4,
+# force_stage=list), for memory and frame-time trends across many matches. @rearm replays a scene's block
+# every time the game comes back to it: character select -> START, stage select (forced), results -> out.
+@rearm
+
+# Boot: answer the memory-card prompt.
+@scene 0x28 0x00
+440 A
+470
+540 A
+570
+640 A
+670
+
+# Main menu (offline: online play is disabled): down to VS Mode, Melee.
+@scene 0x01 0x00
+60 B
+70
+160 B
+170
+260 sy=-127
+266
+320 A
+330
+420 A
+430
+
+# Character select opens ready (force_css): START.
+@scene 0x02 0x00
+120 p=2 START
+130 p=2
+600 p=2 START
+610 p=2
+
+# Stage select: force_stage picks the stage; nudge the hand and press A in case it waits.
+@scene 0x02 0x01
+60 p=2 sx=127 sy=60
+90 p=2
+100 p=2 sx=-127
+116 p=2
+140 p=2 A
+150 p=2
+
+# Results: leave with A, then START, repeated until the character select is back.
+@scene 0x02 0x04
+240 p=2 A
+250 p=2
+480 p=2 A
+490 p=2
+720 p=2 START
+730 p=2
+960 p=2 A
+970 p=2
+1200 p=2 START
+1210 p=2

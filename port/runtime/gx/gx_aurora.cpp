@@ -76,7 +76,11 @@ struct AuroraBackend::Impl {
   const std::thread::id owner = std::this_thread::get_id();
   std::optional<uint64_t> last_sequence;
   aurora_bridge::CopyHistory copy_history;
-  struct CopyToken { uint8_t byte = 0; };
+  // One token per guest destination of an EFB-to-texture copy: Aurora keys its copy textures on the token's
+  // address. A token neither copied into nor sampled for kCopyTokenIdleFrames is destroyed (with its GPU
+  // texture): copies land in per-scene heap memory, so every match used to add textures that lived forever.
+  struct CopyToken { uint64_t last_used = 0; uint32_t width = 0, height = 0, format = ~0u; };
+  static constexpr uint64_t kCopyTokenIdleFrames = 600;   // 10 s
   std::map<uint32_t, std::unique_ptr<CopyToken>> copy_tokens;
   struct TextureKey {
     uintptr_t source;
@@ -413,6 +417,7 @@ struct AuroraBackend::Impl {
           const auto& t = *d.textures[unit];
           if (!t.used) continue;
           const auto found = (g_debug & kDebugCopyFromRam) ? copy_tokens.end() : copy_tokens.find(t.addr);
+          if (found != copy_tokens.end()) found->second->last_used = counters.frames;
           auto& obj = texture(t, unit, found == copy_tokens.end() ? nullptr : found->second.get());
           if (obj.has_palette) GXLoadTlut(&obj.palette, unit);
           GXLoadTexObj(&obj.texture, static_cast<GXTexMapID>(unit));
@@ -433,9 +438,15 @@ struct AuroraBackend::Impl {
         if (!c.to_xfb && !(g_debug & kDebugSkipCopies)) {
           auto& token = copy_tokens[c.dest_addr];
           if (!token) token = std::make_unique<CopyToken>();
-          GXSetTexCopySrc(uint16_t(c.src_x), uint16_t(c.src_y), uint16_t(c.src_w), uint16_t(c.src_h));
           const unsigned shrink = (g_debug & kDebugCopyHalfSize) ? 2 : 1;
-          GXSetTexCopyDst(uint16_t(c.src_w / shrink), uint16_t(c.src_h / shrink), copy_format(c), GX_FALSE);
+          const uint32_t dst_w = c.src_w / shrink, dst_h = c.src_h / shrink, fmt = uint32_t(copy_format(c));
+          // Aurora keeps one texture per (destination, size, format): a new size at the same address would add
+          // a texture and keep the old one, so the old one goes first.
+          if (token->format != ~0u && (token->width != dst_w || token->height != dst_h || token->format != fmt))
+            GXDestroyCopyTex(token.get());
+          token->width = dst_w; token->height = dst_h; token->format = fmt; token->last_used = counters.frames;
+          GXSetTexCopySrc(uint16_t(c.src_x), uint16_t(c.src_y), uint16_t(c.src_w), uint16_t(c.src_h));
+          GXSetTexCopyDst(uint16_t(dst_w), uint16_t(dst_h), copy_format(c), GX_FALSE);
           // Partial-rectangle clears are scissored to the copy rect (aurora-switch-partial-clear.patch).
           GXCopyTex(token.get(), c.clear ? GX_TRUE : GX_FALSE);
           ++counters.texture_copies;
@@ -465,6 +476,13 @@ struct AuroraBackend::Impl {
     if (g_debug & kDebugShowCopies) show_copies(frame);
     if (g_debug & kDebugShowTextures) show_textures(input); else if (!debug_textures.empty()) debug_textures.clear();
     if (overlay) overlay();
+    // Idle copy tokens: destroy after the frame's own draws are queued (GXDestroyCopyTex goes through the FIFO,
+    // after anything that sampled it), once a second.
+    if (counters.frames % 60 == 0)
+      for (auto it = copy_tokens.begin(); it != copy_tokens.end();) {
+        if (counters.frames - it->second->last_used > kCopyTokenIdleFrames) { GXDestroyCopyTex(it->second.get()); it = copy_tokens.erase(it); }
+        else ++it;
+      }
     aurora_end_frame(); // Drains FIFO; uploaded texture source bytes are now safe.
     last_sequence = input.sequence;
     ++counters.frames;
