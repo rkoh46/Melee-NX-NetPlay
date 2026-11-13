@@ -8,15 +8,16 @@
 #   2. clones the repository into ~/Melee-NX-NetPlay (or updates it)
 #   3. downloads the prebuilt SDK (Switch GPU driver, Dawn, SDL3, Aurora: no game content, ~55 MB)
 #   4. builds the compiler image (devkitA64 + Clang; the one slow download, ~5 minutes)
-#   5. translates your disc's main.dol into C++ (seconds) and compiles it (10-20 minutes)
+#   5. translates your disc's main.dol into C++ (seconds) and compiles it twice: the game and the
+#      Replays app that plays your saved matches back (20-40 minutes together)
 #   6. leaves a folder ready for your SD card and tells you exactly where to put it
 # Your disc stays where it is; nothing from it is uploaded anywhere.
 set -euo pipefail
 
 REPO_URL="https://github.com/rkoh46/Melee-NX-NetPlay"
 RAW_URL="https://raw.githubusercontent.com/rkoh46/Melee-NX-NetPlay/main"
-SDK_RELEASE="sdk-1"
-SDK_FILE="melee-nx-netplay-sdk-1.tar.gz"
+SDK_RELEASE="sdk-2"
+SDK_FILE="melee-nx-netplay-sdk-2.tar.gz"
 DEST="${MELEE_NX_HOME:-$HOME/Melee-NX-NetPlay}"
 JOBS="${MELEE_BUILD_JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )}"
 
@@ -68,8 +69,9 @@ main() {
   if [[ -f build/sdk/SDK_MANIFEST.json ]] && grep -q "\"version\": \"${SDK_RELEASE#sdk-}\"" build/sdk/SDK_MANIFEST.json; then
     ok "already present"
   else
-    curl -fL --progress-bar -o "build/$SDK_FILE" "$REPO_URL/releases/download/$SDK_RELEASE/$SDK_FILE"
-    curl -fsSL -o "build/$SDK_FILE.sha256" "$REPO_URL/releases/download/$SDK_RELEASE/$SDK_FILE.sha256"
+    sdk_base="${MELEE_NX_SDK_BASE:-$REPO_URL/releases/download/$SDK_RELEASE}"   # MELEE_NX_SDK_BASE=file:///folder uses a local copy
+    curl -fL --progress-bar -o "build/$SDK_FILE" "$sdk_base/$SDK_FILE"
+    curl -fsSL -o "build/$SDK_FILE.sha256" "$sdk_base/$SDK_FILE.sha256"
     (cd build && shasum -a 256 -c "$SDK_FILE.sha256" >/dev/null) || fail "The SDK download did not match its checksum; run the installer again."
     rm -rf build/sdk && mkdir -p build/sdk && tar -xzf "build/$SDK_FILE" -C build/sdk
     ok "unpacked to build/sdk"
@@ -80,7 +82,7 @@ main() {
     docker build -q -t melee-nx-netplay-build:latest switch/docker </dev/null >/dev/null && ok "built"
   fi
 
-  step "5/6  Translating your disc and compiling the game (the long step: 10-20 minutes)"
+  step "5/6  Translating your disc and compiling the game and the Replays app (the long step: 20-40 minutes)"
   note "disc: $iso"
   bash builder/generate-game.sh "$iso" </dev/null 2>&1 | grep -E "^generated |^Generated |rror:|usage:" | sed 's/^/  /'
   ok "translated into C++ in build/game (private to this folder)"
@@ -90,12 +92,25 @@ main() {
     awk '/^\[[0-9]+\/[0-9]+\]/ { split($1, n, /[\[\/\]]/); if (n[2] % 10 == 0 || n[2] == n[3]) print "  " n[2] " of " n[3]; next } { print "  " $0; fflush() }'
   nro="build/switch-aurora/port/melee-nx-netplay.nro"
   [[ -f "$nro" ]] || fail "The build did not produce $nro. The full log is above; open an issue at $REPO_URL/issues with it."
-  ok "built $(du -h "$nro" | cut -f1) NRO"
+  ok "built the game: $(du -h "$nro" | cut -f1) NRO"
+
+  # The Replays app is the same game translated with Slippi's playback codes: a second NRO.
+  note "now the Replays app (the same again)"
+  MELEE_NX_PLAYBACK=1 bash builder/generate-game.sh "$iso" </dev/null 2>&1 | grep -E "rror:|usage:" | sed 's/^/  /' || true
+  MELEE_NX_PLAYBACK=1 MELEE_NX_FRONTEND=aurora MELEE_BUILD_JOBS="$JOBS" bash builder/docker.sh game all </dev/null 2>&1 |
+    grep --line-buffered -E '^\[[0-9]+/[0-9]+\]|error:|FAILED|done:' |
+    awk '/^\[[0-9]+\/[0-9]+\]/ { split($1, n, /[\[\/\]]/); if (n[2] % 10 == 0 || n[2] == n[3]) print "  " n[2] " of " n[3]; next } { print "  " $0; fflush() }'
+  replays_nro="build/switch-aurora-playback/port/melee-nx-replays.nro"
+  [[ -f "$replays_nro" ]] || fail "The build did not produce $replays_nro. The full log is above; open an issue at $REPO_URL/issues with it."
+  ok "built the Replays app: $(du -h "$replays_nro" | cut -f1) NRO"
+  bash builder/generate-game.sh "$iso" </dev/null >/dev/null 2>&1 || true   # leave the game's translation in place for rebuilds
 
   step "6/6  Your SD card folder"
   out="dist/sd/switch/melee-nx-netplay"
   mkdir -p "$out"
   cp "$nro" "$out/melee-nx-netplay.nro"
+  mkdir -p dist/sd/switch/melee-nx-replays
+  cp "$replays_nro" dist/sd/switch/melee-nx-replays/melee-nx-replays.nro
   cat > "$out/launcher.ini" <<'INI'
 # Melee-NX-NetPlay settings. The in-game menu (hold L+R+Start half a second) changes volume,
 # HUD and online delay and saves them here.
@@ -108,13 +123,13 @@ hud=0
 overclock=1
 INI
   ok "$DEST/$out"
-  printf '\n%sDone.%s Copy the folder %smelee-nx-netplay%s to your SD card as:\n\n' "$bold$green" "$reset" "$bold" "$reset"
-  printf '    sdmc:/switch/melee-nx-netplay/\n\n'
+  printf '\n%sDone.%s Copy the folders %smelee-nx-netplay%s and %smelee-nx-replays%s to your SD card as:\n\n' "$bold$green" "$reset" "$bold" "$reset" "$bold" "$reset"
+  printf '    sdmc:/switch/melee-nx-netplay/\n    sdmc:/switch/melee-nx-replays/\n\n'
   printf 'then copy your disc into that same folder, named exactly %sGALE01.iso%s.\n\n' "$bold" "$reset"
   printf 'On the Switch (Atmosphère): open the Homebrew Menu %sby holding R while launching any game%s\n' "$bold" "$reset"
   printf '(that gives the homebrew the full memory; the Album shortcut does not), then start Melee-NX-NetPlay.\n'
   printf 'The first screen asks for your Slippi account; B plays offline. Hold L+R+Start in game for the menu.\n'
   printf 'Logs are written to switch/melee-nx-netplay/Logs/latest.log if anything goes wrong.\n\n'
-  printf '%sOpen the folder:%s  open "%s"   (macOS)   or   xdg-open "%s"   (Linux)\n' "$dim" "$reset" "$DEST/$out" "$DEST/$out"
+  printf '%sOpen the folder:%s  open "%s"   (macOS)   or   xdg-open "%s"   (Linux)\n' "$dim" "$reset" "$DEST/dist/sd/switch" "$DEST/dist/sd/switch"
 }
 main "$@"
