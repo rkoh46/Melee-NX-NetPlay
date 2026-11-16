@@ -858,6 +858,14 @@ enet_protocol_handle_acknowledge (ENetHost * host, ENetEvent * event, ENetPeer *
 
     roundTripTime = ENET_TIME_DIFFERENCE (host -> serviceTime, receivedSentTime);
 
+    /* Melee-NX: the raw samples, for an input delay chosen before the first game (the smoothed
+     * roundTripTime starts at 500 ms and needs dozens of samples to come down). */
+    if (roundTripTime < 2000 && peer -> rawRoundTripCount < 0xFFFF)
+    {
+       peer -> rawRoundTripSum += roundTripTime;
+       peer -> rawRoundTripCount++;
+    }
+
     enet_peer_throttle (peer, roundTripTime);
 
     peer -> roundTripTimeVariance -= peer -> roundTripTimeVariance / 4;

@@ -297,6 +297,8 @@ typedef struct _ENetPeer
    enet_uint32   highestRoundTripTimeVariance;
    enet_uint32   roundTripTime;            /**< mean round trip time (RTT), in milliseconds, between sending a reliable packet and receiving its acknowledgement */
    enet_uint32   roundTripTimeVariance;
+   enet_uint32   rawRoundTripSum;          /**< Melee-NX: unsmoothed acknowledgement round trips under 2 s, summed (ms) */
+   enet_uint32   rawRoundTripCount;        /**< Melee-NX: how many are in rawRoundTripSum */
    enet_uint32   mtu;
    enet_uint32   windowSize;
    enet_uint32   reliableDataInTransit;

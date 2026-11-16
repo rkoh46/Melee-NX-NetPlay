@@ -864,7 +864,8 @@ int effective_delay() {
   const int d = rtt ? std::clamp((int)std::lround(rtt / 33.3), 2, 5) : 2;
   static int last = -1;
   if (d != last) {
-    if (rtt) host::log("slippi: automatic input delay %d frames (round trip %u ms in the last game, was %d)", d, rtt, last);
+    if (rtt) host::log("slippi: automatic input delay %d frames (round trip %u ms %s, was %d)", d, rtt,
+                       g_netplay->RoundTripFromGame() ? "in the last game" : "while connecting", last);
     else host::log("slippi: automatic input delay %d frames (no ping measured with this opponent yet)", d);
     last = d;
   }

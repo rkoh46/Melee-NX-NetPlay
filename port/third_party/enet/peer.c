@@ -411,6 +411,8 @@ enet_peer_reset (ENetPeer * peer)
     peer -> highestRoundTripTimeVariance = 0;
     peer -> roundTripTime = ENET_PEER_DEFAULT_ROUND_TRIP_TIME;
     peer -> roundTripTimeVariance = 0;
+    peer -> rawRoundTripSum = 0;
+    peer -> rawRoundTripCount = 0;
     peer -> mtu = peer -> host -> mtu;
     peer -> reliableDataInTransit = 0;
     peer -> outgoingReliableSequenceNumber = 0;

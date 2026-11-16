@@ -156,8 +156,13 @@ class NetplayClient {
 
   bool IsDecider() const { return is_decider_; }
   uint8_t LocalPlayerPort() const { return player_idx_; }
-  // Smoothed round trip to the opponent in ms (0 until measured); safe from any thread.
-  unsigned RoundTripMs() const { return rtt_ms_.load(std::memory_order_relaxed); }
+  // Round trip to the opponent in ms, safe from any thread: the game's pad acknowledgements once a game
+  // has run, before that the connection's own acknowledgements (at least 2 of them), else 0.
+  unsigned RoundTripMs() const {
+    const unsigned game = rtt_ms_.load(std::memory_order_relaxed);
+    return game ? game : connect_rtt_ms_.load(std::memory_order_relaxed);
+  }
+  bool RoundTripFromGame() const { return rtt_ms_.load(std::memory_order_relaxed) != 0; }
   ConnectStatus GetSlippiConnectStatus() const { return status_.load(std::memory_order_acquire); }
   std::vector<int> GetFailedConnections() const { return failed_connections_; }
   void StartSlippiGame();
@@ -215,6 +220,8 @@ class NetplayClient {
   uint8_t remote_player_count_ = 0;
   std::atomic<bool> do_loop_{true};
   std::atomic<unsigned> rtt_ms_{0};
+  std::atomic<unsigned> connect_rtt_ms_{0};
+  void UpdateConnectRoundTrip();
   bool is_decider_ = false, has_game_started_ = false;
   uint8_t player_idx_ = 0;
   std::unordered_map<std::string, std::map<_ENetPeer*, ActiveConnectionInfo>> active_connections_;

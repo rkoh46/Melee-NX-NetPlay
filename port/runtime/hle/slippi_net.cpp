@@ -256,6 +256,23 @@ NetplayClient::NetplayClient(std::vector<std::string> addrs, std::vector<uint16_
   thread_ = std::thread(&NetplayClient::ThreadFunc, this);
 }
 
+// The connection's round trip from ENet's raw acknowledgement samples of the first opponent (any peer
+// at that address: the two sides' connects can both succeed), once there are at least 2. Netplay thread.
+void NetplayClient::UpdateConnectRoundTrip() {
+  if (!client_ || server_.empty() || rtt_ms_.load(std::memory_order_relaxed) != 0) return;
+  uint64_t sum = 0, count = 0;
+  for (size_t i = 0; i < client_->peerCount; ++i) {
+    const ENetPeer* p = &client_->peers[i];
+    if (p->state == ENET_PEER_STATE_DISCONNECTED || p->address.host != server_[0]->address.host) continue;
+    sum += p->rawRoundTripSum;
+    count += p->rawRoundTripCount;
+  }
+  if (count < 2) return;
+  const unsigned ms = (unsigned)((sum + count / 2) / count);
+  const unsigned before = connect_rtt_ms_.exchange(ms ? ms : 1, std::memory_order_relaxed);
+  if (before == 0) host::log("slippi: connection round trip %u ms (%llu samples)", ms, (unsigned long long)count);
+}
+
 NetplayClient::~NetplayClient() {
   do_loop_.store(false);
   if (client_) wakeup_thread(client_);
@@ -348,6 +365,9 @@ void NetplayClient::OnData(Packet& packet, ENetPeer* peer) {
         // a 52 ms opponent and picked 5 frames of delay. Unknown (0) until a game has run.
         const unsigned sample = (unsigned)(ping_us_[0] / 1000);
         const unsigned cur = rtt_ms_.load(std::memory_order_relaxed);
+        // An acknowledgement after a stall (the opponent paused or left) is not a round trip: one game
+        // ended with 3187 ms and the next game against that opponent got 5 frames of delay.
+        if (sample < 1000)
         rtt_ms_.store(cur == 0 ? (sample ? sample : 1) : (cur * 15 + sample + 8) / 16, std::memory_order_relaxed);
       }
       if (frame % 600 == 0 && pidx == 0) host::log("slippi: ping %llu ms", (unsigned long long)(ping_us_[0] / 1000));
@@ -503,6 +523,7 @@ void NetplayClient::ThreadFunc() {
   while (status_.load(std::memory_order_acquire) == ConnectStatus::INITIATED) {
     ENetEvent ev;
     int net = enet_host_service(client_, &ev, 500);
+    UpdateConnectRoundTrip();
     if (net > 0) {
       switch (ev.type) {
         case ENET_EVENT_TYPE_RECEIVE: {
@@ -571,6 +592,7 @@ void NetplayClient::ThreadFunc() {
     const uint64_t service_t0 = time_us();
     int net = enet_host_service(client_, &ev, 250);
     net_diag::on_service(time_us() - service_t0);
+    UpdateConnectRoundTrip();
     for (;;) {
       std::unique_ptr<Packet> p;
       { std::lock_guard<std::mutex> lk(async_mutex_); if (async_queue_.empty()) break; p = std::move(async_queue_.front()); async_queue_.pop_front(); }
