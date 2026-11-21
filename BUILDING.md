@@ -141,6 +141,9 @@ README "Updating from your own computer automatically"). The built NROs never le
 - Git, Bash, curl, Python 3.11 or newer, `shasum` (part of Perl on Debian/Ubuntu; `perl-Digest-SHA` on Fedora),
   and Docker that your user may run without sudo (`sudo usermod -aG docker $USER`, then log in again; or
   rootless Docker). The toolchain image is built from `devkitpro/devkita64`, which is published for amd64 and arm64.
+  If you added yourself to the `docker` group after your user's systemd session started (it keeps running across
+  logins when lingering is on), the timer's job still lacks the group and stops at "Docker is installed but not
+  running". Reboot, or wrap the command: `ExecStart=/usr/bin/sg docker -c "/usr/bin/python3 ... update-host.py ..."`.
 - About 10 GB of free disk: the toolchain image (about 4 GB), the build trees of both apps (about 2 GB with
   the SDK and the pinned decomp), Docker's build cache.
 - Your disc image, NTSC-U 1.02.
