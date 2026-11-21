@@ -30,6 +30,7 @@ PIN_PATH = ROOT / "tools/slippi_pin.json"
 MANIFEST_PATH = ROOT / "tools/slippi_sys_manifest.json"
 SOURCE_PINS_PATH = ROOT / "tools/port_source_pins.json"
 CACHE = ROOT / "build/slippi-upstream"
+STATUS = {}   # what a run found, for --status-file (tools/update-host.py reads it)
 RUST_SUBMODULE = "Externals/SlippiRustExtensions"
 VERSION_FILE = "Source/Core/Common/Version.cpp"
 
@@ -86,9 +87,12 @@ def main():
     parser.add_argument("--ported", action="store_true",
                         help="developers: the host side has been ported to this release; adopt its files and move the pin "
                              "even though host protocol files changed")
+    parser.add_argument("--status-file", type=Path, help="write what was found as JSON: pinned, latest, result")
     args = parser.parse_args()
+    STATUS["status_file"] = args.status_file
 
     pin = json.loads(PIN_PATH.read_text(encoding="utf-8"))
+    STATUS["pinned"] = pin["version"]
     try:
         tag = args.tag or latest_release_tag()
     except Exception as error:   # offline, rate limited, ...
@@ -118,6 +122,7 @@ def main():
         print("Could not read the netplay version from %s at %s. Nothing was changed." % (VERSION_FILE, tag), file=sys.stderr)
         return 1
     new_version = match.group(1)
+    STATUS["latest"] = new_version
     if version_key(new_version) is None:
         print("Release %s reports version %r, which is not a release version. Nothing was changed." % (tag, new_version), file=sys.stderr)
         return 1
@@ -186,6 +191,7 @@ def main():
         source_pins["slippi"]["files_sha256"][relative] = hashes[relative]
     SOURCE_PINS_PATH.write_text(json.dumps(source_pins, indent=2) + "\n", encoding="utf-8")
 
+    STATUS["adopted"] = True
     pin["version"] = new_version
     pin["ishiiruka"]["tag"], pin["ishiiruka"]["commit"] = tag, new_commit
     pin["rust_extensions"]["commit"] = new_rust
@@ -197,4 +203,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    if STATUS.get("status_file"):
+        result = {0: "adopted" if STATUS.get("adopted") else "up-to-date", 3: "port-needed"}.get(code, "error")
+        STATUS["status_file"].write_text(json.dumps({"pinned": STATUS.get("pinned"), "latest": STATUS.get("latest", STATUS.get("pinned")),
+                                                     "result": result}) + "\n", encoding="utf-8")
+    sys.exit(code)

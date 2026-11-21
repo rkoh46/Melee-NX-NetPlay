@@ -1,0 +1,19 @@
+# Serves the published build to your console (tools/update-serve.py). HOME NETWORK ONLY: the NROs
+# contain the game built from your disc. Never forward this port on your router.
+[Unit]
+Description=Melee-NX-NetPlay: serve the published build to the console on the home network
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# CHANGE: the checkout, and this computer's address on your home network (not 0.0.0.0, not a public address).
+ExecStart=/usr/bin/python3 %h/Melee-NX-NetPlay/tools/update-serve.py --bind 192.168.1.20 --port 8080
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

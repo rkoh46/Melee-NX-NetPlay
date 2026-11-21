@@ -1,0 +1,21 @@
+# Builds and publishes Melee-NX-NetPlay for your console (tools/update-host.py). Started by the timer
+# beside it. Install as a user unit:
+#   mkdir -p ~/.config/systemd/user && cp builder/systemd/melee-nx-update.* builder/systemd/melee-nx-serve.service ~/.config/systemd/user/
+#   edit the three paths marked CHANGE below and the address in melee-nx-serve.service
+#   systemctl --user daemon-reload && systemctl --user enable --now melee-nx-update.timer melee-nx-serve.service
+#   loginctl enable-linger "$USER"        # so they run while you are not logged in
+# Your user must be allowed to run Docker (member of the docker group, or rootless Docker).
+[Unit]
+Description=Melee-NX-NetPlay: pull, follow Slippi, rebuild and publish for the console
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# CHANGE: the checkout (~/Melee-NX-NetPlay after install.sh) and your disc image.
+WorkingDirectory=%h/Melee-NX-NetPlay
+ExecStart=/usr/bin/python3 %h/Melee-NX-NetPlay/tools/update-host.py %h/melee/GALE01.iso
+# 3 = a Slippi release is waiting for a port; the last good build stays published. Not a failure.
+SuccessExitStatus=3
+Nice=10
+TimeoutStartSec=3h

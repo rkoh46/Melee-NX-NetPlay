@@ -1,0 +1,12 @@
+# Runs the update every hour (and ten minutes after boot). A run with nothing new takes a few seconds.
+[Unit]
+Description=Melee-NX-NetPlay: hourly update check
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

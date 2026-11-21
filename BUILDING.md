@@ -131,6 +131,79 @@ Porting a protocol release: bring the files below up to the new upstream, then r
 
 The Replays app's code set (`port/slippi_sys_playback`) is not moved by the tool.
 
+## An always-on build computer
+
+The console can update itself from a computer of yours that stays on (`update_host=` in `launcher.ini`,
+README "Updating from your own computer automatically"). The built NROs never leave your home network.
+
+**What the computer needs** (Linux x86_64 or arm64, or a Mac):
+
+- Git, Bash, curl, Python 3.11 or newer, `shasum` (part of Perl on Debian/Ubuntu; `perl-Digest-SHA` on Fedora),
+  and Docker that your user may run without sudo (`sudo usermod -aG docker $USER`, then log in again; or
+  rootless Docker). The toolchain image is built from `devkitpro/devkita64`, which is published for amd64 and arm64.
+- About 10 GB of free disk: the toolchain image (about 4 GB), the build trees of both apps (about 2 GB with
+  the SDK and the pinned decomp), Docker's build cache.
+- Your disc image, NTSC-U 1.02.
+- No Mesa, Dawn or SDL build: like `install.sh`, the update build uses the prebuilt game-free SDK from this
+  repository's `sdk-*` release (downloaded once, 55 MB).
+- A first build takes 20 to 40 minutes; an hourly run with nothing new takes seconds.
+
+**Set it up:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rkoh46/Melee-NX-NetPlay/main/install.sh | bash -s -- /path/to/GALE01.iso
+cd ~/Melee-NX-NetPlay
+python3 tools/update-host.py /path/to/GALE01.iso            # one run: pull, follow Slippi, rebuild if needed, publish
+python3 tools/update-serve.py --bind 192.168.1.20 --port 8080   # this computer's home-network address
+```
+
+`builder/systemd/` has user units for both (an hourly timer and the server); the comments at the top of
+`melee-nx-update.service` say how to install them. With cron instead:
+`17 * * * * cd ~/Melee-NX-NetPlay && python3 tools/update-host.py /path/to/GALE01.iso >> ~/melee-nx-update.log 2>&1`.
+
+**One run of `update-host.py`:** `git pull --ff-only`; `tools/update-slippi.py` (a game-side-only Slippi release
+is adopted locally, a protocol release is recorded as pending); if the commit or any local change differs
+from what the published build was made from, `install.sh` rebuilds both apps from this checkout; then it
+publishes. It prints one summary line and exits 0 (published or nothing to do), 3 (a Slippi release is
+waiting for a port; the last good build stays published) or 1 (failure; the last good build stays
+published). The build log is `build/update-host.log`.
+
+**The published folder** (default `~/.local/share/melee-nx-netplay/updates/`, `--publish` to change): the two
+NROs under names that carry the first 12 digits of their SHA-256, and `latest.json`. NROs are written to a
+temporary name and renamed, the manifest last, so a manifest never names a half-written file; NROs the new
+manifest no longer names are removed afterwards.
+
+```json
+{
+  "schema": 1,
+  "app_version": "0.3.8",
+  "slippi_version": "3.7.0",
+  "built": "2026-11-21T05:10:00Z",
+  "commit": "<git commit of the checkout>",
+  "files": {
+    "game":    {"name": "melee-nx-netplay-0123456789ab.nro", "size": 74497982, "sha256": "<64 hex digits>"},
+    "replays": {"name": "melee-nx-replays-ba9876543210.nro", "size": 72183875, "sha256": "<64 hex digits>"}
+  },
+  "pending": null,
+  "inputs": "<fingerprint of the commit and local changes the build was made from>"
+}
+```
+
+`pending` is `{"slippi": "3.8.0", "reason": "needs a port"}` while a Slippi release waits for a port.
+
+**`update-serve.py`** answers GET and HEAD for `/latest.json` and the NRO names that manifest lists; every
+other path is 404. It refuses to bind a public address. There is no login and no TLS: home network only,
+no port forwarding. The NROs contain the game.
+
+**On the console** (`port/runtime/host/self_update.*`, `port/app/main_switch.cpp`): the manifest is fetched on
+a background thread at launch (1.5 s to connect; the launch waits 2 s at most). An update is offered when
+the published app version is newer, or equal with a newer Slippi version. A download goes to
+`<app>.nro.new`; after its size and SHA-256 match, a marker `<app>.nro.new.ok` is written. The swap is two
+renames (installed to `.bak`, `.new` into place), attempted after the app has closed its RomFS, and again
+before the RomFS is opened at every start of either app, so a swap that could not happen (the file still
+open) or was cut off between the two renames is finished at the next start. A staged file without its
+marker is deleted, never installed. Host tests: `tools/test_self_update.cpp`, `tools/test_update_host.py`.
+
 ## Running on the Switch from this computer
 
 The Switch and this computer on the same Wi-Fi is the whole requirement. On the Switch (Atmosphère) open

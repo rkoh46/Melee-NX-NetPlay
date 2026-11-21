@@ -140,6 +140,8 @@ main() {
 # HUD and online delay and saves them here.
 # online_delay: auto (2 frames for a set's first game, then 2..5 from the ping measured in the previous game) or a fixed 1..9 (Slippi's default 2). offline=1 skips the Slippi sign-in.
 # overclock=1 asks for the Erista's top clocks (CPU 1785, GPU 921, memory 1600 MHz); 0 leaves the system's.
+# update_host=http://address:port lets the console fetch updates from your own always-on computer on the
+# home network (README: "Updating from your own computer automatically"). Leave it out to keep that off.
 online_delay=auto
 offline=0
 volume=100

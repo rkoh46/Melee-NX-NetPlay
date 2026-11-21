@@ -63,6 +63,43 @@ never affected.
 
 The app cannot update itself on the console: it is built from your disc, so there is nothing to download.
 
+## Updating from your own computer automatically
+
+If a computer at home is always on (a Linux box, a home server, a Mac), it can do the rebuilding for you
+and the console can fetch the result itself. Nothing is published anywhere: the built app goes only from
+that computer to your console, over your home network.
+
+On the computer, once (details in [BUILDING.md](BUILDING.md#an-always-on-build-computer)):
+
+1. Run the installer there as above, so it has the source, the tools and your disc.
+2. Let it check every hour: `tools/update-host.py /path/to/GALE01.iso` fetches the newest
+   Melee-NX-NetPlay, looks for a new Slippi release, rebuilds when something changed and puts the result
+   in a folder.
+3. Let it offer that folder to the console: `tools/update-serve.py --bind <its home-network address> --port 8080`.
+
+On the console, once: open `sdmc:/switch/melee-nx-netplay/launcher.ini` and add the computer's address:
+
+```ini
+update_host=http://192.168.1.20:8080
+```
+
+From then on, when you start the app and the computer has something newer, a screen says
+**Update available** with the version: **A** installs it, **B** leaves it for later. Installing downloads
+the new app (and the Replays app, if it is on the card) beside the old one, checks every byte against the
+checksum the computer published, and only then swaps it in and asks you to start the app again. If the
+download is interrupted or does not check out, nothing is changed and you keep playing the version you
+have. The previous version is kept beside the app as `melee-nx-netplay.nro.bak`.
+
+What it cannot do: when a Slippi release changes how Slippi's programs talk to each other, the computer
+cannot build an app for it until Melee-NX-NetPlay itself has been updated. The console then says so
+("it needs a Melee-NX-NetPlay update first") and the update arrives by itself once that work is published.
+
+Keep it at home. The files the computer serves contain the game built from your disc, without a password
+and without encryption: use the computer's home-network address, never a public one, and do not forward
+the port on your router. The console trusts whatever answers at the address you typed, so the checksum
+protects against a broken download, not against someone else on your network pretending to be your
+computer. The setting is off unless you add it, and `offline=1` skips the check.
+
 ## What you need
 
 - A Switch running [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere). Launch the NRO with

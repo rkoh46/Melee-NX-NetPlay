@@ -157,36 +157,66 @@ void draw(State& st, int w, int h) {
 }
 }  // namespace
 
-bool switch_notice_run(MetalFrontend& frontend, const std::string& headline, const std::vector<std::string>& lines) {
+namespace {
+// One frame of the notice layout: yellow header, wrapped lines, an optional progress bar, the button hints.
+void draw_notice(int w, int h, const std::string& headline, const std::vector<std::string>& lines, const char* hint, float fraction) {
+  ImDrawList* d = ImGui::GetBackgroundDrawList();
+  ImFont* font = ImGui::GetFont();
+  const float s = h / 720.0f;
+  d->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), u32(kField));
+  for (float x = 0; x < w; x += 64 * s) d->AddLine(ImVec2(x, 0), ImVec2(x, (float)h), u32(kHairline, 0.5f));
+  for (float y = 0; y < h; y += 64 * s) d->AddLine(ImVec2(0, y), ImVec2((float)w, y), u32(kHairline, 0.5f));
+  const float px = 160 * s, py = 150 * s, hh = 44 * s, slant = 22 * s;
+  const float header_w = std::max(420 * s, font->CalcTextSizeA(26 * s, FLT_MAX, 0, headline.c_str()).x + 64 * s);
+  d->AddQuadFilled(ImVec2(px, py), ImVec2(px + header_w, py), ImVec2(px + header_w - slant, py + hh), ImVec2(px, py + hh), u32(kYellow));
+  d->AddText(font, 26 * s, ImVec2(px + 20 * s, py + 9 * s), u32(ImVec4(0.08f, 0.08f, 0.1f, 1)), headline.c_str());
+  float y = py + hh + 36 * s;
+  for (const std::string& line : lines) {
+    if (!line.empty()) d->AddText(font, 24 * s, ImVec2(px, y), u32(kText), line.c_str(), nullptr, w - 2 * px);
+    y += (line.empty() ? 18 * s : font->CalcTextSizeA(24 * s, FLT_MAX, w - 2 * px, line.c_str()).y + 14 * s);
+  }
+  if (fraction >= 0.0f) {
+    const float bar_w = w - 2 * px, bar_h = 18 * s;
+    y += 12 * s;
+    d->AddRectFilled(ImVec2(px, y), ImVec2(px + bar_w, y + bar_h), u32(kPanel), bar_h / 2);
+    d->AddRect(ImVec2(px, y), ImVec2(px + bar_w, y + bar_h), u32(kHairline), bar_h / 2);
+    const float filled = bar_w * std::min(1.0f, fraction);
+    if (filled > bar_h) d->AddRectFilled(ImVec2(px, y), ImVec2(px + filled, y + bar_h), u32(kYellow), bar_h / 2);
+  }
+  if (hint && *hint) d->AddText(font, 18 * s, ImVec2(px, h - 56 * s), u32(kMuted), hint);
+}
+}  // namespace
+
+NoticeChoice switch_prompt_run(MetalFrontend& frontend, const std::string& headline, const std::vector<std::string>& lines,
+                               const char* hint, bool allow_b) {
   PADInit();
   uint16_t last_buttons = 0xFFFF;   // ignore whatever is held at entry
   int8_t last_y = 0;
   for (;;) {
-    if (!frontend.pump_events() || frontend.close_requested()) return false;
+    if (!frontend.pump_events() || frontend.close_requested()) return NoticeChoice::Quit;
     const Edges e = read_edges(last_buttons, last_y);
-    if (e.a) return true;
-    if (e.plus) return false;
+    if (e.a) return NoticeChoice::A;
+    if (e.b && allow_b) return NoticeChoice::B;
+    if (e.plus) return NoticeChoice::Quit;
     const MetalWindowSize size = frontend.window_size();
     if (!aurora_begin_frame()) continue;
-    const int w = (int)size.width, h = (int)size.height;
-    ImDrawList* d = ImGui::GetBackgroundDrawList();
-    ImFont* font = ImGui::GetFont();
-    const float s = h / 720.0f;
-    d->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), u32(kField));
-    for (float x = 0; x < w; x += 64 * s) d->AddLine(ImVec2(x, 0), ImVec2(x, (float)h), u32(kHairline, 0.5f));
-    for (float y = 0; y < h; y += 64 * s) d->AddLine(ImVec2(0, y), ImVec2((float)w, y), u32(kHairline, 0.5f));
-    const float px = 160 * s, py = 150 * s, hh = 44 * s, slant = 22 * s;
-    const float header_w = std::max(420 * s, font->CalcTextSizeA(26 * s, FLT_MAX, 0, headline.c_str()).x + 64 * s);
-    d->AddQuadFilled(ImVec2(px, py), ImVec2(px + header_w, py), ImVec2(px + header_w - slant, py + hh), ImVec2(px, py + hh), u32(kYellow));
-    d->AddText(font, 26 * s, ImVec2(px + 20 * s, py + 9 * s), u32(ImVec4(0.08f, 0.08f, 0.1f, 1)), headline.c_str());
-    float y = py + hh + 36 * s;
-    for (const std::string& line : lines) {
-      if (!line.empty()) d->AddText(font, 24 * s, ImVec2(px, y), u32(kText), line.c_str(), nullptr, w - 2 * px);
-      y += (line.empty() ? 18 * s : font->CalcTextSizeA(24 * s, FLT_MAX, w - 2 * px, line.c_str()).y + 14 * s);
-    }
-    d->AddText(font, 18 * s, ImVec2(px, h - 56 * s), u32(kMuted), "A  Continue     +  Quit");
+    draw_notice((int)size.width, (int)size.height, headline, lines, hint, -1.0f);
     aurora_end_frame();
   }
+}
+
+bool switch_notice_run(MetalFrontend& frontend, const std::string& headline, const std::vector<std::string>& lines) {
+  return switch_prompt_run(frontend, headline, lines, "A  Continue     +  Quit", false) != NoticeChoice::Quit;
+}
+
+bool switch_progress_frame(MetalFrontend& frontend, const std::string& headline, const std::vector<std::string>& lines, float fraction) {
+  if (!frontend.pump_events() || frontend.close_requested()) return false;
+  const MetalWindowSize size = frontend.window_size();
+  if (aurora_begin_frame()) {
+    draw_notice((int)size.width, (int)size.height, headline, lines, "", fraction < 0 ? 0.0f : fraction);
+    aurora_end_frame();
+  }
+  return true;
 }
 
 SignInResult switch_signin_run(MetalFrontend& frontend, const std::string& user_dir, std::string& account_name,

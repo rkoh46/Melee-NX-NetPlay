@@ -43,6 +43,7 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
   runtime/hle/slippi_version.cpp runtime/hle/slippi_hsd_link.cpp runtime/hle/slippi_matchmaking_ws.cpp runtime/hle/slippi_match_quality.cpp
   runtime/hle/slippi_playback.cpp runtime/hle/slippi_report.cpp runtime/hle/slippi_login.cpp
   runtime/hle/slippi_http_curl.cpp runtime/hle/discord_rpc_none.cpp
+  runtime/host/self_update.cpp runtime/host/self_update_curl.cpp
   runtime/host/host.cpp runtime/host/host_log.cpp runtime/host/vcdiff.cpp runtime/host/input_script.cpp
   runtime/gx/gx_core.cpp runtime/gx/gx_texture.cpp runtime/gx/gx_shader.cpp
   runtime/gx/authored_pose.cpp runtime/gx/render_observer.cpp runtime/gx/subframe.cpp

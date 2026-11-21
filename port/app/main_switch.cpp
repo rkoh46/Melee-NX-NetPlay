@@ -38,6 +38,7 @@
 #include "switch_signin.h"
 #include "slippi_version.h"
 #endif
+#include "self_update.h"
 
 #include <atomic>
 #include <cstdio>
@@ -46,7 +47,11 @@
 #include <exception>
 #include <fstream>
 #include <map>
+#include <filesystem>
 #include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 #include <string>
 #include <sys/stat.h>
 
@@ -91,6 +96,109 @@ extern "C" int melee_nx_gc_trigger_scale;   // SDL's Switch joystick backend (sd
 std::string g_base;
 bool g_profiling = false;
 std::map<std::string, std::string> g_ini;
+
+// ---- updating from the player's own build computer (launcher.ini: update_host=; host/self_update.h) ----
+// Where the Homebrew Menu keeps the two apps. An update is downloaded beside the installed file and swapped
+// in by rename; each app also finishes a swap that is waiting for the other one.
+#if MELEE_NX_PLAYBACK
+const char* const kOwnNro = "sdmc:/switch/melee-nx-replays/melee-nx-replays.nro";
+const char* const kSiblingNro = "sdmc:/switch/melee-nx-netplay/melee-nx-netplay.nro";
+#else
+const char* const kOwnNro = "sdmc:/switch/melee-nx-netplay/melee-nx-netplay.nro";
+const char* const kSiblingNro = "sdmc:/switch/melee-nx-replays/melee-nx-replays.nro";
+#endif
+host::self_update::Swap g_launch_swap_own = host::self_update::Swap::Nothing, g_launch_swap_sibling = host::self_update::Swap::Nothing;
+std::string g_launch_swap_own_error, g_launch_swap_sibling_error;
+
+#if MELEE_NX_AURORA && !MELEE_NX_PLAYBACK
+struct UpdateCheck {
+  std::mutex lock;
+  bool ok = false;
+  host::self_update::Manifest manifest;
+  std::string error;
+  std::atomic<bool> done{false};
+};
+UpdateCheck g_update_check;
+
+// One short request to the build computer, on its own thread. Nothing waits on it for more than two seconds.
+void start_update_host_check(const std::string& update_host) {
+  const std::string url = host::self_update::join_url(update_host, "latest.json");
+  if (url.empty()) { host::log("update: update_host is not an http:// address; ignored"); g_update_check.done = true; return; }
+  std::thread([url] {
+    std::string text, error;
+    const bool fetched = host::self_update::curl_fetch(1500, 3)(url, [&](const void* data, size_t size) {
+      if (text.size() + size > 64 * 1024) return false;   // a manifest is a few hundred bytes
+      text.append(static_cast<const char*>(data), size);
+      return true;
+    }, error);
+    host::self_update::Manifest manifest;
+    const bool ok = fetched && host::self_update::parse_manifest(text, manifest, error);
+    {
+      std::lock_guard<std::mutex> guard(g_update_check.lock);
+      g_update_check.ok = ok; g_update_check.manifest = manifest; g_update_check.error = error;
+    }
+    if (ok) host::log("update: the build computer has version %s (Slippi %s)%s", manifest.app_version.c_str(), manifest.slippi_version.c_str(),
+                      manifest.pending_slippi.empty() ? "" : ", and a Slippi release waiting for a port");
+    else host::log("update: no answer from the build computer (%s)", error.c_str());
+    g_update_check.done = true;
+  }).detach();
+}
+
+// Downloads and installs the published build. Returns true when the app has to close (the new file is in
+// place or will be at the next start); false to go on with the installed version.
+bool run_self_update(host::MetalFrontend& frontend, const host::self_update::Manifest& manifest, const std::string& update_host) {
+  namespace su = host::self_update;
+  struct Job { const char* label; su::FileEntry entry; std::string nro; };
+  std::vector<Job> jobs;
+  jobs.push_back({"the game", manifest.files.at("game"), kOwnNro});
+  // The Replays app comes from the same build: keep the pair together when it is on the card.
+  if (const auto replays = manifest.files.find("replays"); replays != manifest.files.end() && std::filesystem::exists(kSiblingNro))
+    jobs.push_back({"the Replays app", replays->second, kSiblingNro});
+
+  std::atomic<uint64_t> done{0}, total{1};
+  std::atomic<int> current{0};
+  std::atomic<bool> finished{false}, cancel{false};
+  std::string error;   // written by the worker before `finished`
+  bool ok = true;
+  std::thread worker([&] {
+    const su::Fetch fetch = su::curl_fetch(3000, 20);
+    for (size_t i = 0; i < jobs.size() && ok; ++i) {
+      current = (int)i; done = 0; total = jobs[i].entry.size;
+      ok = su::download_verified(fetch, su::join_url(update_host, jobs[i].entry.name), jobs[i].entry, jobs[i].nro,
+                                 [&](uint64_t d, uint64_t) { done = d; return !cancel.load(); }, error);
+      host::log("update: %s %s%s%s", jobs[i].label, ok ? "downloaded and verified" : "not installed", ok ? "" : ": ", ok ? "" : error.c_str());
+    }
+    if (!ok) for (const Job& job : jobs) { std::remove(su::marker_path(job.nro).c_str()); std::remove(su::staged_path(job.nro).c_str()); }   // all or nothing
+    finished = true;
+  });
+  while (!finished) {
+    const Job& job = jobs[current.load()];
+    char line[96];
+    std::snprintf(line, sizeof line, "Downloading %s: %llu of %llu MB", job.label, (unsigned long long)(done.load() >> 20), (unsigned long long)(total.load() >> 20));
+    if (!host::switch_progress_frame(frontend, "UPDATING", {line, "", "Keep the console on. The installed version stays in place until the download has been checked."},
+                                     (float)((double)done.load() / (double)std::max<uint64_t>(total.load(), 1))))
+      cancel = true;
+  }
+  worker.join();
+  if (!ok) {
+    host::switch_notice_run(frontend, "UPDATE NOT INSTALLED", {"The download did not finish: " + error + ".", "", "Nothing was changed. The installed version starts now; the update is offered again next time."});
+    return false;
+  }
+  // The other app is not running: its file can be swapped now.
+  std::string swap_error;
+  if (jobs.size() > 1 && su::apply_pending(kSiblingNro, swap_error) == su::Swap::Failed) host::log("update: the Replays app is swapped at the next start (%s)", swap_error.c_str());
+  // This app's file is open as its RomFS. Close that, then swap; if the system still holds the file the
+  // swap happens at the next start, before the RomFS is opened.
+  romfsExit();
+  const su::Swap own = su::apply_pending(kOwnNro, swap_error);
+  host::log("update: %s", own == su::Swap::Done ? "the new version is in place" : ("the new version is swapped in at the next start (" + swap_error + ")").c_str());
+  host::switch_notice_run(frontend, "UPDATE INSTALLED", {
+      "Version " + manifest.app_version + " (Slippi " + manifest.slippi_version + ") has been downloaded and checked.", "",
+      own == su::Swap::Done ? "The app closes now. Start it again from the Homebrew Menu."
+                            : "The app closes now. Start it again from the Homebrew Menu: it finishes the update and asks you to start it once more."});
+  return true;
+}
+#endif
 
 void write_ini(const std::string& path, const std::map<std::string, std::string>& values) {
   std::ofstream out(path, std::ios::trunc);
@@ -194,6 +302,14 @@ void simulation_thread(void*) {
         attached = true;
         host::g_has_window = true;
         auto& online = slippi::online::config();
+        if (g_launch_swap_own == host::self_update::Swap::Done) {
+          host::switch_notice_run(*frontend, "UPDATE INSTALLED", {"The update downloaded last time is now in place.", "", "The app closes now. Start it again from the Homebrew Menu."});
+          g_result = "requested_exit"; code = 0; quit_before_boot = true;
+        }
+#if !MELEE_NX_PLAYBACK
+        const std::string update_host = g_ini.count("update_host") ? g_ini["update_host"] : std::string();
+        if (!online.offline && !update_host.empty() && !quit_before_boot) start_update_host_check(update_host);
+#endif
         if (!online.offline) slippi::version::start_update_check(host::options.cache_dir);
         if (!online.offline) {
           // Signed in already (user.json from a previous sign-in or copied from the
@@ -210,23 +326,53 @@ void simulation_thread(void*) {
             host::log("slippi: signed in as %s (%s)", account.display_name.c_str(), account.connect_code.c_str());
           }
         }
+#if !MELEE_NX_PLAYBACK
         if (!online.offline && !quit_before_boot) {
-          // Slippi's matchmaking refuses builds older than its latest release. The release check started at launch
-          // (one request to GitHub, on its own thread); give it a moment, then say so before the player meets the
-          // refusal on the character select screen. No network, or no newer release: straight to the game.
-          for (int i = 0; i < 20 && !slippi::version::update_check_finished() && slippi::version::newer_release().empty(); ++i) svcSleepThread(100'000'000ull);
+          // Two background checks started above: Slippi's latest release (GitHub) and, when update_host is set, the
+          // player's build computer. Give them a moment (2 s at most), then say what they found before the game starts.
+          const bool ask_host = !update_host.empty();
+          for (int i = 0; i < 20; ++i) {
+            const bool slippi_known = slippi::version::update_check_finished() || !slippi::version::newer_release().empty();
+            if (slippi_known && (!ask_host || g_update_check.done)) break;
+            svcSleepThread(100'000'000ull);
+          }
+          host::self_update::Manifest manifest; bool have_manifest = false;
+          if (ask_host && g_update_check.done) { std::lock_guard<std::mutex> guard(g_update_check.lock); have_manifest = g_update_check.ok; manifest = g_update_check.manifest; }
+          bool offered = false;
+          if (have_manifest && host::self_update::should_offer(manifest, MELEE_PORT_VERSION, slippi::version::kSemver)) {
+            offered = true;
+            const host::NoticeChoice choice = host::switch_prompt_run(*frontend, "UPDATE AVAILABLE", {
+                "Your build computer has version " + manifest.app_version + " (Slippi " + manifest.slippi_version + ").",
+                std::string("This console has version ") + MELEE_PORT_VERSION + " (Slippi " + slippi::version::kSemver + ").", "",
+                "Install it now? It is downloaded over your home network and checked before anything is replaced."},
+                "A  Install     B  Later     +  Quit", true);
+            if (choice == host::NoticeChoice::Quit || (choice == host::NoticeChoice::A && run_self_update(*frontend, manifest, update_host))) {
+              g_result = "requested_exit"; code = 0; quit_before_boot = true;
+            }
+          }
+          // Slippi's matchmaking refuses builds older than its latest release: say so before the player meets the
+          // refusal on the character select screen. Not when an update that covers it was just offered.
           const std::string newer = slippi::version::newer_release();
-          if (!newer.empty()) {
-            const bool go_on = host::switch_notice_run(*frontend, "SLIPPI " + newer + " IS OUT", {
-                std::string("This build plays Slippi ") + slippi::version::kSemver + ". Until it is updated, Slippi will refuse to find you online matches.",
-                "",
-                "To update: on the computer you built this on, run the installer again with your disc, then copy the new files to the SD card.",
-                "If the installer says the new release needs a port, online play has to wait for a Melee-NX-NetPlay update.",
-                "",
-                "Offline play (VS Mode, training, replays) works as before."});
-            if (!go_on) { g_result = "requested_exit"; code = 0; quit_before_boot = true; }
+          const bool update_covers_it = offered && !slippi::version::is_newer(newer, manifest.slippi_version);
+          if (!newer.empty() && !quit_before_boot && !update_covers_it) {
+            std::vector<std::string> lines = {
+                std::string("This build plays Slippi ") + slippi::version::kSemver + ". Until it is updated, Slippi will refuse to find you online matches.", ""};
+            if (!ask_host) {
+              lines.push_back("To update: on the computer you built this on, run the installer again with your disc, then copy the new files to the SD card.");
+              lines.push_back("If the installer says the new release needs a port, online play has to wait for a Melee-NX-NetPlay update.");
+            } else if (have_manifest && !manifest.pending_slippi.empty() && !slippi::version::is_newer(newer, manifest.pending_slippi)) {
+              lines.push_back("Your build computer has seen it. This release changes how Slippi's programs talk to each other, so it needs a Melee-NX-NetPlay update first. That update is offered here as soon as it has been published and built.");
+            } else if (have_manifest) {
+              lines.push_back("Your build computer has not built it yet. The update is offered here when it is ready; if the release needs a Melee-NX-NetPlay update first, this screen will say so.");
+            } else {
+              lines.push_back("Your build computer did not answer, so this console cannot tell whether an update is ready. Check that it is on and on the same network.");
+            }
+            lines.push_back("");
+            lines.push_back("Offline play (VS Mode, training, replays) works as before.");
+            if (!host::switch_notice_run(*frontend, "SLIPPI " + newer + " IS OUT", lines)) { g_result = "requested_exit"; code = 0; quit_before_boot = true; }
           }
         }
+#endif
         {
           host::RuntimeSettings rs = g_rs;
           rs.volume = g_volume; rs.hud = g_hud; rs.online_delay = online.delay_auto ? 0 : online.delay; rs.vsync = true;
@@ -393,6 +539,10 @@ void simulation_thread(void*) {
 }  // namespace
 
 extern "C" void userAppInit() {
+  // A verified update waiting beside either app is swapped in here, before this app opens its own file as
+  // its RomFS. The code already in memory is the old build, so main() then asks for a restart.
+  g_launch_swap_own = host::self_update::apply_pending(kOwnNro, g_launch_swap_own_error);
+  g_launch_swap_sibling = host::self_update::apply_pending(kSiblingNro, g_launch_swap_sibling_error);
   romfsInit();                 // Slippi's Sys folder ships in the NRO as romfs:/Sys
   socketInitializeDefault();
   nxlinkStdio();               // stdout to nxlink when a host is listening; harmless otherwise
@@ -599,6 +749,12 @@ int main(int argc, char** argv) {
 #endif
   host::log("execution: frames=%u fast=%s %s fp_profile=%s", o.frames, o.fast ? "true" : "false",
             ppc::interpreter_allowed() ? "interpreter fallback allowed" : "strict AOT", ppc::fp_profile_name(ppc::fp_profile()));
+  if (g_launch_swap_own != host::self_update::Swap::Nothing || !g_launch_swap_own_error.empty())
+    host::log("update: at start, this app's waiting update: %s%s%s", g_launch_swap_own == host::self_update::Swap::Done ? "installed" : g_launch_swap_own == host::self_update::Swap::Failed ? "could not be installed" : "none",
+              g_launch_swap_own_error.empty() ? "" : ": ", g_launch_swap_own_error.c_str());
+  if (g_launch_swap_sibling != host::self_update::Swap::Nothing || !g_launch_swap_sibling_error.empty())
+    host::log("update: at start, the other app's waiting update: %s%s%s", g_launch_swap_sibling == host::self_update::Swap::Done ? "installed" : g_launch_swap_sibling == host::self_update::Swap::Failed ? "could not be installed" : "none",
+              g_launch_swap_sibling_error.empty() ? "" : ": ", g_launch_swap_sibling_error.c_str());
   host::log("paths: iso=%s sys=%s profile=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), o.profile_dir.c_str(), o.cache_dir.c_str());
 
   // The simulation thread gets core 2 to itself at the highest priority an application may use
