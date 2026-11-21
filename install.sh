@@ -97,7 +97,10 @@ main() {
     curl -fL --progress-bar -o "build/$SDK_FILE" "$sdk_base/$SDK_FILE"
     curl -fsSL -o "build/$SDK_FILE.sha256" "$sdk_base/$SDK_FILE.sha256"
     (cd build && shasum -a 256 -c "$SDK_FILE.sha256" >/dev/null) || fail "The SDK download did not match its checksum; run the installer again."
-    rm -rf build/sdk && mkdir -p build/sdk && tar -xzf "build/$SDK_FILE" -C build/sdk
+    rm -rf build/sdk && mkdir -p build/sdk && tar -xzf "build/$SDK_FILE" -C build/sdk 2>/dev/null
+    # An archive packed on a Mac carries "._name" companion files. A Mac's tar folds them back into the files
+    # they belong to; Linux tar writes them out, and the link step then took ._libmesa_util_c11.a for a library.
+    find build/sdk -name '._*' -type f -delete
     ok "unpacked to build/sdk"
   fi
 

@@ -72,6 +72,7 @@ cat > "$stage/SDK_MANIFEST.json" <<EOF
 EOF
 out="$repo/build/melee-nx-netplay-sdk-$version.tar.gz"
 echo "==> $out"
-tar -C "$stage" -czf "$out" .
+# COPYFILE_DISABLE keeps macOS tar from adding "._name" companion files, which Linux unpacks as real files.
+COPYFILE_DISABLE=1 tar -C "$stage" -czf "$out" .
 (cd "$repo/build" && shasum -a 256 "$(basename "$out")" > "$out.sha256")
 du -h "$out" | cut -f1
