@@ -40,6 +40,7 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
   runtime/hle/hle_card.cpp runtime/hle/hle_mtx.cpp runtime/hle/hle_dvd.cpp runtime/hle/dvd_read_worker.cpp runtime/hle/hle_os.cpp
   runtime/hle/hle_pad.cpp runtime/hle/pad_rumble.cpp runtime/hle/hle_stubs.cpp runtime/hle/jukebox.cpp
   runtime/hle/slippi_net.cpp runtime/hle/slippi_net_diag.cpp runtime/hle/slippi_online.cpp runtime/hle/slippi_offline.cpp
+  runtime/hle/slippi_version.cpp runtime/hle/slippi_hsd_link.cpp runtime/hle/slippi_matchmaking_ws.cpp runtime/hle/slippi_match_quality.cpp
   runtime/hle/slippi_playback.cpp runtime/hle/slippi_report.cpp runtime/hle/slippi_login.cpp
   runtime/hle/slippi_http_curl.cpp runtime/hle/discord_rpc_none.cpp
   runtime/host/host.cpp runtime/host/host_log.cpp runtime/host/vcdiff.cpp runtime/host/input_script.cpp
@@ -87,6 +88,8 @@ target_compile_definitions(runtime_switch PUBLIC NOMINMAX
   MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
   MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
 target_compile_definitions(runtime_switch PRIVATE MELEE_PORT_VERSION="${MELEE_PORT_VERSION}")
+target_compile_definitions(runtime_switch PUBLIC SLIPPI_PIN_VERSION="${SLIPPI_PIN_VERSION}"
+  SLIPPI_PIN_TAG="${SLIPPI_PIN_TAG}" SLIPPI_PIN_MATCHMAKING_URL="${SLIPPI_PIN_MATCHMAKING_URL}")
 if(NOT PORT_ONLINE)
   target_compile_definitions(runtime_switch PUBLIC MELEE_PORT_OFFLINE=1)
 else()
@@ -147,6 +150,7 @@ endif()
 # RomFS carries Slippi's Sys folder (code list, code handler, GameFiles), read at
 # romfs:/Sys. Nothing from the disc is in it.
 set(PORT_ROMFS "${PROJECT_BINARY_DIR}/romfs")
+file(REMOVE_RECURSE "${PORT_ROMFS}/Sys")   # a Slippi update can remove or rename Sys files
 file(MAKE_DIRECTORY "${PORT_ROMFS}/Sys")
 file(COPY "${MELEE_NX_SYS}/" DESTINATION "${PORT_ROMFS}/Sys")
 file(GLOB_RECURSE PORT_SYS_FILES CONFIGURE_DEPENDS "${MELEE_NX_SYS}/*")

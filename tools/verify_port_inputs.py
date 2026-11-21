@@ -21,7 +21,7 @@ def sha(path, algorithm="sha256"):
 def build_sources(root=ROOT):
     """All project/runtime input code, excluding local game outputs and tests."""
     files = {root / "CMakeLists.txt", root / "port/CMakeLists.txt",
-             root / "VERSION", root / "tools/port_source_pins.json",
+             root / "VERSION", root / "tools/port_source_pins.json", root / "tools/slippi_pin.json",
              root / "tools/bootstrap_port.py", root / "tools/generate_fobj_host.py",
              root / "tools/verify_port_inputs.py", root / "port/recomp/hle_list.txt"}
     for directory in ("port/recomp", "port/runtime", "port/app", "port/third_party", "native"):

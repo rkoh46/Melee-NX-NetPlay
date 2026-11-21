@@ -22,7 +22,7 @@
     "files_sha256": {
       "codehandler.bin": "4fff42b192e95b353da28f6c3f0afa002bfbd2caf7c4bfb1187304e2406ccb0c",
       "bootloader.gct": "6beeb0d74f58eb7825ed9ceb60e3037f9a55f6265efc3a2085f3073ffe6b3680",
-      "GameSettings/GALE01r2.ini": "b30b294df5c0d92deb3129afdfbc894a48aabeb1bce0cf92cce8c4e5408a2587"
+      "GameSettings/GALE01r2.ini": "2392fbc9da281eb8c8ceb5aa13222d45ea83e3cfd38389fec6e0705aead49609"
     },
     "gct_base": "0x8065CC80",
     "gct_base_evidence": "Upstream README.md profile; observed at runtime in a 600-retrace strict offline arm64 run of artifact 219e75d858125b254734a3a52603921e13bb8a03f3732d0e5333c4df234823eb. New artifacts require their own runtime verification.",

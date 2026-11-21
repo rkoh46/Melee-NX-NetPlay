@@ -36,6 +36,7 @@
 #include "overlay_imgui.h"
 #include "slippi_login.h"
 #include "switch_signin.h"
+#include "slippi_version.h"
 #endif
 
 #include <atomic>
@@ -193,6 +194,7 @@ void simulation_thread(void*) {
         attached = true;
         host::g_has_window = true;
         auto& online = slippi::online::config();
+        if (!online.offline) slippi::version::start_update_check(host::options.cache_dir);
         if (!online.offline) {
           // Signed in already (user.json from a previous sign-in or copied from the
           // Slippi Launcher)? Then straight to the game; otherwise the sign-in screen.
@@ -206,6 +208,23 @@ void simulation_thread(void*) {
             }
           } else {
             host::log("slippi: signed in as %s (%s)", account.display_name.c_str(), account.connect_code.c_str());
+          }
+        }
+        if (!online.offline && !quit_before_boot) {
+          // Slippi's matchmaking refuses builds older than its latest release. The release check started at launch
+          // (one request to GitHub, on its own thread); give it a moment, then say so before the player meets the
+          // refusal on the character select screen. No network, or no newer release: straight to the game.
+          for (int i = 0; i < 20 && !slippi::version::update_check_finished() && slippi::version::newer_release().empty(); ++i) svcSleepThread(100'000'000ull);
+          const std::string newer = slippi::version::newer_release();
+          if (!newer.empty()) {
+            const bool go_on = host::switch_notice_run(*frontend, "SLIPPI " + newer + " IS OUT", {
+                std::string("This build plays Slippi ") + slippi::version::kSemver + ". Until it is updated, Slippi will refuse to find you online matches.",
+                "",
+                "To update: on the computer you built this on, run the installer again with your disc, then copy the new files to the SD card.",
+                "If the installer says the new release needs a port, online play has to wait for a Melee-NX-NetPlay update.",
+                "",
+                "Offline play (VS Mode, training, replays) works as before."});
+            if (!go_on) { g_result = "requested_exit"; code = 0; quit_before_boot = true; }
           }
         }
         {

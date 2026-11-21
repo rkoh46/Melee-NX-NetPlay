@@ -4,6 +4,8 @@
 #include "slippi_playback.h"
 #include "slippi_online.h"
 #include "slippi_game_file.h"
+#include "slippi_hsd_link.h"
+#include "slippi_match_quality.h"
 #if defined(__SWITCH__)
 #include "log_switch.h"
 #endif
@@ -48,7 +50,7 @@ enum Cmd : uint8_t {
 // Fixed payload sizes (bytes after the command byte), from CEXISlippi::payloadSizes.
 std::unordered_map<uint8_t, uint32_t> g_payload_sizes = {
     {CMD_RECEIVE_COMMANDS, 1}, {CMD_PREPARE_REPLAY, 0xFFFF}, {CMD_READ_FRAME, 4}, {CMD_IS_STOCK_STEAL, 5}, {CMD_GET_LOCATION, 6},
-    {CMD_IS_FILE_READY, 0}, {CMD_GET_GECKO_CODES, 0}, {CMD_ONLINE_INPUTS, 25}, {CMD_CAPTURE_SAVESTATE, 32}, {CMD_LOAD_SAVESTATE, 32},
+    {CMD_IS_FILE_READY, 0}, {CMD_GET_GECKO_CODES, 0}, {CMD_ONLINE_INPUTS, 27}, {CMD_CAPTURE_SAVESTATE, 32}, {CMD_LOAD_SAVESTATE, 32},
     {CMD_GET_MATCH_STATE, 0}, {CMD_FIND_OPPONENT, 19}, {CMD_SET_MATCH_SELECTIONS, 9}, {CMD_SEND_CHAT_MESSAGE, 2}, {CMD_OPEN_LOGIN, 0},
     {CMD_LOGOUT, 0}, {CMD_UPDATE, 0}, {CMD_GET_ONLINE_STATUS, 0}, {CMD_CLEANUP_CONNECTION, 0}, {CMD_GET_NEW_SEED, 0},
     {CMD_REPORT_GAME, 368}, {CMD_FETCH_CODE_SUGGESTION, 31}, {CMD_OVERWRITE_SELECTIONS, 2 + 12},
@@ -301,7 +303,39 @@ bool read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
 
 // Reads and patches one file. Runs without the cache lock held: the preload worker must never
 // make the simulation thread wait behind a multi-megabyte read plus VCDIFF.
+// Slippi 3.7 game files can link to assets on the player's own disc (`slp:<disc file>:0x<offset>` symbols in the
+// archive's reference table, e.g. GameSetup_gui.dat and SlippiCSS_gui.dat). The links are replaced with the assets
+// they name; a file whose links cannot be resolved is served as nothing rather than with dangling links, exactly
+// as SlippiGameFileLoader::resolveLinks does.
+void resolve_links(const std::string& name, std::vector<uint8_t>& contents) {
+  if (contents.empty()) return;
+  const double t0 = host::now_seconds();
+  const hsd::LinkResult result = hsd::resolve_links(contents, [](const std::string& disc_name, std::vector<uint8_t>& data) {
+    uint32_t off = 0, size = 0;
+    if (!files::valid_name(disc_name) || !host::disc_find_file(disc_name, &off, &size)) return false;
+    data.resize(size);
+    return size != 0 && host::disc_read(off, data.data(), size);
+  });
+  for (const auto& warning : result.warnings) host::log("slippi: %s: %s", name.c_str(), warning.c_str());
+  if (result.status == hsd::LinkStatus::NoLinks) return;
+  if (result.status != hsd::LinkStatus::Resolved) {
+    host::log("slippi: serving nothing for %s: its links to the disc could not be resolved (%s). A game file Slippi needs from the disc is missing or modified; use an unmodified NTSC 1.02 disc.",
+              name.c_str(), result.error.c_str());
+    contents.clear();
+    return;
+  }
+  host::log("slippi: resolved %zu links in %s from %zu disc files in %.0f ms (%zu bytes)", result.links, name.c_str(),
+            result.disc_files.size(), (host::now_seconds() - t0) * 1000.0, contents.size());
+}
+
+std::vector<uint8_t> build_game_file_unlinked(const std::string& name, FileLoadContext context);
 std::vector<uint8_t> build_game_file(const std::string& name, FileLoadContext context) {
+  std::vector<uint8_t> out = build_game_file_unlinked(name, context);
+  if (!out.empty() && !preload_cancelled(context)) resolve_links(name, out);
+  return out;
+}
+
+std::vector<uint8_t> build_game_file_unlinked(const std::string& name, FileLoadContext context) {
   std::vector<uint8_t> out;
   if (preload_cancelled(context) || !g_game_file_root || !files::valid_name(name)) return out;
   std::vector<uint8_t> blob;
@@ -505,7 +539,7 @@ void dma_write(uint32_t addr, uint32_t size) {
       case CMD_STOP_MUSIC: jukebox::stop(); break;
       case CMD_CHANGE_MUSIC_VOLUME: jukebox::set_melee_volume(mem[loc + 1]); break;
       case CMD_RECEIVE_COMMANDS: break;   // handled above
-      case CMD_RECEIVE_GAME_END: write_to_file(&mem[loc], payload + 1, "close"); break;
+      case CMD_RECEIVE_GAME_END: write_to_file(&mem[loc], payload + 1, "close"); match_quality::end_game(); break;
       case CMD_FRAME_BOOKEND: write_to_file(&mem[loc], payload + 1, ""); break;
       case CMD_PREPARE_REPLAY: case CMD_READ_FRAME: case CMD_IS_STOCK_STEAL:
       case CMD_IS_FILE_READY: case CMD_GET_GECKO_CODES: {

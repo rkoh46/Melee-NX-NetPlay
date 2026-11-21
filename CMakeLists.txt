@@ -37,6 +37,12 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MELEE_PORT_INP
 file(SHA256 "${MELEE_PORT_INPUT_MANIFEST}" MELEE_PORT_INPUT_MANIFEST_SHA256)
 file(STRINGS "${PROJECT_SOURCE_DIR}/VERSION" MELEE_PORT_VERSION LIMIT_COUNT 1)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/VERSION")   # a version bump reconfigures
+# The Slippi release this build implements: one file names the version, endpoint and upstream tag.
+file(READ "${PROJECT_SOURCE_DIR}/tools/slippi_pin.json" MELEE_SLIPPI_PIN)
+string(JSON SLIPPI_PIN_VERSION GET "${MELEE_SLIPPI_PIN}" version)
+string(JSON SLIPPI_PIN_MATCHMAKING_URL GET "${MELEE_SLIPPI_PIN}" matchmaking_url)
+string(JSON SLIPPI_PIN_TAG GET "${MELEE_SLIPPI_PIN}" ishiiruka tag)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tools/slippi_pin.json")
 
 # ---- Runtime link group (after project(); the devkitPro platform file overwrites an earlier value) ----
 # Everything cyclic between the C/C++ runtime, libnx and the portlibs resolves in one rescan group;

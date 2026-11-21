@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "slippi_report.h"
+#include "slippi_version.h"
 #if !defined(MELEE_PORT_OFFLINE) || !MELEE_PORT_OFFLINE
 #include "slippi_net.h"
 #include "host.h"
@@ -35,12 +36,13 @@
 namespace slippi::report {
 namespace {
 using json = nlohmann::json;
+// The user agent Slippi Dolphin sends, with the Slippi version this build implements (tools/slippi_pin.json).
 #if defined(_WIN32)
-const wchar_t* USER_AGENT = L"SlippiDolphin (b: ishiiruka) (v: 3.6.4) (o: windows)";
+const wchar_t* USER_AGENT = L"SlippiDolphin (b: ishiiruka) (v: " SLIPPI_PIN_VERSION ") (o: windows)";
 #elif defined(__APPLE__)
-const char* USER_AGENT = "SlippiDolphin (b: ishiiruka) (v: 3.6.4) (o: macos)";
+const char* USER_AGENT = "SlippiDolphin (b: ishiiruka) (v: " SLIPPI_PIN_VERSION ") (o: macos)";
 #else
-const char* USER_AGENT = "SlippiDolphin (b: ishiiruka) (v: 3.6.4) (o: linux)";
+const char* USER_AGENT = "SlippiDolphin (b: ishiiruka) (v: " SLIPPI_PIN_VERSION ") (o: linux)";
 #endif
 const char* ENDPOINT = "https://internal.slippi.gg/graphql";
 constexpr int MAX_ATTEMPTS = 5;
@@ -306,26 +308,12 @@ std::thread g_rank_thread;
 // SlippiRank::decide
 int8_t decide_rank(float o, uint16_t global, uint16_t regional, uint32_t updates) {
   if (updates < 5) return 0;
-  if (o <= 765.42f) return 1;
-  if (o > 765.43f && o <= 913.71f) return 2;
-  if (o > 913.72f && o <= 1054.86f) return 3;
-  if (o > 1054.87f && o <= 1188.87f) return 4;
-  if (o > 1188.88f && o <= 1315.74f) return 5;
-  if (o > 1315.75f && o <= 1435.47f) return 6;
-  if (o > 1435.48f && o <= 1548.06f) return 7;
-  if (o > 1548.07f && o <= 1653.51f) return 8;
-  if (o > 1653.52f && o <= 1751.82f) return 9;
-  if (o > 1751.83f && o <= 1842.99f) return 10;
-  if (o > 1843.0f && o <= 1927.02f) return 11;
-  if (o > 1927.03f && o <= 2003.91f) return 12;
-  if (o > 2003.92f && o <= 2073.66f) return 13;
-  if (o > 2073.67f && o <= 2136.27f) return 14;
-  if (o > 2136.28f && o <= 2191.74f) return 15;
+  // Each threshold is the minimum rating for that rank, checked from the top down (Slippi 3.7).
   if (o >= 2191.75f && (global > 0 || regional > 0)) return 19;
-  if (o > 2191.75f && o <= 2274.99f) return 16;
-  if (o > 2275.0f && o <= 2350.0f) return 17;
-  if (o > 2350.0f) return 18;
-  return 0;
+  static const float minimum[] = {765.43f, 913.72f, 1054.87f, 1188.88f, 1315.75f, 1435.48f, 1548.07f, 1653.52f, 1751.83f,
+                                  1843.0f, 1927.03f, 2003.92f, 2073.67f, 2136.28f, 2191.75f, 2275.0f, 2350.0f};
+  for (int i = 16; i >= 0; --i) if (o >= minimum[i]) return (int8_t)(i + 2);
+  return 1;
 }
 
 void join_rank_thread() { if (g_rank_thread.joinable()) g_rank_thread.join(); }

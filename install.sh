@@ -12,6 +12,10 @@
 #      Replays app that plays your saved matches back (20-40 minutes together)
 #   6. leaves a folder ready for your SD card and tells you exactly where to put it
 # Your disc stays where it is; nothing from it is uploaded anywhere.
+#
+# After a new Slippi release, run it again: it fetches the newest Melee-NX-NetPlay and rebuilds. Add
+# --update-slippi to also adopt a Slippi release newer than the one this source implements when that
+# release only changed the game side (tools/update-slippi.py decides; it never guesses).
 set -euo pipefail
 
 REPO_URL="https://github.com/rkoh46/Melee-NX-NetPlay"
@@ -30,11 +34,15 @@ fail() { printf '\n%s✗ %s%s\n' "$red" "$*" "$reset" >&2; exit 1; }
 # The whole script sits in main() so `curl | bash` parses it completely before any
 # command (docker run -i in particular) can read from the same stdin.
 main() {
+  update_slippi=0
+  args=()
+  for arg in "$@"; do if [[ "$arg" == "--update-slippi" ]]; then update_slippi=1; else args+=("$arg"); fi; done
+  set -- ${args[@]+"${args[@]}"}
   iso="${1:-}"
   if [[ -z "$iso" ]]; then
     printf '%sMelee-NX-NetPlay%s builds Super Smash Bros. Melee with Slippi online play for a Nintendo Switch\n' "$bold" "$reset"
     printf 'running Atmosphère, from your own disc image. Usage:\n\n'
-    printf '  bash install.sh /path/to/GALE01.iso\n\n'
+    printf '  bash install.sh /path/to/GALE01.iso [--update-slippi]\n\n'
     printf 'The disc must be NTSC-U 1.02 (GALE01). Drag the file into the terminal to get its path.\n'
     exit 64
   fi
@@ -55,7 +63,9 @@ main() {
   fi
 
   step "2/6  Getting the source into $DEST"
-  if [[ -d "$DEST/.git" ]]; then
+  if [[ -d "$DEST/.git" && "${MELEE_NX_NO_PULL:-0}" == 1 ]]; then
+    ok "using this checkout as it is"
+  elif [[ -d "$DEST/.git" ]]; then
     git -C "$DEST" pull --ff-only --quiet </dev/null && ok "updated"
   else
     git clone --quiet "$REPO_URL" "$DEST" </dev/null && ok "cloned"
@@ -63,6 +73,20 @@ main() {
   cd "$DEST"
   bash builder/fetch-deps.sh melee </dev/null >/dev/null
   ok "pinned doldecomp/melee (symbol names only; no game code comes from it)"
+  slippi_version="$(python3 -c 'import json,sys; print(json.load(open("tools/slippi_pin.json"))["version"])')"
+  if [[ $update_slippi == 1 ]]; then
+    note "checking for a Slippi release newer than $slippi_version"
+    slippi_status=0
+    python3 tools/update-slippi.py </dev/null | sed 's/^/  /' || slippi_status=${PIPESTATUS[0]}
+    if [[ $slippi_status == 3 ]]; then
+      note "The newest Slippi release needs a Melee-NX-NetPlay update before it can be used (details above)."
+      note "Building Slippi $slippi_version anyway: offline play works; online play waits for that update."
+    elif [[ $slippi_status != 0 ]]; then
+      note "The Slippi release check did not finish; building Slippi $slippi_version."
+    fi
+    slippi_version="$(python3 -c 'import json,sys; print(json.load(open("tools/slippi_pin.json"))["version"])')"
+  fi
+  ok "this build plays Slippi $slippi_version"
 
   step "3/6  Downloading the prebuilt SDK (GPU driver, Dawn, SDL3, Aurora: no game content)"
   mkdir -p build/sdk

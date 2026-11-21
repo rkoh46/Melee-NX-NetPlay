@@ -87,6 +87,50 @@ default: 2 frames for the first game against an opponent, then 2..5 from the pin
 `clock_cpu_mhz=` `clock_gpu_mhz=` `clock_mem_mhz=`; 0: the system's clocks). The in-game menu is
 L+R+Start held half a second. Without a saved identity the renderer shows the Slippi sign-in screen first.
 
+## Following Slippi releases
+
+`tools/slippi_pin.json` is the one place that names the Slippi release the port implements: the version it
+reports (matchmaking and the report user agent), the matchmaking endpoint, the Slippi Dolphin tag and commit,
+and the `slippi-rust-extensions` commit that tag uses. CMake reads it into the build
+(`port/runtime/hle/slippi_version.h`); nothing else in the tree carries a version string.
+
+```bash
+python3 tools/update-slippi.py --check       # what the latest Slippi release would need; changes nothing
+bash tools/update-slippi.sh /path/to/GALE01.iso   # adopt it if possible, then rebuild both apps
+```
+
+The tool diffs the upstream files listed under `host_protocol` in the pin between the pinned release and
+the new one. If none changed, it copies the release's `Data/Sys` files (the inventory under `sys_files`)
+into `port/slippi_sys`, rewrites `tools/slippi_sys_manifest.json` and the Slippi hashes in
+`tools/port_source_pins.json`, and moves the pin; regeneration then validates every Gecko hook against the
+HLE list as usual. If any changed, it stops with exit status 3 and lists them with their counterparts here.
+Never edit `version` by hand to get past matchmaking: a build that reports a release whose protocol it
+does not speak desyncs or fails against Dolphin players.
+
+Porting a protocol release: bring the files below up to the new upstream, then run
+`python3 tools/update-slippi.py --tag vX.Y.Z --ported` to adopt the Sys files and move the pin.
+
+| Upstream (Slippi Dolphin, `Source/Core/Core/`) | Here (`port/runtime/hle/`) |
+|---|---|
+| `HW/EXI_DeviceSlippi.{h,cpp}`: commands, payload sizes, reply layouts, online frame flow | `exi_slippi.cpp` (table, recording, game files), `slippi_online.cpp` (online commands, savestates), `slippi_offline.cpp` (offline replies of the same sizes) |
+| `Slippi/SlippiNetplay.{h,cpp}`, `Slippi/SlippiPad.h`, `NetPlayProto.h`: peer wire format | `slippi_net.{h,cpp}` (`NetplayClient`, `Pad`, `NetMsg`) |
+| `Slippi/SlippiMatchmaking.{h,cpp}`: STUN on the netplay socket, the match result | `slippi_net.cpp` (`Matchmaking`), STUN servers in `slippi_version.h` |
+| `Slippi/SlippiGameFileLoader.cpp` | `exi_slippi.cpp` (`build_game_file`, `resolve_links`) |
+| `Slippi/SlippiSavestate.cpp` | `slippi_online.cpp` (`Savestate`) |
+| `Slippi/SlippiGameReporter.cpp` | `slippi_report.cpp` |
+
+| Upstream (`slippi-rust-extensions`) | Here |
+|---|---|
+| `matchmaking/` (queue service client, STUN codec) | `slippi_matchmaking_ws.{h,cpp}`; host test `tools/test_matchmaking_ws.cpp` |
+| `hsd/` `archive.rs`, `link.rs`, `hash.rs`, `ffi/src/hsd.rs` (links from game files to disc assets) | `slippi_hsd_link.{h,cpp}`; host test `tools/test_hsd_link.cpp` |
+| `match-quality/` (ranked termination) | `slippi_match_quality.{h,cpp}` |
+| `user/` (rank thresholds), `game-reporter/` | `slippi_report.cpp`, `slippi_net.cpp` |
+| `jukebox/` | `jukebox.cpp` |
+| `input-suggestions/` | not ported: message 0x87 is accepted and ignored, the prediction block of the online-inputs reply repeats the latest real input |
+| `ffi/includes/SlippiRustExtensions.h` | the whole host surface: a new function there is a new host duty |
+
+The Replays app's code set (`port/slippi_sys_playback`) is not moved by the tool.
+
 ## Running on the Switch from this computer
 
 The Switch and this computer on the same Wi-Fi is the whole requirement. On the Switch (Atmosphère) open

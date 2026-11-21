@@ -26,13 +26,19 @@ constexpr int ONLINE_LOCKSTEP_INTERVAL = 30;
 constexpr int REMOTE_PLAYER_MAX = 3;
 constexpr int PLAYER_COUNT_MAX = REMOTE_PLAYER_MAX + 1;
 constexpr int PAD_FULL_SIZE = 0xC;
-constexpr int PAD_DATA_SIZE = 0x8;
+constexpr int PAD_INPUT_SIZE = 0x8;                  // buttons, sticks and triggers (an input suggestion carries only these)
+constexpr int PAD_WIRE_SIZE = PAD_INPUT_SIZE + 1;    // plus the RNG bits: what each frame's pad is on the network (Slippi 3.7)
+// A dropped player's newest inputs are reported to the other players (SLIPPI_DROP_* in Dolphin's SlippiNetplay.h).
+constexpr size_t DROP_REPORT_INPUT_COUNT = 64;
+constexpr uint64_t DROP_REPORT_WAIT_MS = 300;
+constexpr int32_t DROP_DESPAWN_FRAMES = 2 * ROLLBACK_MAX_FRAMES + 2;
+constexpr size_t GAME_PREP_STEP_QUEUE_MAX = 32;
 constexpr uint8_t CHAT_MSG_CHAT_DISABLED = 0x10;
-extern const char* const SLIPPI_SEMVER;   // netplay version this port speaks
 
 enum NetMsg : uint8_t {
   NP_MSG_SLIPPI_PAD = 0x80, NP_MSG_SLIPPI_PAD_ACK = 0x81, NP_MSG_SLIPPI_MATCH_SELECTIONS = 0x82, NP_MSG_SLIPPI_CONN_SELECTED = 0x83,
   NP_MSG_SLIPPI_CHAT_MESSAGE = 0x84, NP_MSG_SLIPPI_COMPLETE_STEP = 0x85, NP_MSG_SLIPPI_SYNCED_STATE = 0x86,
+  NP_MSG_SLIPPI_PAD_SUGGESTION = 0x87, NP_MSG_SLIPPI_PLAYER_DROP = 0x88,
 };
 
 // sf::Packet wire format: integers big-endian, bool as one byte, strings as u32 length + bytes.
@@ -69,7 +75,7 @@ struct Pad {
   uint32_t checksum = 0;
   uint8_t buf[PAD_FULL_SIZE] = {};
   explicit Pad(int32_t f) : frame(f) {}
-  Pad(int32_t f, const uint8_t* data) : frame(f) { for (int i = 0; i < PAD_DATA_SIZE; ++i) buf[i] = data[i]; }
+  Pad(int32_t f, const uint8_t* data) : frame(f) { for (int i = 0; i < PAD_WIRE_SIZE; ++i) buf[i] = data[i]; }
   Pad(int32_t f, int32_t cf, uint32_t c, const uint8_t* data) : Pad(f, data) { checksum_frame = cf; checksum = c; }
 };
 
@@ -78,6 +84,7 @@ struct RemotePadOutput {
   uint32_t checksum = 0;
   uint8_t player_idx = 0;
   bool is_disconnected = false;
+  int32_t despawn_frame = 0;   // the frame a dropped player's fighter despawns on; 0 until their last input is settled
   std::vector<uint8_t> data;
 };
 
@@ -111,6 +118,7 @@ struct UserInfo {
   std::vector<std::string> chat_messages;
   bool is_bot = false;
   float ranked_rating = 0; int ranked_update_count = 0, ranked_global_placement = 0, ranked_regional_placement = 0;
+  float ranked_mmr = 0;
 };
 
 // The user record written by the Slippi Launcher (user.json in the Slippi user folder).
@@ -176,12 +184,13 @@ class NetplayClient {
   std::unordered_map<uint8_t, bool> GetActivePlayerIndices() const;
   void ForceDisconnectPlayer(uint8_t player_idx);
   void ForceDisconnect(DisconnectReason reason = DisconnectReason::UNSPECIFIED);
+  void FillDroppedPlayerInputs(int32_t frame);
+  uint64_t GetPingUs(int index) const { return ping_us_[index].load(std::memory_order_relaxed); }
   DisconnectReason GetDisconnectReason() const { return (DisconnectReason)disconnect_reason_.load(std::memory_order_acquire); }
   MatchInfo* GetMatchInfo() { return &match_info_; }
   PlayerSelections GetSlippiRemoteChatMessage(bool chat_enabled);
   uint8_t GetSlippiRemoteSentChatMessage(bool chat_enabled);
   int32_t CalcTimeOffsetUs();
-  double GetAndResetAvgPingMs();
   bool IsWaitingForDesyncRecovery();
   DesyncRecoveryResp GetDesyncRecoveryState();
   void SendChatMessage(int message_id);
@@ -200,6 +209,10 @@ class NetplayClient {
   void ThreadFunc();
   bool AreAllPeersDisconnectedForKey(const std::string& key);
   bool AreAllConnectionsDisconnected();
+  void AddRemotePad(uint8_t pidx, int32_t frame, const uint8_t* pad_data);   // pad_mutex_ held
+  bool ProcessPlayerDrops();
+  void SendPlayerDropReport(uint8_t port);
+  void AddPlayerDropReportInputs(uint8_t pidx, int32_t last_frame, uint8_t input_count, const uint8_t* inputs);
   void WriteSelections(Packet& p, const PlayerSelections& s);
   std::unique_ptr<PlayerSelections> ReadSelections(Packet& p);
   std::unique_ptr<PlayerSelections> ReadChatMessage(Packet& p);
@@ -228,12 +241,17 @@ class NetplayClient {
   std::atomic<bool> player_active_[PLAYER_COUNT_MAX] = {};
   std::deque<std::unique_ptr<Pad>> local_pad_queue_;
   std::deque<std::unique_ptr<Pad>> remote_pad_queue_[REMOTE_PLAYER_MAX];
+  // Each remote player's newest inputs, most recent first: what another client may still be missing if the player drops.
+  std::deque<Pad> remote_pad_history_[REMOTE_PLAYER_MAX];
   bool is_desync_recovery_ = false;
   struct ChecksumEntry { int32_t frame = 0; uint32_t value = 0; } remote_checksums_[REMOTE_PLAYER_MAX];
   SyncedGameState remote_sync_states_[REMOTE_PLAYER_MAX], local_sync_state_;
+  std::mutex game_prep_mutex_;   // filled by the netplay thread, drained by the game thread
   std::deque<GamePrepStepResults> game_prep_step_queue_;
-  uint64_t ping_us_[REMOTE_PLAYER_MAX] = {};
-  std::atomic<uint64_t> ping_sample_sum_us_{0}, ping_sample_count_{0};
+  std::atomic<uint64_t> ping_us_[REMOTE_PLAYER_MAX] = {};
+  // Player drops, by port. The netplay thread publishes the despawn frame (0 until it settles on the last input).
+  std::atomic<int32_t> despawn_frames_[PLAYER_COUNT_MAX] = {};
+  uint64_t player_drop_times_ms_[PLAYER_COUNT_MAX] = {};
   int32_t last_frame_acked_[REMOTE_PLAYER_MAX] = {};
   FrameOffsetData frame_offset_data_[REMOTE_PLAYER_MAX];
   FrameTiming last_frame_timing_[REMOTE_PLAYER_MAX];
@@ -242,7 +260,8 @@ class NetplayClient {
   std::atomic<uint32_t> pending_disconnect_reason_{0}, disconnect_reason_{0};
   std::vector<int> failed_connections_;
   MatchInfo match_info_;
-  std::unique_ptr<PlayerSelections> remote_chat_message_selection_;
+  std::mutex chat_mutex_;        // set by the netplay thread, taken by the game thread
+  PlayerSelections remote_chat_message_;
 };
 
 class Matchmaking {
@@ -277,13 +296,16 @@ class Matchmaking {
   void startMatchmaking();
   void handleMatchmaking();
   void handleConnecting();
-  void disconnectFromServer();
   void terminateMmConnection();
+  bool stunBindingRequest(const void* server, void* result);   // ENetAddress, mm::StunObservation
+  void sendStunKeepalive();
 
   User* user_;
-  _ENetHost* client_ = nullptr;
-  _ENetPeer* server_ = nullptr;
-  bool is_mm_connected_ = false, is_mm_terminated_ = false;
+  _ENetHost* client_ = nullptr;   // bound to the netplay port while queued; only its socket is used (STUN)
+  uint32_t stun_host_ = 0; uint16_t stun_port_ = 0; bool has_stun_addr_ = false;
+  uint64_t last_keepalive_ms_ = 0;
+  uint64_t session_id_ = 0;       // the matchmaking service session this object started
+  std::atomic<bool> is_mm_terminated_{false};
   std::thread thread_;
   MatchSearchSettings search_settings_;
   std::atomic<ProcessState> state_{IDLE};

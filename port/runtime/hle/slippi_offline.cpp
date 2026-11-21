@@ -31,8 +31,9 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
       return true;
     case 0xB3: { // GET_MATCH_STATE: ERROR_ENCOUNTERED, no ready players or identity
       // 15 header + 6*31 names + 4*10 codes + 4*29 UIDs + 241 error
-      // + 312 game-info block + 51 match ID + 1 alternate-stage byte.
-      q.assign(962, 0);
+      // + 312 game-info block + 51 match ID + 1 alternate-stage byte
+      // + 4*16 rank values + 4 bot flags (Slippi 3.7).
+      q.assign(962 + 4 * 16 + 4, 0);
       q[0] = 5;
       q[4] = 1;
       q[9] = g_delay;

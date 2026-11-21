@@ -1,0 +1,53 @@
+{
+  "_comment": "The Slippi release this build implements. The one place the reported version, the matchmaking endpoint and the upstream commits are named: CMake reads it into the build, tools/update-slippi.py maintains it. Never edit `version` by hand to get past a matchmaking error: a release that changes the files under host_protocol needs a port (BUILDING.md (Following Slippi releases)).",
+  "version": "3.7.0",
+  "matchmaking_url": "wss://matchmaking.slippi.gg/v1/queue",
+  "ishiiruka": {
+    "repo": "https://github.com/project-slippi/Ishiiruka.git",
+    "tag": "v3.7.0",
+    "commit": "07b2d287a1f074942811d13b3c990fa29401ba7c"
+  },
+  "rust_extensions": {
+    "repo": "https://github.com/project-slippi/slippi-rust-extensions.git",
+    "commit": "934f373d3cbcbca9ea3ceb68b53bda875c96abfb"
+  },
+  "sys_files": {
+    "from": "Data/Sys",
+    "to": "port/slippi_sys",
+    "paths": [
+      "GameFiles/GALE01",
+      "GameSettings/GALE01r2.ini",
+      "bootloader.gct",
+      "codehandler.bin"
+    ]
+  },
+  "host_protocol": {
+    "ishiiruka": {
+      "Source/Core/Core/HW/EXI_DeviceSlippi.cpp": "port/runtime/hle/exi_slippi.cpp, slippi_online.cpp (EXI commands, payload sizes, reply layouts, online frame flow)",
+      "Source/Core/Core/HW/EXI_DeviceSlippi.h": "port/runtime/hle/exi_slippi.cpp (payload size table)",
+      "Source/Core/Core/Slippi/SlippiNetplay.cpp": "port/runtime/hle/slippi_net.cpp (peer wire format, NetplayClient)",
+      "Source/Core/Core/Slippi/SlippiNetplay.h": "port/runtime/hle/slippi_net.h",
+      "Source/Core/Core/Slippi/SlippiPad.h": "port/runtime/hle/slippi_net.h (pad sizes)",
+      "Source/Core/Core/Slippi/SlippiPad.cpp": "port/runtime/hle/slippi_net.h (Pad)",
+      "Source/Core/Core/Slippi/SlippiMatchmaking.cpp": "port/runtime/hle/slippi_net.cpp (Matchmaking: STUN, match result)",
+      "Source/Core/Core/Slippi/SlippiMatchmaking.h": "port/runtime/hle/slippi_version.h (STUN servers), slippi_net.h",
+      "Source/Core/Core/Slippi/SlippiGameFileLoader.cpp": "port/runtime/hle/exi_slippi.cpp (build_game_file)",
+      "Source/Core/Core/Slippi/SlippiSavestate.cpp": "port/runtime/hle/slippi_online.cpp (Savestate regions)",
+      "Source/Core/Core/Slippi/SlippiGameReporter.cpp": "port/runtime/hle/slippi_report.cpp",
+      "Source/Core/Core/Slippi/SlippiUser.h": "port/runtime/hle/slippi_net.h (UserInfo)",
+      "Source/Core/Core/NetPlayProto.h": "port/runtime/hle/slippi_net.h (NetMsg ids)"
+    },
+    "rust_extensions": {
+      "matchmaking/src": "port/runtime/hle/slippi_matchmaking_ws.cpp (queue service client, STUN codec)",
+      "hsd/src/archive.rs": "port/runtime/hle/slippi_hsd_link.cpp",
+      "hsd/src/link.rs": "port/runtime/hle/slippi_hsd_link.cpp",
+      "hsd/src/hash.rs": "port/runtime/hle/slippi_hsd_link.cpp",
+      "ffi/src/hsd.rs": "port/runtime/hle/slippi_hsd_link.cpp (resolve_links entry sequence)",
+      "ffi/includes/SlippiRustExtensions.h": "the whole host surface: any new function here is a new host duty",
+      "game-reporter/src": "port/runtime/hle/slippi_report.cpp",
+      "user/src": "port/runtime/hle/slippi_login.cpp, slippi_report.cpp (rank), slippi_net.cpp (User)",
+      "match-quality/src": "port/runtime/hle/slippi_match_quality.cpp (ranked termination)",
+      "input-suggestions/src": "not ported: this build neither sends nor uses input suggestions (slippi_net.cpp ignores 0x87)"
+    }
+  }
+}

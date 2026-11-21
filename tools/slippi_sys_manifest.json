@@ -1,8 +1,8 @@
 {
-  "source": "Hero88go/melee-unlocked b8360b15f6a55bcb6433e6e386bebd0e6b39428d, port/slippi_sys as carried by Dashdance",
+  "source": "project-slippi/Ishiiruka v3.7.0 (07b2d287a1f074942811d13b3c990fa29401ba7c), Data/Sys",
   "files_sha256": {
-    "GameFiles/GALE01/GameSetup.dat": "2c7842f8864c962ea0e8b9e629552b36e2669b739c86d17ba5dae53d75ed9acc",
-    "GameFiles/GALE01/GameSetup_gui.dat": "aa083e7ec6a7ad96c32efb474b6915242aeb0627c2fa6369b205783b844d701e",
+    "GameFiles/GALE01/GameSetup.dat": "7b3869a1f3097f6cce5a740f289a0278f5fdb5c55f199eab1df703d5266faa07",
+    "GameFiles/GALE01/GameSetup_gui.dat": "824002d8835bebec42caf637b948b4da6178e4341668b30e3d3a2122c892892b",
     "GameFiles/GALE01/MnExtAll.dat.diff": "b6df247ddf12d0118d4b1deaf1d3cf8878ebb4d60b29fda7ad6a324246b05e22",
     "GameFiles/GALE01/MnExtAll.usd.diff": "c729c61a65d92aeaf4ab15ca7ec5a40ead336055b0defce9c74503e2651c9b18",
     "GameFiles/GALE01/MnMaAll.dat.diff": "4f38bfa9716064fd59315c26210ec6383b62ee0d4445beb9b6cca1f09134ea75",
@@ -16,8 +16,8 @@
     "GameFiles/GALE01/SdSlChr.dat.diff": "0194bcbb4fd26df4e499edd52ea7a64743a493515b07d6114cf378c8720a9405",
     "GameFiles/GALE01/SdSlChr.usd.diff": "fde2f393c405244f9100a0522a769d4fcce9e892dd9b87b0e0c38670ef132f38",
     "GameFiles/GALE01/SlippiCSS.dat": "f864eed3f494f1a1710760973f25a7f5be4bb3dc4fc4734c2a721ca62f4916f3",
-    "GameFiles/GALE01/slpCSS.dat": "3b1a3f254b37cf5ce4f56b38d237d9809d0b11e72d05320f0e56fa3abd7a1692",
-    "GameSettings/GALE01r2.ini": "b30b294df5c0d92deb3129afdfbc894a48aabeb1bce0cf92cce8c4e5408a2587",
+    "GameFiles/GALE01/SlippiCSS_gui.dat": "fe96bb798206d8090510292359fb65350da3f812ef5dbf44aa30b9f647d93e01",
+    "GameSettings/GALE01r2.ini": "2392fbc9da281eb8c8ceb5aa13222d45ea83e3cfd38389fec6e0705aead49609",
     "README.md": "2bbcd95841a409c0fb78bb2a080acba9d0d76f504886a0ccf88fd8ebf1a741aa",
     "bootloader.gct": "6beeb0d74f58eb7825ed9ceb60e3037f9a55f6265efc3a2085f3073ffe6b3680",
     "codehandler.bin": "4fff42b192e95b353da28f6c3f0afa002bfbd2caf7c4bfb1187304e2406ccb0c"

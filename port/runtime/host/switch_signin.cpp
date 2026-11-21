@@ -10,7 +10,9 @@
 #include <imgui.h>
 #include <switch.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -154,6 +156,38 @@ void draw(State& st, int w, int h) {
              st.done ? "A  Continue" : "A  Select     B  Play offline     +  Quit");
 }
 }  // namespace
+
+bool switch_notice_run(MetalFrontend& frontend, const std::string& headline, const std::vector<std::string>& lines) {
+  PADInit();
+  uint16_t last_buttons = 0xFFFF;   // ignore whatever is held at entry
+  int8_t last_y = 0;
+  for (;;) {
+    if (!frontend.pump_events() || frontend.close_requested()) return false;
+    const Edges e = read_edges(last_buttons, last_y);
+    if (e.a) return true;
+    if (e.plus) return false;
+    const MetalWindowSize size = frontend.window_size();
+    if (!aurora_begin_frame()) continue;
+    const int w = (int)size.width, h = (int)size.height;
+    ImDrawList* d = ImGui::GetBackgroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    const float s = h / 720.0f;
+    d->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), u32(kField));
+    for (float x = 0; x < w; x += 64 * s) d->AddLine(ImVec2(x, 0), ImVec2(x, (float)h), u32(kHairline, 0.5f));
+    for (float y = 0; y < h; y += 64 * s) d->AddLine(ImVec2(0, y), ImVec2((float)w, y), u32(kHairline, 0.5f));
+    const float px = 160 * s, py = 150 * s, hh = 44 * s, slant = 22 * s;
+    const float header_w = std::max(420 * s, font->CalcTextSizeA(26 * s, FLT_MAX, 0, headline.c_str()).x + 64 * s);
+    d->AddQuadFilled(ImVec2(px, py), ImVec2(px + header_w, py), ImVec2(px + header_w - slant, py + hh), ImVec2(px, py + hh), u32(kYellow));
+    d->AddText(font, 26 * s, ImVec2(px + 20 * s, py + 9 * s), u32(ImVec4(0.08f, 0.08f, 0.1f, 1)), headline.c_str());
+    float y = py + hh + 36 * s;
+    for (const std::string& line : lines) {
+      if (!line.empty()) d->AddText(font, 24 * s, ImVec2(px, y), u32(kText), line.c_str(), nullptr, w - 2 * px);
+      y += (line.empty() ? 18 * s : font->CalcTextSizeA(24 * s, FLT_MAX, w - 2 * px, line.c_str()).y + 14 * s);
+    }
+    d->AddText(font, 18 * s, ImVec2(px, h - 56 * s), u32(kMuted), "A  Continue     +  Quit");
+    aurora_end_frame();
+  }
+}
 
 SignInResult switch_signin_run(MetalFrontend& frontend, const std::string& user_dir, std::string& account_name,
                                std::string& connect_code) {

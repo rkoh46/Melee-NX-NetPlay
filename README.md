@@ -36,6 +36,33 @@ repository's releases), builds the compiler image, translates your disc and comp
 folder goes to `sdmc:/switch/melee-nx-netplay/` on the SD card with your disc beside it as `GALE01.iso`.
 No built NRO is published: it would contain the game.
 
+## When Slippi releases an update
+
+This build plays **Slippi 3.7.0**. Slippi's matchmaking only pairs players on its latest release, so
+after each Slippi update online play stops until this app is on the same release. Offline play is
+never affected.
+
+- **The app tells you.** At launch it asks GitHub (one request, nothing about you is sent) whether Slippi
+  has a newer release than the one it plays. If so, a screen says which before the game starts, instead
+  of the error on the character select screen.
+- **To update, run the installer again** on your computer with your disc, and copy the two new folders to
+  the SD card. It fetches the newest Melee-NX-NetPlay and rebuilds both apps:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/rkoh46/Melee-NX-NetPlay/main/install.sh | bash -s -- /path/to/GALE01.iso
+  ```
+
+- **If Melee-NX-NetPlay itself has not caught up yet**, add `--update-slippi` to the end of that line (or run
+  `bash tools/update-slippi.sh /path/to/GALE01.iso` in the folder). It compares Slippi's new release with
+  the one this app implements. When only Slippi's game-side code and files changed, it fetches them and
+  builds an app for the new release on the spot. When Slippi changed how its programs talk to each other
+  (matchmaking, the netplay messages, the game's link to the emulator), it changes nothing and says so:
+  that kind of release needs new code here first, and online play has to wait for it. Slippi 3.7.0 was
+  one of those. Not every Slippi release can be picked up automatically, and the app is never told to
+  claim a release it does not implement, because that would desync against other players.
+
+The app cannot update itself on the console: it is built from your disc, so there is nothing to download.
+
 ## What you need
 
 - A Switch running [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere). Launch the NRO with
@@ -51,7 +78,7 @@ No built NRO is published: it would contain the game.
 |---|---|---|
 | 1 | Headless simulation on the console: a scripted match, log to SD, measure ms/frame | done; scripted CPU matches and a sampling profiler drive the tuning |
 | 2 | Aurora GX → Dawn → Vulkan/NVK renderer, SDL3 input and audio, GC adapter, overlay text | runs on hardware: menus, character and stage select, matches with shadows and EFB-copy effects; GX commands parsed on a worker thread; 60 fps in the CPU match test |
-| 3 | Slippi online: ENet over libnx sockets, curl for login and reports, sign-in screen, online delay setting | built: netplay, matchmaking, login, reports, Shift-JIS names, a sign-in screen with the console keyboard, online delay in the menu; untested on hardware |
+| 3 | Slippi online: ENet over libnx sockets, curl for login and reports, sign-in screen, online delay setting | plays Slippi 3.7.0: netplay, matchmaking over Slippi's WebSocket service with STUN, login, reports, ranked match-quality checks, game files linked from the disc, a sign-in screen, automatic input delay. Input suggestions (3.7's "16.7 ms less ping" messages) are received and ignored, not sent |
 | 4 | Overclock profile, rollback cost tuning, release notes | clock request through clkrst (CPU 1785 / GPU 921 / memory 1600 MHz, `overclock=` and per-rail keys); rollback cost not yet measured |
 
 ## Layout

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include <string>
+#include <vector>
 
 namespace host {
 class MetalFrontend;
@@ -13,4 +14,8 @@ enum class SignInResult { SignedIn, PlayOffline, Quit };
 // to play offline, or closes the app. `frontend` must be attached and running.
 SignInResult switch_signin_run(MetalFrontend& frontend, const std::string& user_dir, std::string& account_name,
                                std::string& connect_code);
+// A full-screen notice before the game boots (a newer Slippi release than this build implements):
+// `headline` in the yellow header, `lines` below it. Blocks until A (continue) or + (quit); returns
+// false when the player quits.
+bool switch_notice_run(MetalFrontend& frontend, const std::string& headline, const std::vector<std::string>& lines);
 }  // namespace host
