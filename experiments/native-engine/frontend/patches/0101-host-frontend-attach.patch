@@ -1,0 +1,17 @@
+--- a/port/linux/host_services.cpp
++++ b/port/linux/host_services.cpp
+@@ -989,7 +989,13 @@
+ 
+ void log(const char* format, ...) { va_list args; va_start(args, format); write_log(format, args); va_end(args); }
+ void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink=fifo; retrace_sink=retrace; video_user=user; }
+-void set_frame_observer(FrameObserver observer, void* user) { frame_observer=observer; observer_user=user; }
++// Picture frontend (experiments/native-engine/frontend): told when a run's observer is installed (after
++// initialize, before run) and removed (after run, before shutdown unmaps the game). Absent in the headless runner.
++extern "C" __attribute__((weak)) void mu_frontend_attach(int on);
++void set_frame_observer(FrameObserver observer, void* user) {
++  frame_observer=observer; observer_user=user;
++  if (mu_frontend_attach) mu_frontend_attach(observer != nullptr);
++}
+ bool reserve_memory(std::string* error) {
+   if (memory_reserved) return true;
+ #ifdef MU_FOREIGN_ELF

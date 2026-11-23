@@ -59,7 +59,7 @@ nxlink -s -a <console ip> build/native-engine/out/mu-native.nro --args "--script
 
 Arguments (all optional): `--iso PATH`, `--script NAME|PATH`, `--frames N`, `--out DIR`,
 `--snapshot-at VS_MATCH_FRAME` (times a full save and restore at that frame; off by default; it does not change the digest), `--print-digest` (also stream the CSV rows),
-`--game PATH` (load another image instead of the embedded one). Rollback: `--rollback-test EVERY:DEPTH`, `--rollback-verify` (see below). Embedded scripts: `parity_vs_onett`
+`--game PATH` (load another image instead of the embedded one). Rollback: `--rollback-test EVERY:DEPTH`, `--rollback-verify`, `--rollback-draw`, `--track-remap` (see below). Clock: `--no-overclock`, `--cpu-mhz N`. Embedded scripts: `parity_vs_onett`
 (2 players, Onett, items, 7200-frame match), `vs4_busy` (4 players, random inputs), `parity_vs_items_off`,
 `parity_lcancel`, the other `parity_*` scripts, and `native_vs_ko` (never reaches a match on v1.0.5).
 
@@ -129,6 +129,19 @@ pass or repeated, is compared with the x86-64 reference state of the same match 
 also proves that no write escaped the tracking (it compares the whole state: slow, use for exactness only).
 On Linux: IDENTICAL for `parity_vs_onett`, `vs4_busy`, `parity_vs_items_off` and `parity_lcancel`, with 234 to 574
 rollbacks each and no escaped writes.
+
+Repeated frames are not drawn by default, as in a real rollback (the game's loop asks the host whether to skip the
+draw; the clock rewind keeps audio from being mixed). `--rollback-draw` draws them. Measured on Linux, a repeated
+frame without drawing costs 13% (2 players) to 20% (4 players) of a first-pass frame; with drawing but no audio,
+41 to 53%. BUT exactness is only proven with `--rollback-draw`: with undrawn repeated frames the 2-player runs
+differ from the reference in 1 to 20 states and re-align, and `vs4_busy` diverges for good at match frame 517.
+The draw section itself does not use the RNG (instrumented: 0 frames), so the cause is indirect and not found.
+The engine's own game-driven rollback has a byte-for-byte self-test (`MELEE_ONLINE_SELFTEST=every:depth`) that
+is the right judge of undrawn re-simulation; this outside-in test is not.
+
+On the console the runner raises the CPU clock to 1785 MHz while it runs (`--no-overclock`, `--cpu-mhz N`), using
+the app's `switch/src/switch_clocks.cpp`, prints the reported and measured MHz at the start and the end, and puts
+the CPU clock back.
 
 Caveats found on the way:
 - The simulation depends on the console clock: restoring the state without the clock diverges (items on).

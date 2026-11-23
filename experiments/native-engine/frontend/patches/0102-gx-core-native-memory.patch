@@ -1,0 +1,57 @@
+--- a/port/runtime/gx/gx_core.cpp
++++ b/port/runtime/gx/gx_core.cpp
+@@ -172,7 +172,7 @@
+ 
+ const uint8_t* array_ptr(uint32_t array, uint32_t index) {
+   uint32_t base = g_cp.array_base(array), stride = g_cp.array_stride(array);
+-  return host::ptr(0x80000000u | ((base + stride * index) & 0x01FFFFFFu));
++  return host::ptr(0x80000000u | ((base + stride * index) & 0x3FFFFFFFu));
+ }
+ 
+ // Decodes `count` vertices of format `fmt` from `src` into the frame. Returns components mask.
+@@ -193,7 +193,7 @@
+   }
+   inline const uint8_t* indexed(uint32_t index) const {
+     // array_ptr's arithmetic without the call: an index outside RAM yields nullptr (the caller skips it).
+-    const uint32_t off = (array_base + stride * index) & 0x01FFFFFFu;
++    const uint32_t off = (array_base + stride * index) & 0x3FFFFFFFu;
+     return off < ppc::RAM_SIZE ? host::ram + off : nullptr;
+   }
+   inline float component(const uint8_t* q, uint32_t k) const {
+@@ -360,7 +360,7 @@
+         for (uint32_t j = 0; j < ia.index_count; ++j, p += ia.index_bytes) hi = std::max(hi, ia.index_bytes == 1 ? uint32_t(*p) : be16(p));
+       }
+     }
+-    const uint32_t base = g_cp.array_base(ia.attr) & 0x01FFFFFFu, stride = g_cp.array_stride(ia.attr);
++    const uint32_t base = g_cp.array_base(ia.attr) & 0x3FFFFFFFu, stride = g_cp.array_stride(ia.attr);
+     const uint32_t need = hi * stride + ia.elem_bytes;
+     auto& ref = g_raw_pending.arrays[ia.attr];
+     if (base >= ppc::RAM_SIZE || need > ppc::RAM_SIZE - base) { ref.stride = stride ? stride : 1; continue; }   // outside RAM: unbound, the bridge skips the draw
+@@ -631,7 +631,7 @@
+     case BP_LOADTLUT1: {
+       uint32_t tmem_addr = (masked & 0x3FF) << 9;
+       uint32_t count = (masked & 0x1FFC00) >> 5;
+-      uint32_t src = (g_bp.reg[BP_LOADTLUT0] << 5) & 0x01FFFFFF;
++      uint32_t src = (g_bp.reg[BP_LOADTLUT0] & 0x1FFFFFu) << 5;   // the register's 21 address bits
+       if (tmem_addr + count <= sizeof g_tmem) std::memcpy(g_tmem + tmem_addr, host::ptr(0x80000000u | src, count), count);
+       break;
+     }
+@@ -673,8 +673,7 @@
+       ++g_efb_copies;
+       if (c.to_xfb) {
+         g_frame.sequence = ++g_frame_sequence;
+-        g_frame.scene_major = host::rd8(0x80479D30);
+-        g_frame.scene_minor = host::rd8(0x80479D33);
++        host::native_scene(&g_frame.scene_major, &g_frame.scene_minor);   // the native game's scene controller is not at the console's address
+         {
+           static uint16_t last_scene = 0xFFFF;
+           const uint16_t scene = (uint16_t)(g_frame.scene_major << 8 | g_frame.scene_minor);
+@@ -723,7 +722,7 @@
+ size_t parse_command(const uint8_t* d, size_t len);
+ 
+ void run_display_list(uint32_t addr, uint32_t size) {
+-  if ((addr & 0x3FFFFFFFu) + size > 0x01800000u) { host::log("gx: display list outside RAM %08X+%X", addr, size); return; }
++  if ((addr & 0x3FFFFFFFu) + size > ppc::RAM_SIZE) { host::log("gx: display list outside RAM %08X+%X", addr, size); return; }
+   const uint8_t* p = host::ptr(addr, size);
+   uint32_t saved_addr = g_dl_addr, saved_draw = g_dl_draw_ordinal, saved_call = g_dl_call_ordinal;
+   g_dl_addr = addr; g_dl_draw_ordinal = 0; g_dl_call_ordinal = g_state_deltas ? 0 : g_dl_calls[addr]++;

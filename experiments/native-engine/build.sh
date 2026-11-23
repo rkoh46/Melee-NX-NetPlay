@@ -98,7 +98,7 @@ build_nro() {
     aarch64-none-elf-gcc \$ARCH -c build/native-engine/gen/embedded.S -o \$o/embedded.o
     aarch64-none-elf-gcc -O2 -g -Wall \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.c -o \$o/dirtytrack.o
     aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.S -o \$o/dirtytrack_entry.o
-    aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \
+    aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES -Iswitch/src $SOURCES switch/src/switch_clocks.cpp \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \
       -I/opt/devkitpro/portlibs/switch/include -specs=/opt/devkitpro/libnx/switch.specs -L/opt/devkitpro/portlibs/switch/lib -L/opt/devkitpro/libnx/lib -lz -lnx -lm -o build/native-engine/out/mu-native.elf
     nacptool --create 'mu-native' 'Melee-NX-NetPlay' '0.1' build/native-engine/out/mu-native.nacp
     elf2nro build/native-engine/out/mu-native.elf build/native-engine/out/mu-native.nro --nacp=build/native-engine/out/mu-native.nacp

@@ -1,5 +1,5 @@
 diff --git a/port/linux/host_services.cpp b/port/linux/host_services.cpp
-index f87e083..5e604cd 100644
+index f87e083..fd71251 100644
 --- a/port/linux/host_services.cpp
 +++ b/port/linux/host_services.cpp
 @@ -27,7 +27,10 @@
@@ -39,7 +39,15 @@ index f87e083..5e604cd 100644
  mac_elf::Image mac_image;
  // SPIKE: Darwin cannot unwind exceptions across an unregistered ELF image.
  // The C game has no C++ destructors. Stop only at host callback boundaries.
-@@ -139,6 +144,9 @@ uint32_t be32(const uint8_t* p) {
+@@ -77,6 +82,7 @@ void* module = nullptr;
+ bool memory_reserved = false;
+ bool initialized = false;
+ bool resimulating = false;
++uint32_t draws_to_skip = 0;
+ bool stop_requested = false;
+ int stop_code = 0;
+ uint64_t boot_ticks = 0;
+@@ -139,6 +145,9 @@ uint32_t be32(const uint8_t* p) {
  bool read_disc(uint64_t offset, void* out, size_t bytes) {
    if (disc_fd < 0 || offset > disc_size || bytes > disc_size - offset || (!out && bytes)) return false;
    auto* dst = static_cast<uint8_t*>(out);
@@ -49,7 +57,7 @@ index f87e083..5e604cd 100644
    size_t read = 0;
    while (read < bytes) {
      const ssize_t n = pread(disc_fd, dst + read, bytes - read, static_cast<off_t>(offset + read));
-@@ -247,7 +255,7 @@ bool load_disc(std::string* error) {
+@@ -247,7 +256,7 @@ bool load_disc(std::string* error) {
    return true;
  }
  
@@ -58,7 +66,7 @@ index f87e083..5e604cd 100644
  [[noreturn]] void stop_now(int code) {
    stop_code=code;
    if (mac_running) std::longjmp(mac_stop_boundary,1);
-@@ -351,7 +359,7 @@ void h_log(const char* text) {
+@@ -351,7 +360,7 @@ void h_log(const char* text) {
  }
  void h_panic(const char* file, int32_t line, const char* message) {
    log("game panic: %s:%d: %s", file ? file : "?", line, message ? message : "");
@@ -67,7 +75,7 @@ index f87e083..5e604cd 100644
    stop_now(1);
  #else
    throw Stop{1};
-@@ -434,7 +442,7 @@ void h_pad_read(MuPadStatus out[4]) {
+@@ -434,7 +443,7 @@ void h_pad_read(MuPadStatus out[4]) {
        pad.trigger_r=uint8_t(std::max(0, int(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT))) * 255 / 32767);
        if (pad.trigger_l >= 240) pad.button |= 0x0040;
        if (pad.trigger_r >= 240) pad.button |= 0x0020;
@@ -76,7 +84,7 @@ index f87e083..5e604cd 100644
      }
      if (port == 0 && !cfg.headless) {
  #else
-@@ -450,7 +458,7 @@ void h_pad_read(MuPadStatus out[4]) {
+@@ -450,7 +459,7 @@ void h_pad_read(MuPadStatus out[4]) {
        if (key[SDL_SCANCODE_Q]) { pad.button |= 0x0040; pad.trigger_l = 255; }
        if (key[SDL_SCANCODE_E]) { pad.button |= 0x0020; pad.trigger_r = 255; }
        if (key[SDL_SCANCODE_RETURN]) pad.button |= 0x1000;
@@ -85,7 +93,7 @@ index f87e083..5e604cd 100644
        if (key[SDL_SCANCODE_RIGHT] || key[SDL_SCANCODE_LEFT])
          pad.stick_x=int8_t(80 * (int(key[SDL_SCANCODE_RIGHT]) - int(key[SDL_SCANCODE_LEFT])));
        if (key[SDL_SCANCODE_UP] || key[SDL_SCANCODE_DOWN])
-@@ -570,6 +578,34 @@ std::string filename(const SavedFile& file) {
+@@ -570,6 +579,34 @@ std::string filename(const SavedFile& file) {
  }
  bool persist(SavedFile& file) {
    const auto target=file.path.empty() ? directory/filename(file) : file.path;
@@ -120,7 +128,7 @@ index f87e083..5e604cd 100644
    std::string temporary=(target.string()+".tmp-XXXXXX");
    std::vector<char> path(temporary.begin(), temporary.end()); path.push_back(0);
    const int fd=mkstemp(path.data());
-@@ -813,7 +849,7 @@ int32_t h_sound() { return sound; }
+@@ -813,7 +850,7 @@ int32_t h_sound() { return sound; }
  void h_set_sound(int32_t value) { sound = value != 0; }
  int32_t h_progressive() { return progressive; }
  void h_set_progressive(int32_t value) { progressive = value != 0; }
@@ -129,7 +137,26 @@ index f87e083..5e604cd 100644
  void h_stop(int32_t reason, int32_t code) { log("game stopped: reason=%d code=%d", reason, code); stop_now(reason == MU_STOP_PANIC ? 1 : code); }
  #else
  void h_stop(int32_t reason, int32_t code) { log("game stopped: reason=%d code=%d", reason, code); throw Stop{reason == MU_STOP_PANIC ? 1 : code}; }
-@@ -909,7 +945,7 @@ void ax_output(const int16_t* rl, uint32_t frames) {
+@@ -844,8 +881,18 @@ int32_t h_slippi(uint8_t, const uint8_t*, uint32_t, uint8_t*, uint32_t, uint32_t
+ }
+ void h_resim(int32_t entering) { resimulating = entering != 0; }
+ 
++#ifdef MU_FOREIGN_ELF
++int32_t h_console_origin(int32_t operation) {
++  if (operation != 8 || !draws_to_skip) return 0;
++  --draws_to_skip;
++  return 1;
++}
++#endif
+ MuHostApi make_api() {
+   MuHostApi h{};
++#ifdef MU_FOREIGN_ELF
++  h.console_origin=h_console_origin;
++#endif
+   h.version = MU_HOST_API_VERSION;
+   h.log=h_log; h.panic=h_panic; h.ticks=h_ticks; h.boot_time=h_boot_time; h.poll=h_poll;
+   h.gx_fifo=h_fifo; h.vi_configure=h_vi_configure; h.vi_set_next_framebuffer=h_framebuffer;
+@@ -909,7 +956,7 @@ void ax_output(const int16_t* rl, uint32_t frames) {
  }
  
  bool inspect_image(std::string* error) {
@@ -138,7 +165,7 @@ index f87e083..5e604cd 100644
    (void)error;
    image_mappings=mac_image.mappings();
    image_regions=mac_image.writable();
-@@ -956,6 +992,9 @@ void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink
+@@ -956,6 +1003,9 @@ void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink
  void set_frame_observer(FrameObserver observer, void* user) { frame_observer=observer; observer_user=user; }
  bool reserve_memory(std::string* error) {
    if (memory_reserved) return true;
@@ -148,7 +175,7 @@ index f87e083..5e604cd 100644
    auto reserve = [](uintptr_t address, size_t bytes) -> void* {
  #ifdef MAP_FIXED_NOREPLACE
      void* p = mmap(reinterpret_cast<void*>(address), bytes, PROT_READ | PROT_WRITE,
-@@ -973,7 +1012,8 @@ bool reserve_memory(std::string* error) {
+@@ -973,7 +1023,8 @@ bool reserve_memory(std::string* error) {
      if (p != MAP_FAILED && uintptr_t(p) != address) { munmap(p, bytes); errno=EEXIST; return MAP_FAILED; }
      return p;
    };
@@ -158,7 +185,7 @@ index f87e083..5e604cd 100644
    if (!mac_elf::activate_mem1(error)) return false;
    void* mem=reinterpret_cast<void*>(mem1_base);
  #else
-@@ -983,7 +1023,7 @@ bool reserve_memory(std::string* error) {
+@@ -983,7 +1034,7 @@ bool reserve_memory(std::string* error) {
    void* cache = reserve(locked_cache_base, locked_cache_bytes);
    if (cache == MAP_FAILED) {
      const std::string message = "cannot reserve locked cache at 0xE0000000: " + std::string(std::strerror(errno));
@@ -167,7 +194,7 @@ index f87e083..5e604cd 100644
      mac_elf::deactivate_mem1();
  #else
      munmap(mem, mem1_bytes);
-@@ -1022,7 +1062,7 @@ bool initialize(const Config& config, std::string* error) {
+@@ -1022,7 +1073,7 @@ bool initialize(const Config& config, std::string* error) {
    }
    aram.assign(aram_bytes, 0);
    api=make_api();
@@ -176,7 +203,7 @@ index f87e083..5e604cd 100644
    if (!mac_image.load(cfg.game_path,error)) return startup_failed();
    module=&mac_image;
    if (!inspect_image(error)) return startup_failed();
-@@ -1067,7 +1107,7 @@ bool initialize(const Config& config, std::string* error) {
+@@ -1067,7 +1118,7 @@ bool initialize(const Config& config, std::string* error) {
  int run() {
    if (!initialized) { log("native Linux host is not initialized"); return 1; }
    wall_start=Clock::now();
@@ -185,7 +212,7 @@ index f87e083..5e604cd 100644
    mac_running=true;
    int result;
    if (setjmp(mac_stop_boundary)==0) result=game.run();
-@@ -1095,7 +1135,7 @@ void shutdown() {
+@@ -1095,7 +1146,7 @@ void shutdown() {
    for (auto& controller : controllers) { if (controller) SDL_GameControllerClose(controller); controller=nullptr; }
    if (sdl_owned) { SDL_QuitSubSystem(sdl_owned); sdl_owned=0; }
  #endif
@@ -194,7 +221,7 @@ index f87e083..5e604cd 100644
    if (module) { mac_image.unload(); module=nullptr; }
  #else
    if (module) { dlclose(module); module=nullptr; }
-@@ -1104,16 +1144,29 @@ void shutdown() {
+@@ -1104,16 +1155,33 @@ void shutdown() {
    if (disc_fd >= 0) { close(disc_fd); disc_fd=-1; }
    files.clear(); paths.clear(); completions.clear(); aram.clear();
    if (memory_reserved) {
@@ -214,6 +241,10 @@ index f87e083..5e604cd 100644
    if (log_file) { std::fclose(log_file); log_file=nullptr; }
  }
 +#ifdef MU_FOREIGN_ELF
++// Rollback test: the game's engine loop asks console_origin(8) after each frame's simulation whether
++// to skip drawing it. A real rollback simulates its repeated frames without drawing; this lets the
++// test's repeated frames do the same. Every other query answers 0, as a host without the hook does.
++void skip_draws(uint32_t frames) { draws_to_skip = frames; }
 +// Rollback test: after the game state has been put back `frames` frames, put the console clock back
 +// with it, so the frames that are simulated again see the times they saw the first time.
 +void rewind_frames(uint32_t frames) {

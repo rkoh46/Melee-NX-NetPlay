@@ -25,7 +25,7 @@ extern "C" time_t timegm(struct tm* tm);
 // the rollback snapshot is write-tracking are made writable first (rollback.cpp).
 extern "C" void mu_host_prewrite(void* address, size_t bytes);
 
-namespace linux_host { void rewind_frames(uint32_t frames); }   // added to the host by patches/0002 (rollback test)
+namespace linux_host { void rewind_frames(uint32_t frames); void skip_draws(uint32_t frames); }   // added to the host by patches/0002 (rollback test)
 
 namespace mac_elf {
 bool reserve_window(std::string* error);
