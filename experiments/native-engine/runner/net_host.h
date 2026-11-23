@@ -31,6 +31,7 @@ struct Options {
   std::string online;               // --online unranked|direct:CODE|teams|party (services builds only)
   std::string user_dir;             // --user-dir: where user.json is (default: the app's folder on the console)
   bool fake_user = false;           // --fake-user: tests against a local mock service only
+  int retry_seconds = 0;            // --net-retry: with --net, keep asking for the match this long when the peer is not there yet
   int delay = 2;                    // --net-delay: Slippi input delay, frames
   int character = -1;               // --net-character: external character id (-1: 2, or 9 for player 1 of --net)
   uint32_t inputs = 0;              // --net-inputs: seed of the game's generated test inputs (0 with --online: the host's pads)

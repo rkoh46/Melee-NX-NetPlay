@@ -211,10 +211,17 @@ Every netplay run ends with the same evidence on each side:
 - `digest-net-confirmed.csv`: the shown states that no rollback replaced. Near the end of a run a few can still
   be predictions; the net check line is the judge.
 
-Against another machine: `tools/net_peer.sh INDEX PEER_IP PEER_PORT [--port N] [--frames N] [--delay MS --jitter MS]
-[-- runner arguments]` runs one instance in a container on the default bridge with one published UDP port (the
-only script here that gives a game-running container a network). The other machine runs
-`--net <its index>:PEER_PORT:<this machine>:<port> --frames N`.
+Against another machine: `tools/net_peer.sh INDEX PEER_IP PEER_PORT [--port N] [--frames N] [--retry S]
+[--peer-via-gateway] [--delay MS --jitter MS] [-- runner arguments]` runs one instance in a container on the
+default bridge with one published UDP port (the only script here that gives a game-running container a network).
+The other machine runs `--net <its index>:PEER_PORT:<this machine>:<port> --net-retry S --frames N`.
+
+Starting the two sides by hand: one connection attempt lasts 8 s, so `--net-retry SECONDS` makes an instance ask
+for the match again until the peer is there (`net: attempt N did not connect (T s after start)`, then
+`net: connected on attempt N`). Behind a published container port the other machine appears as the container's
+gateway under a different port per flow: `--peer-via-gateway` uses that address, and the netplay code already
+accepts the peer's address on any port and survives its own unanswered connect. `tools/net_start_test.sh`
+reproduces both on one machine (a 20 s stagger and `tools/udp_nat_forwarder.py`, optionally with the delay relay).
 
 ### Real services (off by default)
 

@@ -50,6 +50,9 @@ struct NetRun {
   int mode = 2;                     // Slippi mode of the requested match
   std::string code = "PEER#001";    // the opponent's connect code (Direct)
   bool ranked_refused = false;
+  int attempts = 1;                 // --net-retry: how often the match has been asked for
+  bool connected_once = false, gave_up = false;
+  Clock::time_point started, last_request;
   // Rows of the digest (offset, length) and whether the state they show was later replaced by a
   // rollback: a frame simulated on a predicted input is shown once and corrected without being shown again.
   std::vector<std::pair<uint32_t, uint32_t>> rows;
@@ -135,6 +138,35 @@ int32_t net_slippi_command(uint8_t command, const uint8_t* payload, uint32_t siz
       if (net.selftest_failures <= 5) say("net selftest: frame %d differs after re-simulation: %zu ranges, %zu bytes", int32_t(net_be32(payload)), diffs.size(), bytes);
     }
   } else if (!netplay_bridge::handle(command, payload, size, &reply)) return -1;
+  // --net-retry: a direct peer that is not there yet. One attempt of the netplay client lasts 8 s; when it
+  // ends without a connection the match is asked for again, and the game keeps seeing "connecting"
+  // instead of the error, until the peer answers or the time is up. Whichever side starts first
+  // simply keeps trying; a connect that arrives between two attempts is repeated by its sender and
+  // lands in the next one.
+  if (command == 0xB3 && !reply.empty() && !net.connected_once) {
+    if (reply[0] == 4) {
+      net.connected_once = true;
+      say("net: connected on attempt %d, %.1f s after start", net.attempts, ms_since(net.started) / 1000);
+    } else if (reply[0] == 5 && options.online.empty() && !net.ranked_refused) {
+      const double elapsed = ms_since(net.started) / 1000;
+      if (options.retry_seconds && ms_since(net.last_request) < 2000) {
+        reply[0] = 3;       // the new attempt has only just been asked for: the old error is still on show
+        if (reply.size() > 357 + 241) std::memset(reply.data() + 357, 0, 241);
+      } else if (elapsed < options.retry_seconds) {
+        say("net: attempt %d did not connect (%.1f s after start); trying again, up to %d s", net.attempts, elapsed, options.retry_seconds);
+        std::vector<uint8_t> ignored;
+        netplay_bridge::handle(0xBA, nullptr, 0, &ignored);          // CMD_CLEANUP_CONNECTION: drop the failed attempt
+        netplay_bridge::request_match(net.mode, net.code, net.character, 0);
+        ++net.attempts; net.last_request = Clock::now();
+        reply[0] = 3;                                                 // still connecting, as far as the game is concerned
+        if (reply.size() > 357 + 241) std::memset(reply.data() + 357, 0, 241);
+      } else if (!net.gave_up) {
+        net.gave_up = true;
+        say("net: attempt %d did not connect (%.1f s after start); giving up%s", net.attempts, elapsed,
+            options.retry_seconds ? "" : " (--net-retry SECONDS keeps trying)");
+      }
+    }
+  }
   if (command == 0xB3 && net.ranked_refused && reply.size() > 357 + 64) {
     reply[0] = 5;                                             // MM_ERROR_ENCOUNTERED
     std::memset(reply.data() + 357, 0, 241);                  // the error text field of the match state reply
@@ -148,7 +180,7 @@ int32_t net_slippi_command(uint8_t command, const uint8_t* payload, uint32_t siz
 // The game asks at boot whether to enter an online match without menus; the first time, the match is requested.
 int32_t net_online_test_match(MuOnlineMatch* out) {
   if (!net.asked) {
-    net.asked = true;
+    net.asked = true; net.started = net.last_request = Clock::now();
     const bool asked = netplay_bridge::request_match(net.mode, net.code, net.character, 0);
     net.ranked_refused = !asked;
     say("net: %s (mode %d, character %u)", asked ? "asked for a match" : netplay_bridge::ranked_refusal(), net.mode, net.character);
@@ -250,6 +282,7 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
   else if (arg == "--online") o->online = next();
   else if (arg == "--user-dir") o->user_dir = next();
   else if (arg == "--fake-user") o->fake_user = true;
+  else if (arg == "--net-retry") o->retry_seconds = int(std::strtol(next().c_str(), nullptr, 0));
   else if (arg == "--net-delay") o->delay = int(std::strtol(next().c_str(), nullptr, 0));
   else if (arg == "--net-character") o->character = int(std::strtol(next().c_str(), nullptr, 0));
   else if (arg == "--net-inputs") o->inputs = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
@@ -261,7 +294,7 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
   return true;
 }
 void usage(Log log) {
-  log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-delay FRAMES] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap]");
+  log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-retry SECONDS] [--net-delay FRAMES] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap]");
   log("          [--online unranked|direct:CODE|teams|party] [--user-dir DIR]   (builds with MU_NET_SERVICES=1 only)");
 }
 bool wanted(const Options& o) { return !o.net.empty() || !o.online.empty(); }
