@@ -29,9 +29,6 @@ namespace fe {
 namespace {
 std::atomic<bool> running{false};        // between io_start and io_stop
 std::atomic<uint64_t> last_pad_ns{0};
-std::mutex held_mutex;
-std::string held;                        // host::log lines of the run, written afterwards
-bool held_overflow = false;
 FILE* raw_out = nullptr;
 bool sound_open = false;
 uint8_t block[640]; size_t block_fill = 0;   // one 5 ms AI frame, as the app's audio_push takes it
@@ -40,10 +37,9 @@ uint64_t pad_ns_frame = 0;               // time inside the controller read sinc
 uint64_t refills = 0, refill_ms = 0;     // sound: silence put in after the game stalled (see mu_frontend_audio)
 uint64_t stat_frames = 0, stat_ns = 0, stat_underruns = 0;
 
+// A line made while the game runs (the simulation, decoder or render thread): to the log thread.
 void hold(const char* line) {
-  std::lock_guard<std::mutex> lock(held_mutex);
-  if (held.size() > (1u << 20)) { held_overflow = true; return; }
-  held += line; held += '\n';
+  if (!log_queue_push(line)) say("%s", line);
 }
 
 // ---- --auto-vs: from boot into a VS match (Ness against a computer player, Onett), by what the game reports ----
@@ -137,10 +133,12 @@ void io_start(bool picture) {
   block_fill = 0; quit_counting = false; quit_sent = false;
   refills = refill_ms = 0; stat_frames = 0; stat_ns = 0; stat_underruns = 0;
   running.store(true);
+  if ((options.play || picture) && !options.log_direct) log_queue_start();   // from here to io_stop no thread of the game writes a log line itself
 }
 
 void io_stop() {
   running.store(false);
+  log_queue_stop();
 #if MU_FE_AURORA
   if (sound_open) {
     uint64_t silent_ms = 0; const uint64_t underruns = host::audio_underruns(&silent_ms);
@@ -155,17 +153,6 @@ void io_stop() {
 #endif
   if (raw_out) { std::fclose(raw_out); raw_out = nullptr; }
   if (auto_vs.phase == AutoVs::Running) auto_vs.finish(AutoVs::Failed, "the run ended first");
-  std::string lines;
-  { std::lock_guard<std::mutex> lock(held_mutex); lines.swap(held); }
-  if (!lines.empty()) {
-    say("picture: lines held back while the game ran%s:", held_overflow ? " (the first megabyte)" : "");
-    size_t at = 0;
-    while (at < lines.size()) {
-      const size_t end = lines.find('\n', at);
-      say("  %s", lines.substr(at, end - at).c_str());
-      at = end == std::string::npos ? lines.size() : end + 1;
-    }
-  }
 }
 
 double io_take_pad_ms() { const double ms = double(pad_ns_frame) * 1e-6; pad_ns_frame = 0; return ms; }
@@ -207,12 +194,12 @@ extern "C" void mu_frontend_game_log(const char* text) {
   fe::auto_vs.p2_cpu.store(two.find("\"kind\":\"CPU\"") != std::string::npos);
 }
 
-// host::log (the decoder, the mixer, the app's input code): nothing goes to the SD card or the network
-// while the game runs.
+// Every line of the host services (the game's own lines as "[game] ...", the mixer's) and host::log of the
+// decoder and the app's input code. In play mode while the game runs it goes to the log thread; otherwise
+// (the scripted runs: only host::log lines get here with `running`) it is kept as before or written by the host.
 extern "C" int mu_frontend_log(const char* line) {
   if (!fe::running.load(std::memory_order_relaxed)) return 0;
-  fe::hold(line);
-  return 1;
+  return fe::log_queue_push(line) ? 1 : 0;
 }
 
 // Each block the mixer finishes, on the simulation thread. The app's audio_push takes what the

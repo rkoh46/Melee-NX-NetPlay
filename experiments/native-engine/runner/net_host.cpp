@@ -330,7 +330,7 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
   else if (arg == "--user-dir") o->user_dir = next();
   else if (arg == "--fake-user") o->fake_user = true;
   else if (arg == "--net-retry") o->retry_seconds = int(std::strtol(next().c_str(), nullptr, 0));
-  else if (arg == "--net-delay") o->delay = int(std::strtol(next().c_str(), nullptr, 0));
+  else if (arg == "--net-delay") { const std::string v = next(); o->delay_auto = v == "auto"; if (!o->delay_auto) o->delay = int(std::strtol(v.c_str(), nullptr, 0)); }
   else if (arg == "--net-character") o->character = int(std::strtol(next().c_str(), nullptr, 0));
   else if (arg == "--net-inputs") o->inputs = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
   else if (arg == "--selftest") o->selftest = next();
@@ -341,7 +341,7 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
   return true;
 }
 void usage(Log log) {
-  log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-retry SECONDS] [--net-delay FRAMES] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap]");
+  log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-retry SECONDS] [--net-delay FRAMES|auto] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap]");
   log("          [--online unranked|direct:CODE|teams|party] [--user-dir DIR]   (builds with MU_NET_SERVICES=1 only)");
 }
 bool wanted(const Options& o) { return !o.net.empty() || !o.online.empty(); }
@@ -349,8 +349,9 @@ bool active() { return net.on; }
 
 int start(const Options& given, Log log) {
   options = given; say = log;
+  net.started = net.last_request = Clock::now();     // a search from the game's own menu has no online_test_match call
   netplay_bridge::Setup setup;
-  setup.delay_frames = options.delay; setup.retrace_count = net_retrace_count; setup.log_time = [](uint64_t ns) {
+  setup.delay_frames = options.delay; setup.delay_auto = options.delay_auto; setup.retrace_count = net_retrace_count; setup.log_time = [](uint64_t ns) {
     if (net.have_sim_thread && pthread_equal(pthread_self(), net.sim_thread)) add_log_time(ns, true);
     else { net.other_log_ns += ns; ++net.other_log_lines; }       // the netplay client's own threads: not inside a frame
   };
@@ -374,8 +375,8 @@ int start(const Options& given, Log log) {
     net.on = true;
     net.character = uint8_t(options.character >= 0 ? options.character : 2);
     if (options.inputs) { char seed[16]; std::snprintf(seed, sizeof seed, "%u", options.inputs); setenv("MELEE_ONLINE_TEST_INPUTS", seed, 1); }
-    say("online: services on, mode %s%s%s, user folder %s, input delay %d", mode.c_str(), net.code.empty() ? "" : " with ", net.code.c_str(),
-        setup.user_dir.c_str(), options.delay);
+    say("online: services on, mode %s%s%s, user folder %s, input delay %s", mode.c_str(), net.code.empty() ? "" : " with ", net.code.c_str(),
+        setup.user_dir.c_str(), options.delay_auto ? "automatic" : std::to_string(options.delay).c_str());
   } else {
     char ip[64] = {}; unsigned index = 0, local_port = 0, remote_port = 0;
     if (std::sscanf(options.net.c_str(), "%u:%u:%63[^:]:%u", &index, &local_port, ip, &remote_port) != 4 || index > 1) { say("--net wants INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT"); return 2; }
@@ -389,8 +390,8 @@ int start(const Options& given, Log log) {
     net.character = uint8_t(options.character >= 0 ? options.character : index ? 9 : 2);
     char seed[16]; std::snprintf(seed, sizeof seed, "%u", options.inputs ? options.inputs : index + 1);
     setenv("MELEE_ONLINE_TEST_INPUTS", seed, 1);
-    say("net: player %u, listening on %u, peer at %s:%u, input delay %d, generated inputs seed %s%s%s", index, local_port, ip, remote_port,
-        options.delay, seed, options.selftest.empty() ? "" : ", self-test ", options.selftest.c_str());
+    say("net: player %u, listening on %u, peer at %s:%u, input delay %s, generated inputs seed %s%s%s", index, local_port, ip, remote_port,
+        options.delay_auto ? "automatic" : std::to_string(options.delay).c_str(), seed, options.selftest.empty() ? "" : ", self-test ", options.selftest.c_str());
   }
   if (!options.selftest.empty()) setenv("MELEE_ONLINE_SELFTEST", options.selftest.c_str(), 1);
   net.check = !options.no_check;

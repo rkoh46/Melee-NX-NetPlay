@@ -31,6 +31,7 @@ struct Setup {
   bool services = false;
   bool fake_user = false;         // tests against a local mock service only: write a made-up user.json
   std::string iso_path;           // for the game report's disc hash
+  bool delay_auto = false;        // the app's automatic delay: 2..5 frames from the opponent's ping at each game's start
 };
 NETPLAY_API bool start(const Setup& setup, std::string* error);
 NETPLAY_API void shutdown();

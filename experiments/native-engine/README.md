@@ -260,7 +260,7 @@ Compile or link:
 
 Calls, in order:
 1. `net_host::Options o;` and for each argument `net_host::parse_option(arg, next, &o)` (true when it was one of
-   `--net`, `--online`, `--user-dir`, `--net-delay`, `--net-character`, `--net-inputs`, `--selftest`,
+   `--net`, `--online`, `--user-dir`, `--net-delay` (frames, or `auto`: the app's automatic delay, 2..5 frames from the round trip), `--net-character`, `--net-inputs`, `--selftest`,
    `--net-store`, `--net-no-check`, `--track-remap`, `--fake-user`).
 2. If `net_host::wanted(o)`: set `o.out_dir`, `o.iso_path`, `o.embedded_image`, then `net_host::start(o, log)`
    before `linux_host::initialize` (non-zero is an exit code). Run the host paced and without an input script.

@@ -27,10 +27,11 @@ endforeach()
 
 if(MU_FE_VARIANT STREQUAL "switch")
   # Dawn, SDL3, Aurora and the Mesa/NVK archives, exactly as the app gets them. libnx also before libc, so the
-  # netplay object's ENet gets libnx's socket-aware fcntl (../README.md, the netplay hand-over).
+  # netplay object's ENet and curl get libnx's socket-aware fcntl (../README.md, the netplay hand-over). curl and
+  # mbedTLS are for the services program; nothing else refers to them.
   include("${REPO}/switch/cmake/Graphics.cmake")
   set(CMAKE_CXX_STANDARD_LIBRARIES
-    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
+    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
     CACHE STRING "" FORCE)
 elseif(MU_FE_VARIANT STREQUAL "linux")
   # The same Dawn revision and Aurora source as the Switch build, for Linux (build.sh deps).
@@ -92,7 +93,8 @@ target_include_directories(mu_host PRIVATE "${REPO}/port/runtime/host")   # last
 target_compile_definitions(mu_host PRIVATE MU_FOREIGN_ELF MU_SQUAD=1 MELEE_NO_SLIPPI MELEE_PORT_VERSION="mu-native" MELEE_LINUX_CPU_BASELINE="AArch64")
 target_compile_options(mu_host PRIVATE -O2 -g -Wall -fno-strict-aliasing $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>)
 # The runner's main becomes mu_runner_main (frontend_main.cpp calls it).
-set_source_files_properties("${RUN}/runner_main.cpp" PROPERTIES COMPILE_DEFINITIONS "main=mu_runner_main")
+# Its check of the process layout is answered by frontend_main.cpp, which has already made it with the whole command line.
+set_source_files_properties("${RUN}/runner_main.cpp" PROPERTIES COMPILE_DEFINITIONS "main=mu_runner_main;fixedmap_startup=mu_runner_fixedmap_startup")
 # embedded.S names its .incbin files relative to the repository root.
 set_source_files_properties("${GEN}/embedded.S" PROPERTIES COMPILE_OPTIONS "-I${REPO}")
 if(NOT MU_FE_VARIANT STREQUAL "switch")
@@ -131,52 +133,67 @@ else()
     absl::flat_hash_map absl::btree SDL3::SDL3-static)
 endif()
 
-add_executable(mu_native_gfx "${FE}/frontend_main.cpp")
-target_include_directories(mu_native_gfx PRIVATE "${FE}")
-# The netplay object of ../build.sh (copied by build.sh sync): everything behind net_host, with its other symbols local.
-if(MU_FE_VARIANT STREQUAL "switch")
-  set(MU_NETPLAY_OBJECT "${GFX}/net/obj-nx/netplay-weak.o")
-else()
-  set(MU_NETPLAY_OBJECT "${GFX}/net/obj-linux/netplay-weak.o")
-endif()
-target_link_libraries(mu_native_gfx PRIVATE mu_gx mu_host mu_gx "${MU_NETPLAY_OBJECT}")
-if(NOT MU_FE_VARIANT STREQUAL "null")
-  # The render thread's time inside Aurora's two frame calls is measured through these (frontend.cpp).
-  target_link_options(mu_native_gfx PRIVATE -Wl,--wrap=aurora_begin_frame -Wl,--wrap=aurora_end_frame)
-endif()
+# The program, twice: with the netplay object of ../build.sh (copied by build.sh sync: everything behind net_host,
+# its other symbols local), and with the services variant of that object when there is one.
+function(mu_program target netplay_object suffix)
+  add_executable(${target} "${FE}/frontend_main.cpp" "${FE}/log_queue.cpp")
+  target_include_directories(${target} PRIVATE "${FE}" "${RUN}")
+  target_link_libraries(${target} PRIVATE mu_gx mu_host mu_gx "${netplay_object}")
+  # Lines the netplay object prints with fprintf(stderr) go to the log queue while the game runs (log_queue.cpp).
+  target_link_options(${target} PRIVATE -Wl,--wrap=fprintf)
+  if(NOT MU_FE_VARIANT STREQUAL "null")
+    # The render thread's time inside Aurora's two frame calls is measured through these (frontend.cpp).
+    target_link_options(${target} PRIVATE -Wl,--wrap=aurora_begin_frame -Wl,--wrap=aurora_end_frame)
+  endif()
+  if(MU_FE_VARIANT STREQUAL "switch")
+    # What Aurora's patched objects and the Clang/libnx runtime need from the app's Switch layer.
+    target_sources(${target} PRIVATE "${REPO}/switch/src/switch_threads.c" "${REPO}/switch/src/perf_switch.cpp"
+      "${REPO}/switch/src/libc_switch.c" "${REPO}/switch/src/switch_clocks.cpp" "${FE}/switch_glue.cpp")
+    target_include_directories(${target} SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+    target_include_directories(${target} PRIVATE "${REPO}/switch/src")
+    if(MELEE_NVK_STUBS_SOURCE)
+      target_sources(${target} PRIVATE "${MELEE_NVK_STUBS_SOURCE}")   # Rust/newlib ABI bridge for the NVK archives
+    endif()
+    target_link_options(${target} PRIVATE
+      -fuse-ld=${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-ld
+      -stdlib=libstdc++
+      -L${MELEE_LIBCXX_PIC_DIR} -L${MELEE_LIBGCC_DIR} -L${MELEE_UNWIND_STUB_DIR}
+      -L${DEVKITPRO}/libnx/lib -L${DEVKITPRO}/portlibs/switch/lib
+      ${MELEE_LIBGCC_DIR}/crti.o ${MELEE_LIBGCC_DIR}/crtbegin.o
+      -Wl,-T,${DEVKITPRO}/libnx/switch.ld -Wl,-pie -Wl,--no-dynamic-linker -Wl,-z,text -Wl,-z,now
+      -Wl,--build-id=sha1 -Wl,--require-defined=main -nodefaultlibs -Wl,--gc-sections
+      -Wl,--allow-multiple-definition
+      -Wl,--wrap=pthread_create -Wl,--wrap=pthread_detach -Wl,--wrap=pthread_join
+      -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit
+      # The runner's text console would take the display: see frontend_main.cpp.
+      -Wl,--wrap=consoleInit -Wl,--wrap=consoleUpdate -Wl,--wrap=consoleExit)
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME mu-native-gfx${suffix})
+    nx_generate_nacp(mu-native-gfx${suffix}.nacp NAME "mu-native-gfx${suffix}" AUTHOR "Melee-NX-NetPlay" VERSION "0.1")
+    nx_create_nro(${target} NACP mu-native-gfx${suffix}.nacp ICON "${REPO}/switch/icon.jpg")
+  else()
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME mu-native-gfx-${MU_FE_VARIANT}${suffix})
+    # A position-independent executable keeps the host away from the fixed game addresses.
+    target_link_options(${target} PRIVATE -pie)
+    target_link_libraries(${target} PRIVATE pthread z m)
+    if(suffix)
+      target_link_libraries(${target} PRIVATE curl)
+    endif()
+  endif()
+endfunction()
 
 if(MU_FE_VARIANT STREQUAL "switch")
   target_include_directories(mu_gx SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   target_include_directories(mu_host SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
-  # What Aurora's patched objects and the Clang/libnx runtime need from the app's Switch layer.
-  target_sources(mu_native_gfx PRIVATE "${REPO}/switch/src/switch_threads.c" "${REPO}/switch/src/perf_switch.cpp"
-    "${REPO}/switch/src/libc_switch.c" "${REPO}/switch/src/switch_clocks.cpp" "${FE}/switch_glue.cpp")
   # The runner and the frontend use the app's clock module (switch_clocks.h).
   target_include_directories(mu_host PRIVATE "${REPO}/switch/src")
   target_include_directories(mu_gx PRIVATE "${REPO}/switch/src")
-  target_include_directories(mu_native_gfx PRIVATE "${REPO}/switch/src")
-  if(MELEE_NVK_STUBS_SOURCE)
-    target_sources(mu_native_gfx PRIVATE "${MELEE_NVK_STUBS_SOURCE}")   # Rust/newlib ABI bridge for the NVK archives
-  endif()
-  target_link_options(mu_native_gfx PRIVATE
-    -fuse-ld=${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-ld
-    -stdlib=libstdc++
-    -L${MELEE_LIBCXX_PIC_DIR} -L${MELEE_LIBGCC_DIR} -L${MELEE_UNWIND_STUB_DIR}
-    -L${DEVKITPRO}/libnx/lib -L${DEVKITPRO}/portlibs/switch/lib
-    ${MELEE_LIBGCC_DIR}/crti.o ${MELEE_LIBGCC_DIR}/crtbegin.o
-    -Wl,-T,${DEVKITPRO}/libnx/switch.ld -Wl,-pie -Wl,--no-dynamic-linker -Wl,-z,text -Wl,-z,now
-    -Wl,--build-id=sha1 -Wl,--require-defined=main -nodefaultlibs -Wl,--gc-sections
-    -Wl,--allow-multiple-definition
-    -Wl,--wrap=pthread_create -Wl,--wrap=pthread_detach -Wl,--wrap=pthread_join
-    -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit
-    # The runner's text console would take the display: see frontend_main.cpp.
-    -Wl,--wrap=consoleInit -Wl,--wrap=consoleUpdate -Wl,--wrap=consoleExit)
-  set_target_properties(mu_native_gfx PROPERTIES OUTPUT_NAME mu-native-gfx)
-  nx_generate_nacp(mu-native-gfx.nacp NAME "mu-native-gfx" AUTHOR "Melee-NX-NetPlay" VERSION "0.1")
-  nx_create_nro(mu_native_gfx NACP mu-native-gfx.nacp ICON "${REPO}/switch/icon.jpg")
+  set(MU_NET_DIR "${GFX}/net/obj-nx")
 else()
-  set_target_properties(mu_native_gfx PROPERTIES OUTPUT_NAME mu-native-gfx-${MU_FE_VARIANT})
-  # A position-independent executable keeps the host away from the fixed game addresses.
-  target_link_options(mu_native_gfx PRIVATE -pie)
-  target_link_libraries(mu_native_gfx PRIVATE pthread z m)
+  set(MU_NET_DIR "${GFX}/net/obj-linux")
+endif()
+mu_program(mu_native_gfx "${MU_NET_DIR}/netplay-weak.o" "")
+if(EXISTS "${MU_NET_DIR}-services/netplay-weak.o")
+  mu_program(mu_native_gfx_services "${MU_NET_DIR}-services/netplay-weak.o" "-services")
+else()
+  message(STATUS "no services netplay object in ${MU_NET_DIR}-services: only the program without services is built")
 endif()

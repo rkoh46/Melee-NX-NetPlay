@@ -10,8 +10,12 @@
 #include "fixedmap.h"
 #include "hostprof.h"
 #include "net_host.h"
+#include "netplay_bridge.h"
+#include "rollback.h"
 #include "mu_host.h"
 
+#include <atomic>
+#include <chrono>
 #include <climits>
 #include <cstdarg>
 
@@ -30,35 +34,119 @@ extern "C" const uint8_t mu_embedded_game[], mu_embedded_game_end[];
 
 namespace fe {
 namespace {
-net_host::Options net;
-bool net_on = false;
-uint32_t last_match_frame = 0;
+using Clock = std::chrono::steady_clock;
+inline uint64_t now_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count()); }
 
-// Once per retrace after the frame. With netplay: the state row the netplay host checks and records.
+net_host::Options net;
+bool net_on = false;          // the netplay host answers the game's online commands
+bool direct = false;          // --net or --online on the command line: straight into a match, the runner's game, seed and clock
+bool menu_online = false;     // the services program with Slippi's menus and a user file: a search starts from the game's own menu
+bool searching = false;       // between the game's "find a match" and its "clean the connection up" (simulation thread)
+bool online_now = false, in_match = false, tracked = false;
+uint32_t last_match_frame = 0, match_count = 0, scene_major = 0xFFFFFFFF, scene_minor = 0;
+Clock::time_point last_retrace; bool have_last_retrace = false;
+
+// The option words as the game last read them (the host's functions are wrapped in the tables hook).
+enum { kWords = 6 };
+const char* const kWordName[kWords] = {"options", "options 2", "options 3", "display", "audio", "mod flags"};
+uint32_t (*word_original[kWords])() = {};
+uint32_t word_seen[kWords] = {};
+bool word_read[kWords] = {};
+template <int N> uint32_t word_reader() { const uint32_t v = word_original[N] ? word_original[N]() : 0; word_seen[N] = v; word_read[N] = true; return v; }
+
+// Once per retrace after the frame, on the simulation thread.
 void observer(const MuStatePod& state, const linux_host::Counters& counters, void*) {
-  if (!net_on) return;
+  const auto now = Clock::now();
   const bool fighting = state.match_frame && state.match_frame != last_match_frame;
   last_match_frame = state.match_frame;
-  char row[1400]; int n = 0;
-  n += std::snprintf(row + n, sizeof row - n, "%u,%u,%u,%u,%u", counters.retraces, state.scene_major, state.scene, state.match_frame, state.rng);
-  for (const auto& f : state.player)
-    n += std::snprintf(row + n, sizeof row - n, ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u", f.present, f.stocks, f.action, f.anim_frame,
-                       f.pos_x, f.pos_y, f.pos_z, f.vel_x, f.vel_y, f.vel_z, f.percent, f.facing);
-  row[n++] = '\n';
-  net_host::on_retrace(row, size_t(n), fighting, -1.0);
+  log_queue_match(fighting);
+  if (state.scene_major != scene_major || state.scene != scene_minor) {
+    scene_major = state.scene_major; scene_minor = state.scene;
+    in_match = false;
+    say("play: scene %u/%u at retrace %u", scene_major, scene_minor, counters.retraces);
+    // The match of a menu session is over (the game left its scene): the rollback store stops watching the game's
+    // memory. Its list of written pages only grows; the next match's first state save starts it again from nothing.
+    if (tracked && !direct) { net_host::stop_tracking(); tracked = false; say("play: rollback store released"); }
+  }
+  // Online, as upstream's host decides it: the game is in Slippi's online flow (major scene 8), or a search or
+  // match of the netplay host is on. The option words follow (settings.cpp).
+  const bool online = net_on && (direct || searching || state.scene_major == 8);
+  if (online != online_now) {
+    online_now = online;
+    if (!direct) {
+      settings_online(online);
+      say("play: %s at retrace %u (scene %u/%u): the option words are now the %s ones", online ? "online" : "offline again", counters.retraces,
+          state.scene_major, state.scene, online ? "online" : "player's");
+    }
+  }
+  if (fighting && !in_match) {
+    in_match = true; ++match_count;
+    char words[200]; int n = 0;
+    for (int i = 0; i < kWords; ++i) n += std::snprintf(words + n, sizeof words - n, "%s%s %08X%s", i ? ", " : "", kWordName[i], word_seen[i], word_read[i] ? "" : " (not read)");
+    say("play: match %u starts at retrace %u (scene %u/%u, %s); the words the game last read: %s", match_count, counters.retraces, state.scene_major, state.scene,
+        online ? "online" : "offline", words);
+  }
+  if (net_on) {
+    // The state row the netplay host checks and records, and the frame's wall time (it takes the pacing wait out).
+    char row[1400]; int n = 0;
+    n += std::snprintf(row + n, sizeof row - n, "%u,%u,%u,%u,%u", counters.retraces, state.scene_major, state.scene, state.match_frame, state.rng);
+    for (const auto& f : state.player)
+      n += std::snprintf(row + n, sizeof row - n, ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u", f.present, f.stocks, f.action, f.anim_frame,
+                         f.pos_x, f.pos_y, f.pos_z, f.vel_x, f.vel_y, f.vel_z, f.percent, f.facing);
+    row[n++] = '\n';
+    net_host::on_retrace(row, size_t(n), fighting, have_last_retrace ? std::chrono::duration<double, std::milli>(now - last_retrace).count() : -1.0);
+  }
+  last_retrace = Clock::now(); have_last_retrace = true;
 }
 
 // The host hands its tables over before the game sees them: netplay takes slippi_command and its other entries;
 // the mod commands (frontend/src/mods.cpp) are asked first, as in the hook of the host services.
 int32_t (*net_command)(uint8_t, const uint8_t*, uint32_t, uint8_t*, uint32_t, uint32_t*) = nullptr;
+void (*resim_original)(int32_t) = nullptr;
 extern "C" __attribute__((weak)) int32_t mu_frontend_command(uint8_t, const uint8_t*, uint32_t, uint8_t*, uint32_t, uint32_t*);
 int32_t command(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {
   if (response_size) *response_size = 0;
   if (mu_frontend_command) { const int32_t mine = mu_frontend_command(c, payload, size, response, capacity, response_size); if (mine != INT32_MIN) return mine; }
-  return net_command ? net_command(c, payload, size, response, capacity, response_size) : -1;
+  if (!net_command) return -1;
+  // A state save (0xB1) or load (0xB2), and the self-test's two: the snapshot store copies pages of game memory and,
+  // on the console, takes them out of the address space for a moment to make them read-only again. The decoder
+  // thread reads that memory while it has stream bytes left, so it is brought up to date first. At the start of a
+  // frame it already is (the retrace waited for it), so this costs nothing unless frames are being repeated.
+  const bool store = c == 0xB1 || c == 0xB2 || c == 0xF0 || c == 0xF1;
+  const uint64_t t0 = now_ns();
+  if (store) { decoder_sync(); tracked = true; }
+  const uint64_t t1 = now_ns();
+  if (c == 0xB4 && payload && size >= 1) {
+    static const char* const mode[] = {"Ranked", "Unranked", "Direct", "Teams"};
+    searching = true;
+    say("play: online: the game asked for a match: mode %u (%s)%s", payload[0], payload[0] < 4 ? mode[payload[0]] : "?", direct ? "" : ", from its menu");
+  } else if (c == 0xBA && searching) {
+    searching = false;
+    say("play: online: the game closed the connection");
+  }
+  const int32_t result = net_command(c, payload, size, response, capacity, response_size);
+  const uint64_t t2 = now_ns();
+  if (store) { sim_cost[1] += t1 - t0; sim_cost[0] += t2 - t1; } else sim_cost[2] += t2 - t0;
+  return result;
+}
+void resim_phase(int32_t entering) {
+  in_resim = entering != 0;
+  if (resim_original) resim_original(entering);
 }
 void tables_hook(MuHostApi* host, MuGameApi* game) {
-  if (host && net_on) { net_host::install(host); net_command = host->slippi_command; host->slippi_command = command; }
+  if (host) {
+    if (net_on) {
+      const auto own_test_match = host->online_test_match;
+      net_host::install(host);
+      // With the menus, nothing asks for a match at boot: the game's own online screens do, through slippi_command.
+      if (menu_online) host->online_test_match = own_test_match;
+      net_command = host->slippi_command; host->slippi_command = command;
+      resim_original = host->resim_phase; host->resim_phase = resim_phase;
+    }
+    uint32_t (**slot[kWords])() = {&host->game_options, &host->game_options2, &host->game_options3, &host->display_options, &host->audio_options, &host->mod_flags};
+    uint32_t (*const reader[kWords])() = {word_reader<0>, word_reader<1>, word_reader<2>, word_reader<3>, word_reader<4>, word_reader<5>};
+    for (int i = 0; i < kWords; ++i) if (*slot[i]) { word_original[i] = *slot[i]; *slot[i] = reader[i]; }
+  }
   if (options.profile) hostprof::wrap_tables(host, game);
 }
 void net_say(const char* format, ...) {
@@ -66,6 +154,7 @@ void net_say(const char* format, ...) {
   va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
   say("%s", line);
 }
+bool file_exists(const std::string& path) { if (FILE* f = std::fopen(path.c_str(), "rb")) { std::fclose(f); return true; } return false; }
 
 struct Run { int result = 1; };
 void* play_thread(void* user) {
@@ -75,7 +164,10 @@ void* play_thread(void* user) {
   config.game_path = "(embedded)";
   config.log_path = options.out_dir + "/host.log";
   // Kept between sessions, apart from the scripted runs' card; a mod profile has its own.
-  const std::string profile_card = net_on ? std::string() : mods_configure(settings_profile());
+  // No mod files in a session that can go online (upstream switches to the retail files for the match; here they are not loaded).
+  if (net_on && !direct && !settings_profile().empty())
+    say("play: mod profile \"%s\" is not loaded: this session can go online (slippi_menus 0 plays it offline)", settings_profile().c_str());
+  const std::string profile_card = direct ? std::string() : mods_configure(net_on ? std::string() : settings_profile());
   config.card_dir = profile_card.empty() ? options.out_dir + "/card-play" : profile_card;
   config.max_frames = options.frames;                     // 0: until the player stops it
   // The frontend paces the retrace; with netplay the host does (its clock is what the netplay host moves).
@@ -83,7 +175,7 @@ void* play_thread(void* user) {
   if (net_on) options.pace = false;
   config.headless = true; config.no_gc_adapter = true;    // the host's own SDL2/libusb input is not built in
   config.vanilla_game = settings_vanilla();               // by default melee-unlocked's game as its own hosts run it
-  if (net_on) {
+  if (direct) {
     // As the runner's netplay runs: the retail game, the same seed and clock on both sides. No settings file, no mods.
     config.vanilla_game = true;
     config.has_rng_seed = true; config.rng_seed = 0x12345678;
@@ -103,7 +195,7 @@ void* play_thread(void* user) {
   std::string error;
   if (!linux_host::initialize(config, &error)) { say("play: cannot start: %s", error.c_str()); linux_host::shutdown(); return nullptr; }
   say("play: started; memory card folder %s%s", config.card_dir.c_str(), options.fresh_card ? " (emptied)" : "");
-  if (!net_on) settings_report();
+  if (!direct) settings_report();
   linux_host::set_frame_observer(observer, nullptr);       // the frontend attaches here
   run->result = linux_host::run();
   const auto stats = linux_host::counters();
@@ -122,27 +214,63 @@ int play_main() {
   nxlinkStdio();
 #endif
   mkdir(options.out_dir.c_str(), 0777);
-  say("---- mu-native-gfx --play (native engine, interactive) ----");
-  if (options.iso.empty()) { say("play: --iso PATH is needed"); return 2; }
-  // Netplay options (--net, --online, --net-delay, --track-remap, ...: ../runner/net_host.h) among what is left.
+  log_open();
+  say("---- mu-native-gfx --play (native engine, interactive)%s ----", netplay_bridge::has_services() ? ", with online services" : "");
+  // The process layout, checked at the top of main (frontend_main.cpp), as the runner handles it.
+  say("%s", fixedmap_layout());
+  if (options.layout > 0) {
+    say("play: this process cannot hold the game; starting the title again (start %d of at most 5)", fixedmap_relaunch_count() + 2);
+    log_close();
+    fixedmap_relaunch();                                    // does not come back when it works
+    log_open();
+  }
+  if (options.layout) { say("play: cannot start: %s", fixedmap_error()); log_close(); return 1; }
+  if (fixedmap_relaunch_count()) say("play: started over %d time(s) to get a usable layout", fixedmap_relaunch_count());
+  if (options.iso.empty()) { say("play: --iso PATH is needed"); log_close(); return 2; }
+  // Netplay options (--net, --online, --net-delay, --net-retry, --track-remap, ...: ../runner/net_host.h) among what is left.
+  bool delay_given = false;
   for (size_t i = 0; i < options.rest.size(); ++i) {
     const auto next = [&]() -> std::string { return i + 1 < options.rest.size() ? options.rest[++i] : std::string(); };
+    if (options.rest[i] == "--net-delay") delay_given = true;
     net_host::parse_option(options.rest[i], next, &net);
   }
-  if (net_host::wanted(net)) {
-    net.out_dir = options.out_dir; net.iso_path = options.iso; net.embedded_image = true;
-    if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); return code; }
-    net_on = true;
+  direct = net_host::wanted(net);
+  settings_boot_to_css(!direct && options.auto_vs && !options.auto_menus);
+  settings_load(options.settings.empty() ? options.out_dir + "/settings.ini" : options.settings);
+  if (direct) settings_deactivate();                        // only the online delay is taken from the file
+  else if (settings_widescreen()) options.stretch = true;   // the 16:9 code draws for the whole screen
+  // Input delay: --net-delay FRAMES|auto, else the settings file (onlinedelayauto / onlinedelay). Automatic is the
+  // app's default: 2 to 5 frames from the round trip to the opponent, chosen by the netplay object at each game's start.
+  if (!delay_given) {
+    const int frames = settings_online_delay();
+    net.delay_auto = frames <= 0;
+    if (frames > 0) net.delay = frames;
+  }
+  net.out_dir = options.out_dir; net.iso_path = options.iso; net.embedded_image = true;
 #ifdef __SWITCH__
-    // Rollback snapshots track writes by remapping pages of the game's memory (--track-remap). The decoder thread
-    // reads that memory while the game runs, so with netplay the stream is decoded inside the game's own flush.
-    options.sync_decode = true;
+  const std::string user_dir = net.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User" : net.user_dir;   // net_host's default: the app's sign-in
+#else
+  const std::string user_dir = net.user_dir.empty() ? options.out_dir + "/user" : net.user_dir;
 #endif
-    say("play: netplay on: the retail game with the runner's seed and clock; settings.ini and mod profiles are not read");
-  } else {
-    settings_boot_to_css(options.auto_vs && !options.auto_menus);
-    settings_load(options.settings.empty() ? options.out_dir + "/settings.ini" : options.settings);
-    if (settings_widescreen()) options.stretch = true;      // the 16:9 code draws for the whole screen
+  if (!direct && settings_slippi_menus() && netplay_bridge::has_services()) {
+    // The services program with Slippi's menus: the game's Online Play page asks the netplay host, as --online does.
+    if (net.fake_user || file_exists(user_dir + "/user.json")) {
+      menu_online = true;
+      net.online = "unranked";             // only switches the services on; the mode is whatever row the player picks
+      net.user_dir = user_dir;
+    } else {
+      say("play: online: no %s/user.json: the Online Play page will show Log-in. Sign in with the app first, or name the folder with --user-dir", user_dir.c_str());
+    }
+  } else if (!direct && settings_slippi_menus()) {
+    say("play: online: this program has no online services (the services program has): the Online Play page will show Log-in");
+  }
+  if (direct || menu_online) {
+    if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); log_close(); return code; }
+    net_on = true;
+    if (options.sync_net) options.sync_decode = true;      // --gfx-sync-net: the earlier way, for comparison
+    const std::string delay = net.delay_auto ? std::string("automatic") : std::to_string(net.delay);
+    if (direct) say("play: netplay on: the retail game with the runner's seed and clock; settings.ini (but for the input delay, %s) and mod profiles are not read", delay.c_str());
+    else say("play: online on: user folder %s, input delay %s; a search starts from the game's Online Play page", user_dir.c_str(), delay.c_str());
   }
 #ifdef __SWITCH__
   // Clocks as the app sets them; the frontend adds GPU and memory when it attaches and restores those.
@@ -170,6 +298,7 @@ int play_main() {
   }
 #endif
   say("---- done (%d) ----", run.result);
+  log_close();
 #ifdef __SWITCH__
   svcSleepThread(1000000000ull);    // let the last lines reach nxlink
   socketExit();

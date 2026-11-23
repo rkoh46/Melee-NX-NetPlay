@@ -10,6 +10,9 @@
 #   ./build.sh linux    Linux with Aurora on Vulkan (the picture test)       -> out/mu-native-gfx-linux
 #   ./build.sh nro      Horizon                                              -> out/mu-native-gfx.nro
 #   ./build.sh          sync, null, nro
+# Each of null, linux and nro also makes the services program (out/mu-native-gfx-*-services, out/mu-native-gfx-services.nro):
+# the same objects linked with the netplay object that has the app's matchmaking client, user file and reporting.
+# The Linux one is pinned to the loopback stand-in (../tools/mock_matchmaking.py) and cannot reach a real service.
 # Needs: ../fetch.sh and ../build.sh game (the tree and melee_game.so), build/sdk (the Switch graphics SDK the
 # aurora frontend of the app uses) and the sources Aurora fetched in an earlier app build (build/switch-aurora/_deps).
 # Every container has a time limit and no network.
@@ -29,9 +32,10 @@ sync_tree() {
   [ -d "$src/mu/.git" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
   [ -f "$src/out/melee_game.so" ] || { echo "run ../build.sh game first" >&2; exit 1; }
   mkdir -p "$work" "$out" "$gen" "$work/mu" "$work/runner"
-  # The runner this frontend was last brought up against. The runner has since grown a netplay bridge (ENet,
-  # more embedded files) that this build does not link yet: MU_SYNC_REF=HEAD or =worktree to try a newer one.
-  local ref="${MU_SYNC_REF:-8428269}" stage="$work/sync-stage"
+  # The runner this frontend was last brought up against. Play mode needs the runner's automatic input delay
+  # (--net-delay auto, netplay_bridge::Setup::delay_auto), which is newer than 1c556fc and not committed yet: until
+  # it is, the files on disk are used. Pin this to the commit that contains them (MU_SYNC_REF=<commit> meanwhile).
+  local ref="${MU_SYNC_REF:-worktree}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
@@ -66,6 +70,11 @@ sync_tree() {
     [ -f "$src/$f" ] || { echo "missing $src/$f: run ../build.sh first" >&2; exit 1; }
     mkdir -p "$work/net/$(dirname "$f")"; cmp -s "$src/$f" "$work/net/$f" || cp "$src/$f" "$work/net/$f"
   done
+  # The services variant for the console (MU_NET_SERVICES=1 ../build.sh nro), when it has been made. The Linux
+  # one is made here (build_net_services_linux).
+  if [ -f "$src/obj-nx-services/netplay.o" ]; then
+    mkdir -p "$work/net/obj-nx-services"; cmp -s "$src/obj-nx-services/netplay.o" "$work/net/obj-nx-services/netplay.o" || cp "$src/obj-nx-services/netplay.o" "$work/net/obj-nx-services/netplay.o"
+  fi
   echo "runner and patches: $ref ($([ "$ref" = worktree ] && echo files on disk || git -C "$repo" rev-parse --short "$ref")); game image sha256 $(shasum -a 256 "$out/melee_game.so" | cut -c1-16)" | tee "$work/sync-state.txt"
   # This repository's GX decoder, with the address handling the native memory layout needs.
   mkdir -p "$gen/gxsrc/port/runtime/gx"
@@ -144,7 +153,31 @@ DEPS_ARGS=$(echo $DEPS_ARGS)
 # The netplay object went through a relocatable link that dissolved its COMDAT groups, so the inline variables and
 # template instances it shares with this program (standard library, the app's headers) are plain definitions in
 # it: made weak in a copy, they join ours instead of clashing.
-WEAKEN_LINUX="[ $W/net/obj-linux/netplay-weak.o -nt $W/net/obj-linux/netplay.o ] || objcopy --weaken $W/net/obj-linux/netplay.o $W/net/obj-linux/netplay-weak.o"
+WEAKEN_LINUX="for v in obj-linux obj-linux-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o ] || objcopy --weaken $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done"
+
+# The netplay object with the app's real services for Linux, by the recipe of ../build.sh (net_build with
+# MU_NET_SERVICES=1) from the synced runner: the bridge, this repository's netplay sources and ENet in one object,
+# every other symbol local. Its service address is the loopback stand-in's, compiled in. Made here because the test
+# needs one that matches the synced bridge header.
+NET_INC="-I$W/runner -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app"
+NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DMU_NET_SERVICES'
+NET_CXX='slippi_online slippi_net slippi_offline slippi_net_diag slippi_match_quality slippi_text slippi_version slippi_matchmaking_ws slippi_report slippi_http_curl slippi_login'
+build_net_services_linux() {
+  local o="$W/net/obj-linux-services" stamp
+  stamp="$(cd "$repo" && cat $(for f in $NET_CXX; do echo port/runtime/hle/$f.cpp; done) port/runtime/hle/slippi_*.h "$W"/runner/netplay_bridge.* | shasum -a 256 | cut -c1-32)"
+  [ -f "$repo/$o/netplay.o" ] && [ "$(cat "$repo/$o/stamp" 2>/dev/null)" = "$stamp" ] && return 0
+  dock 900 "$LINUX_IMG" "
+    rm -rf $o; mkdir -p $o/net
+    for f in callbacks compress host list packet peer protocol unix; do
+      gcc -fPIE -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/\$f.c -o $o/net/enet_\$f.o
+    done
+    for f in $NET_CXX; do echo port/runtime/hle/\$f.cpp; done > $o/list; echo $W/runner/netplay_bridge.cpp >> $o/list
+    xargs -P $jobs -I{} sh -c 'g++ -fPIE -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden $NET_INC $NET_DEF -c {} -o $o/net/\$(basename {} .cpp).o' < $o/list
+    ld -r --force-group-allocation $o/net/*.o -o $o/netplay.o
+    objcopy --localize-hidden $o/netplay.o"
+  echo "$stamp" > "$repo/$o/stamp"
+  echo "built $repo/$o/netplay.o"
+}
 
 build_image() { timeout 900 docker build -t "$GFX_IMG" -f "$here/linux-gfx.Dockerfile" "$here"; }
 
@@ -160,25 +193,27 @@ build_deps() {
 }
 
 build_null() {
+  build_net_services_linux
   dock 900 "$LINUX_IMG" "
     $WEAKEN_LINUX
     cmake -S experiments/native-engine/frontend -B $W/null -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=null \
       -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ >/dev/null
     cmake --build $W/null --parallel $jobs > $W/null-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/null-build.log | head -60; exit 1; }
-    cp $W/null/mu-native-gfx-null $W/out/"
-  echo "built $out/mu-native-gfx-null"
+    cp $W/null/mu-native-gfx-null $W/null/mu-native-gfx-null-services $W/out/"
+  echo "built $out/mu-native-gfx-null and -services"
 }
 
 build_linux() {
   [ -f "$work/dawn-linux/src/dawn/native/libwebgpu_dawn.a" ] && [ -f "$work/sdl-linux/libSDL3.a" ] || { echo "run ./build.sh deps first" >&2; exit 1; }
   fetched_deps
+  build_net_services_linux
   dock 2400 "$GFX_IMG" "
     $WEAKEN_LINUX
     cmake -S experiments/native-engine/frontend -B $W/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=linux \
       -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ $DEPS_ARGS >$W/linux-configure.log 2>&1 || { tail -30 $W/linux-configure.log; exit 1; }
-    cmake --build $W/linux --target mu_native_gfx --parallel $jobs > $W/linux-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux-build.log | head -60; exit 1; }
-    cp $W/linux/mu-native-gfx-linux $W/out/"
-  echo "built $out/mu-native-gfx-linux"
+    cmake --build $W/linux --target mu_native_gfx mu_native_gfx_services --parallel $jobs > $W/linux-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux-build.log | head -60; exit 1; }
+    cp $W/linux/mu-native-gfx-linux $W/linux/mu-native-gfx-linux-services $W/out/"
+  echo "built $out/mu-native-gfx-linux and -services"
 }
 
 build_nro() {
@@ -186,13 +221,13 @@ build_nro() {
   fetched_deps
   dock 2400 "$NX_IMG" "
     export PATH=/opt/devkitpro/devkitA64/bin:\$PATH
-    [ $W/net/obj-nx/netplay-weak.o -nt $W/net/obj-nx/netplay.o ] || aarch64-none-elf-objcopy --weaken $W/net/obj-nx/netplay.o $W/net/obj-nx/netplay-weak.o
+    for v in obj-nx obj-nx-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o ] || aarch64-none-elf-objcopy --weaken $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done
     cmake -S experiments/native-engine/frontend -B $W/nx -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=switch \
       -DCMAKE_TOOLCHAIN_FILE=/w/switch/cmake/SwitchGCC.cmake -DMELEE_NX_SDK_DIR=/w/build/sdk $DEPS_ARGS >$W/nx-configure.log 2>&1 || { tail -30 $W/nx-configure.log; exit 1; }
     cmake --build $W/nx --parallel $jobs > $W/nx-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/nx-build.log | head -60; exit 1; }
-    cp $W/nx/mu-native-gfx.nro $W/out/
-    ls -l $W/out/mu-native-gfx.nro"
-  echo "built $out/mu-native-gfx.nro"
+    cp $W/nx/mu-native-gfx*.nro $W/out/
+    ls -l $W/out/*.nro"
+  echo "built $out/mu-native-gfx.nro$([ -f "$out/mu-native-gfx-services.nro" ] && echo ' and mu-native-gfx-services.nro')"
 }
 
 case "${1:-all}" in

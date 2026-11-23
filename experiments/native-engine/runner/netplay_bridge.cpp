@@ -105,7 +105,7 @@ static bool start_services(const Setup& setup, std::string* error) {
   }
   slippi::Matchmaking::local_peer.enabled = false;
   auto& config = slippi::online::config();
-  config.offline = false; config.user_dir = setup.user_dir; config.delay = setup.delay_frames; config.delay_auto = false;
+  config.offline = false; config.user_dir = setup.user_dir; config.delay = setup.delay_frames; config.delay_auto = setup.delay_auto;
   host::options.cache_dir = setup.user_dir; host::options.iso = setup.iso_path;
   slippi::online::init();
   return slippi::online::available();
@@ -127,7 +127,7 @@ bool start(const Setup& setup, std::string* error) {
   peer.enabled = true; peer.local_index = setup.local_index; peer.local_port = setup.local_port;
   peer.remote_ip = setup.remote_ip; peer.remote_port = setup.remote_port;
   auto& config = slippi::online::config();
-  config.offline = false; config.user_dir = setup.user_dir; config.delay = setup.delay_frames; config.delay_auto = false;
+  config.offline = false; config.user_dir = setup.user_dir; config.delay = setup.delay_frames; config.delay_auto = setup.delay_auto;
   host::options.cache_dir = setup.user_dir;
   slippi::online::init();
   if (!slippi::online::available()) { if (error) *error = "the app's online module is not available in this build"; return false; }

@@ -33,6 +33,7 @@ struct Options {
   bool fake_user = false;           // --fake-user: tests against a local mock service only
   int retry_seconds = 0;            // --net-retry: with --net, keep asking for the match this long when the peer is not there yet
   int delay = 2;                    // --net-delay: Slippi input delay, frames
+  bool delay_auto = false;          // --net-delay auto: the app's automatic delay (2..5 frames from the ping at each game's start)
   int character = -1;               // --net-character: external character id (-1: 2, or 9 for player 1 of --net)
   uint32_t inputs = 0;              // --net-inputs: seed of the game's generated test inputs (0 with --online: the host's pads)
   bool no_check = false;            // --net-no-check: do not collect the game's per-frame state checksums

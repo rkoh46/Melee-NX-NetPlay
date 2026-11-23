@@ -33,9 +33,22 @@ struct Options {
   std::string cache_dir;      // --cache-dir DIR: Aurora's pipeline cache folder (default <out>/aurora)
   int width = 1280, height = 720;
   std::string out_dir;        // the runner's --out
+  bool sync_net = false;      // --gfx-sync-net: with netplay, decode inside the game's flush (the earlier way; for comparison)
+  bool log_direct = false;    // --log-direct: every line written where it is made (the earlier way; for comparison)
+  int layout = 0;             // what fixedmap_startup said at the top of main (0: the game's fixed ranges are free)
 };
 extern Options options;
-void say(const char* format, ...);   // stdout (nxlink) and <out>/picture.log
+void say(const char* format, ...);   // stdout (nxlink) and <out>/picture.log; through the log thread while play mode's game runs
+void log_open();                     // <out>/picture.log, appended to
+void log_close();
+void log_write(const char* text, size_t size, bool to_console, bool to_file);
+// log_queue.cpp (play mode): lines are handed to a writer thread; the file is only written between matches
+void log_queue_start();
+void log_queue_stop();
+void log_queue_match(bool fighting);
+bool log_queue_running();
+bool log_queue_push(const char* line);   // false when the queue is not running (the caller writes the line itself)
+uint64_t log_queue_lines();
 // play_io.cpp
 void io_start(bool picture);         // run start: sound output (with a picture only), held log, raw sound dump
 void io_stop();                      // run end: closes the sound output, prints its statistics and the held log lines
@@ -45,6 +58,9 @@ double io_take_pad_ms();             // time spent reading controllers since the
 // settings.cpp (play mode)
 void settings_load(const std::string& path);
 bool settings_vanilla();
+void settings_online(bool on);       // the option words follow the online rules while this is on
+void settings_deactivate();          // the host's own words again (the netplay runs that boot straight into a match)
+int settings_online_delay();         // frames; 0: automatic
 bool settings_widescreen();
 void settings_boot_to_css(bool on);
 void settings_report();
@@ -67,4 +83,10 @@ int slippi_file_read(uint64_t offset, void* out, size_t bytes);
 bool slippi_menus_on();
 // play_main.cpp
 int play_main();
+// frontend.cpp
+void decoder_sync();                 // simulation thread: returns when the decoder thread has read everything handed to it
+// Simulation-thread time other files measure, running totals in ns: [0] rollback state saves and loads, [1] waiting
+// for the decoder before them, [2] every other netplay command. in_resim: the game is simulating frames again.
+extern uint64_t sim_cost[3];
+extern bool in_resim;
 }  // namespace fe

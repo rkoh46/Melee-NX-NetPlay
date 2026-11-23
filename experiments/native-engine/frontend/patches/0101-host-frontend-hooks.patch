@@ -31,7 +31,19 @@
  namespace linux_host {
  namespace {
  constexpr uintptr_t locked_cache_base = 0xE0000000u;
-@@ -144,7 +168,40 @@
+@@ -124,6 +148,11 @@
+ #endif
+ 
+ void write_log(const char* format, va_list args) {
++  if (mu_frontend_log) {      // play mode: the line goes to the frontend's log queue, not to a file from this thread
++    char line[4096];
++    va_list queued; va_copy(queued, args); std::vsnprintf(line, sizeof line, format, queued); va_end(queued);
++    if (mu_frontend_log(line)) return;
++  }
+   va_list copy;
+   va_copy(copy, args);
+   std::vfprintf(stderr, format, args);
+@@ -145,7 +174,40 @@
    return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
  }
  
@@ -72,7 +84,7 @@
    if (disc_fd < 0 || offset > disc_size || bytes > disc_size - offset || (!out && bytes)) return false;
    auto* dst = static_cast<uint8_t*>(out);
  #ifdef MU_FOREIGN_ELF
-@@ -255,6 +312,7 @@
+@@ -256,6 +318,7 @@
    low(0x28, 24u << 20); low(0xCC, 0); low(0xF0, 24u << 20);
    low(0xF8, 162000000); low(0xFC, 486000000);
    log("disc: retail NTSC 1.02, %zu filesystem entries, %llu bytes", files.size(), (unsigned long long)disc_size);
@@ -80,7 +92,7 @@
    return true;
  }
  
-@@ -356,6 +414,7 @@
+@@ -363,6 +426,7 @@
  
  void h_log(const char* text) {
    if (!text) return;
@@ -88,7 +100,7 @@
    const size_t n = std::strlen(text);
    if (n && text[n-1] == '\n') log("[game] %.*s", int(n-1), text);
    else log("[game] %s", text);
-@@ -414,6 +473,7 @@
+@@ -421,6 +485,7 @@
      }
      log("script: released, controllers live");
    }
@@ -96,7 +108,7 @@
    std::memset(out, 0, sizeof(MuPadStatus) * 4);
  #ifdef MELEE_LINUX_USB
    MuPadStatus usb_pads[4]{};
-@@ -485,6 +545,7 @@
+@@ -492,6 +557,7 @@
    }
  }
  void h_pad_rumble(int32_t port, int32_t on) {
@@ -104,7 +116,7 @@
  #ifdef MELEE_LINUX_USB
    linux_gc::rumble(port,on!=0);
  #endif
-@@ -866,9 +927,17 @@
+@@ -873,9 +939,17 @@
    input_script.mark_match_start(count.retraces);
    log("match: rules and players finalized at retrace %u", count.retraces);
  }
@@ -125,7 +137,7 @@
  #ifdef MELEE_LINUX_GRAPHICS
  int32_t h_pose_enabled() { return gx::native_pose_capture_enabled() ? 1 : 0; }
  void h_pose_snapshot(const MuNativePoseSnapshot* snapshot) { if (snapshot) gx::native_pose_snapshot(snapshot); }
-@@ -877,8 +946,12 @@
+@@ -884,8 +958,12 @@
  }
  int32_t h_draw_identity() { return 1; }
  #endif
@@ -139,7 +151,7 @@
    return -1;
  }
  void h_resim(int32_t entering) { resimulating = entering != 0; }
-@@ -917,9 +990,11 @@
+@@ -924,9 +1002,11 @@
    h.reset_code=h_zero_i32; h.reset_switch=h_zero_i32; h.stop=h_stop;
    h.match_override=h_match; h.rng_seed_override=h_rng; h.mark_match_start=h_match_start;
    h.native_pose_capture_enabled=h_zero_i32; h.native_owner_tracking=h_zero_i32;
@@ -154,7 +166,7 @@
    h.hud_scales=h_hud_scales; h.vi_idle_step=h_vi_idle;
  #ifdef MELEE_LINUX_GRAPHICS
    h.native_pose_capture_enabled=h_pose_enabled;
-@@ -944,6 +1019,7 @@
+@@ -951,6 +1031,7 @@
  }
  void ax_output(const int16_t* rl, uint32_t frames) {
    ++count.audio_blocks;
@@ -162,7 +174,7 @@
  #ifdef MELEE_LINUX_SDL
    if (!audio_device || !rl || !frames) return;
    std::vector<int16_t> lr(size_t(frames) * 2);
-@@ -1002,7 +1078,10 @@
+@@ -1009,7 +1090,10 @@
  
  void log(const char* format, ...) { va_list args; va_start(args, format); write_log(format, args); va_end(args); }
  void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink=fifo; retrace_sink=retrace; video_user=user; }
@@ -174,7 +186,7 @@
  bool reserve_memory(std::string* error) {
    if (memory_reserved) return true;
  #ifdef MU_FOREIGN_ELF
-@@ -1314,6 +1393,7 @@
+@@ -1323,6 +1407,7 @@
  void log(const char* format, ...) {
    char line[4096];
    va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);

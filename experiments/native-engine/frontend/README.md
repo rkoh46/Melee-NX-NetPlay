@@ -61,16 +61,24 @@ frontend) and `build/switch-aurora/_deps` (the sources Aurora fetched when the a
 downloaded here. Everything is written to `build/native-engine-gfx/`; `build/native-engine/` is only read.
 
 ```sh
-./build.sh sync     # melee-unlocked exported from the fetched clone, the runner and ../patches of commit ae1612e, patches applied
-./build.sh null     # out/mu-native-gfx-null
-./build.sh nro      # out/mu-native-gfx.nro
+./build.sh sync     # melee-unlocked exported from the fetched clone, the runner and ../patches (see below), patches applied
+./build.sh null     # out/mu-native-gfx-null and out/mu-native-gfx-null-services
+./build.sh nro      # out/mu-native-gfx.nro and out/mu-native-gfx-services.nro
 # test build with a picture:
 ./build.sh image && ./build.sh deps && ./build.sh linux    # out/mu-native-gfx-linux
 ```
 
-`./build.sh sync` takes the runner and `../patches` from commit `8428269` (the netplay host as its own module),
-and from `build/native-engine/` the game image, its snapshot exclusion list and the netplay objects `../build.sh`
-made. `MU_SYNC_REF=HEAD` or `=worktree` tries a newer runner. It prints what it took and keeps the line in `build/native-engine-gfx/sync-state.txt`.
+`./build.sh sync` takes the runner and `../patches` from the working tree (`MU_SYNC_REF=<commit>` takes them from a
+commit; play mode needs the runner's `--net-delay auto`, which is newer than `1c556fc`), and from `build/native-engine/`
+the game image, its snapshot exclusion list and the netplay objects `../build.sh` made. It prints what it took and keeps
+the line in `build/native-engine-gfx/sync-state.txt`.
+
+**Two programs.** Each variant is linked twice from the same objects: `mu-native-gfx` with the netplay object that
+has no services (local peers only), and `mu-native-gfx-services` with the services object (the app's matchmaking
+client, user file, reporting and HTTP; curl and mbedTLS on the console). The console's services object is made by
+`MU_NET_SERVICES=1 ../build.sh nro` (pinned to the service address in `tools/slippi_pin.json`); without it only the
+first NRO is built. The Linux services object is made by this script from the synced runner and is pinned to
+`ws://127.0.0.1:8765`, the loopback stand-in `../tools/mock_matchmaking.py`: a Linux build cannot reach a real service.
 
 ## Run
 
@@ -199,9 +207,11 @@ the game runs as upstream runs it: its built-in code set on (UCF and the rest), 
 | `music` | 0..100 | |
 | `lowpoly`, `fodreflections`, `cssbackgroundfree`, `training_hud`, `arcade_camera_2d`, `audio_early_keyon` | | passed through, not looked at |
 | `vanilla` | 0 / 1 | ours: the retail game without the built-in code set; the CPU, 20XX and Stadium options are then not given, as upstream's vanilla session does |
+| `onlinedelayauto` | 1 / 0 | online input delay from the round trip (2..5 frames); default 1 |
+| `onlinedelay` | 1..9 | frames, with `onlinedelayauto 0` |
 
 What upstream sends only outside network play (the offline community codes, the hitboxes, the 2D camera, faster
-sound effects, the CPU options) is sent here because play mode has no network session, replay or tournament.
+sound effects, the CPU options) is sent here offline and cleared online (see Netplay below).
 Left for later, because they need more than a word: the Training Lab bits, shield colours, True 16:9 (a renderer
 feature), hiding the scenery behind the grid and the Arcade look's plain backdrop and combo counter (renderer and
 overlay), the input display and frame-data overlay, m-ex discs, Training Mode CE, Akaneia, rogueMelee and Melee
@@ -228,8 +238,8 @@ the console `<out>` is `sdmc:/switch/mu-native`.
 - A profile has its own memory card folder, `<out>/card-NAME`.
 - What the game changes from its own menus (TE's settings, the pack's choices) is written to `settings.ini.state`
   and read back at the next start.
-- An online mode that plays the retail game gets the retail files back (command 0xF5), as upstream. Netplay in this
-  program does not read settings.ini or profiles at all (below).
+- An online mode that plays the retail game gets the retail files back (command 0xF5), as upstream. A session that
+  can go online (the services program with the Slippi menus and a user file, or `--net`/`--online`) loads no profile.
 
 `slippi_menus 1` serves Slippi 3.7.0's menu files (ten of the disc's files with Slippi's patch applied, plus
 `GameSetup_gui.dat` and `SlippiCSS_gui.dat` with their links into the disc resolved) and sets the game's
@@ -237,13 +247,60 @@ Slippi-menus bit: the game then starts on its Online Play page. Nothing is sent 
 
 ### Netplay
 
-`--play --net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT` (and the runner's other netplay options: `--net-delay`,
-`--track-remap`, `--net-inputs`, `--online ...` in a services build) runs the netplay host of `../runner/net_host.*`
-under play mode: picture, the app's controller input and sound, with the engine's own online code and this
-repository's Slippi netplay. The pads are play mode's unless `--net-inputs` is given. Such a run plays the retail
-game with the runner's seed and clock and reads neither settings.ini nor a mod profile; the host paces it. On the
-console the stream is then decoded inside the game's flush (as `--gfx-sync`), because the rollback snapshots remap
-pages of the game's memory that the decoder thread would be reading.
+`--play --net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT` (and the runner's other netplay options: `--net-retry`,
+`--net-delay FRAMES|auto`, `--track-remap`, `--net-inputs`, `--online ...` in the services program) runs the netplay
+host of `../runner/net_host.*` under play mode: picture, the app's controller input and sound, with the engine's own
+online code and this repository's Slippi netplay. With `--net` the match is played by the game's generated test
+inputs (seed `--net-inputs`, default player index + 1, as the headless runner), not by the controllers; with `--online`
+or a search from the menu the controllers play unless `--net-inputs` is given. Such a run
+("direct": straight into a match, as the headless runner does) plays the retail game with the runner's seed and clock,
+reads no mod profile and of settings.ini only the input delay; the host paces it. Its option words are the host's own,
+the same the headless runner gives (`options 00000004`, the rest 0), so it can play against the headless runner.
+
+**Online from the game's menus** (services program, `slippi_menus 1`, a user file): the game opens on its Online Play
+page with Slippi's rows (Unranked, Direct, Teams, Party; this game build offers no Ranked row, and a Ranked request is
+refused by the netplay host with "Ranked is not available in this build. Play Unranked, Direct or Teams." as the
+search error). Picking a row and starting the search on Slippi's character select sends the game's own find-match
+command (0xB4) through the netplay host, exactly the path `--online` takes; nothing is asked for at boot. The user
+file is `sdmc:/switch/melee-nx-netplay/User/user.json` (the app's sign-in) unless `--user-dir DIR` names another
+folder; without it the page shows Log-in and the log says why. No mod profile is loaded in such a session. When the
+match's scene ends the rollback store stops tracking; the next match starts it again. Log lines: `play: online at
+retrace N (scene 8/0): the option words are now the online ones`, `play: online: the game asked for a match: mode 1
+(Unranked), from its menu`, the netplay client's `[net] slippi: matchmaking ...`, `opponent found`, `online connection
+successful`, then `play: match N starts ... the words the game last read: ...`.
+
+**Option words online** (settings.cpp): while the game is in Slippi's online flow (major scene 8) or a search or match
+is on, the words follow upstream's network-session rules whatever settings.ini says: 20XX TE and Hack Pack bits, word 2
+(20XX CPUs, frozen Stadium) and word 3 (CPU options, locked content, results screen) are 0; the offline community codes,
+the Arcade hitboxes and 2D camera, Boot to CSS and faster sound effects are cleared; the viewer's own display choices
+(widescreen, PAL stock icons, language, HUD codes, no shadows, the grid) and muted voices stay, as upstream keeps them.
+Upstream sends words 2 and 3 and lets the game ignore them online; here they are not sent. The game itself forces
+Slippi's code set in an online match (`mu_general_codes`).
+
+**Input delay**: `onlinedelayauto 1` (default, as the app) lets the netplay object pick 2 to 5 frames from the round
+trip at each game's start (`[net] slippi: automatic input delay N frames ...`); `onlinedelayauto 0` with `onlinedelay
+1..9` fixes it. `--net-delay FRAMES|auto` overrides the file.
+
+**Decoder thread under netplay.** The decoder keeps its own thread. Before every state save or load (0xB1, 0xB2, and
+the self-test's 0xF0, 0xF1) the simulation thread waits until the decoder has read everything handed to it, because
+the snapshot store copies, and on the console with `--track-remap` unmaps and maps again, pages the decoder may be
+reading. At the start of a frame the retrace has already waited, so this costs nearly nothing. The engine draws
+nothing while it re-simulates (measured: 0 stream bytes from repeated frames), so a rollback produces no extra frame:
+the frame drawn after it shows the corrected state, and the renderer still shows only the newest finished frame.
+`--gfx-sync-net` decodes inside the game's flush instead (the earlier way, for comparison).
+
+**No log writing from the game's threads while it runs** (`src/log_queue.cpp`): in play mode every line (the
+frontend's, the host services' including the game's own `[game]` lines, the netplay host's, and the netplay object's
+`fprintf(stderr)` through `-Wl,--wrap=fprintf`) is copied into a buffer and a writer thread prints it to the console
+(nxlink) ten times a second and to `picture.log` only between matches. `--log-direct` writes where the line is made
+(the earlier way). The end of the run has `log: N lines went through the log thread ...`, the netplay host's `net: slow
+frame ...` lines and the frontend's own itemisation, `picture: match frames with 8 ms or more of simulation-thread
+work ...` and `picture: slow frame N: ...` (stream hand-over, controllers, state saves and loads, the decoder wait
+before them, the netplay device, log lines queued, disc reads, stream bytes from repeated frames).
+
+**Process layout**: play mode makes the runner's `fixedmap_startup` check first thing in `main` (the runner's own call
+is answered with that result), prints the layout line, restarts the title with `--relaunch` as the runner does, and
+ends with `play: cannot start: ...` otherwise.
 
 ## Verified
 
@@ -288,6 +345,20 @@ Mods, Slippi menus and netplay on Linux (runner and patches of commit `8428269`,
 | Cost of options (`--profile`, match frames, unpaced): default 0.504 ms; widescreen 0.504; hitboxes 0.521; 20XX CPUs 0.540; HUD options 0.513; all of the console test's 0.543 | the options are not what makes a play-mode match frame cost more than the scripted run's (0.38 ms here): that is the match itself (two fighters fighting, one of them a CPU, against two that stand still) and upstream's built-in code set |
 | Scripted mode after these changes | digest identical, with and without a picture |
 
+Online play mode on Linux (runner and patches from the working tree after `1c556fc`, with `--net-delay auto`; game image
+`6be32fe9...`), all in one container with no network:
+
+| Check | Result |
+|---|---|
+| `test-online-linux.sh`: two `mu-native-gfx-linux-services` instances, `slippi_menus 1`, made-up users, each driven by a controller script through the game's menus (Online Play > Unranked, Falco / Fox, START), the loopback stand-in for matchmaking | the Online Play page shows Unranked, Direct, Teams, Party (screenshot); both send 0xB4 mode 1 from the menu; the stand-in matches them; they connect and play a match to its end and return to Slippi's character select; every shown state of the match scene identical on both sides, `net check` lines equal, 0 desync messages; automatic delay chose 2 frames |
+| Same, side a with 18 settings lines (widescreen, PAL icons, HUD fade, no shadows, free pause camera, Arcade hitboxes and camera, grid, 20XX CPUs, CPU options, frozen Stadium, faster sound effects, muted voices, TE bits, fixed delay 3) | offline words `1000000A 01800000 40001003`, display `01801360`, audio 3; at match start online `1000000A 00000000 00000000`, display `01001100`, audio 2 (offline codes, hitboxes, 2D camera, words 2 and 3, faster sound effects cleared; widescreen, PAL icons, HUD codes, grid, muted voices kept); side b `00000008`, the rest 0; the match stays identical on both sides with different display words; delay 3 against automatic 2 |
+| Words of a direct run (`--net`, what the headless runner gives) | `options 00000004`, everything else 0 |
+| `test-net-linux.sh` with 60 ms delay and 40 ms jitter, decoder thread | 316 and 230 rollbacks (up to 7 frames deep), 2057 and 1638 decoder catch-ups before a save or load costing 0.3 ms in all, 0 stream bytes from repeated frames; `net check` equal, final state identical; simulation thread 0.70 ms per match frame plus 0.30 ms waiting for the decoder at the retrace; rollback frames 0.96 ms |
+| Same with `--gfx-sync-net` (the earlier way) | 272 and 216 rollbacks, `net check` equal; simulation thread 1.47 ms per match frame (0.78 of it decoding) |
+| Both runs: 6 to 7 shown states differ near match frame 30, right after the first pipeline compile stalled the picture for 0.7 s | the same in both decoding modes and the `net check` lines are equal, so these are predictions the confirmed-state bookkeeping did not mark (a 7-frame rollback after the stall), not a difference of the game state |
+| Logs | 238 to 259 lines per online run went through the log thread, none dropped, nothing written to the file during the match; the netplay host measures 0.000 ms of log writing per frame |
+| `test-net-linux.sh` without delay, scripted `parity_vs_onett` with a picture (9000 retraces) after all of this | final state identical; digest IDENTICAL |
+
 Not looked at: the Hack Pack's debug menu, hidden characters, playlists and stage variants beyond the first pick;
 TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
 holds beyond what is listed.
@@ -317,6 +388,12 @@ why is not known. The same costume's portrait on the character select screen is 
 
 ## Not verified
 
+- On the console: the services NRO at all (curl and mbedTLS linked with the Clang-built picture code, the real
+  matchmaking service, STUN, the app's user file from `sdmc:/switch/melee-nx-netplay/User`), a search from the game's
+  menu, automatic input delay against a real round trip, the decoder thread beside the rollback store's remapping, and
+  whether queuing the log removes the 21 ms frames. Play mode's handling of a bad process layout (it mirrors the runner).
+- A Ranked request from the game's menu: this game build offers no Ranked row, so the refusal was only seen in the
+  headless runner (`--online ranked`).
 - On the console: mod profiles (the disc comparison from the SD card, reading mod files during play), the Hack Pack,
   20XX TE and its settings screen (lines and points on NVK), Slippi's menu files, netplay in play mode (the netplay
   object linked with Clang-built code, sockets, write tracking beside the renderer), the GameCube adapter and
@@ -343,8 +420,9 @@ why is not known. The same costume's portrait on the character select screen is 
 - A decoder or renderer error stops the picture, not the run: `picture: DECODER STOPPED` or `RENDERER STOPPED`
   with the reason, and the simulation finishes as the headless runner would.
 - Still written while a match runs, by code outside this folder: in scripted mode the runner's progress line every
-  600 retraces (to nxlink and `run.log` on the SD card, from the simulation thread); in both modes the game's own
-  messages (`host.log`) and the SQLite statistics lines of the app's Switch layer (to nxlink, from Aurora's threads).
+  600 retraces (to nxlink and `run.log` on the SD card, from the simulation thread) and the game's own messages; in
+  both modes the SQLite statistics lines of the app's Switch layer (to nxlink, from Aurora's threads). Play mode queues
+  everything else (Netplay, above).
 - Nobody services the applet message loop while the game runs (as in the headless runner).
 - A first session compiles pipelines as they are first drawn and stutters; they are cached per device. The app is
   in the same position: this repository ships no pipeline seed, and the app's cache lives in its own folder

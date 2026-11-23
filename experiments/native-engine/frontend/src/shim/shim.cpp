@@ -30,11 +30,20 @@ uint8_t* ptr(uint32_t addr, uint32_t bytes) {
   if (!p) die("GX address outside game memory: %08X+%X", addr, bytes);
   return p;
 }
-uint8_t rd8(uint32_t addr) { return *ptr(addr, 1); }
 void native_scene(uint8_t* major, uint8_t* minor) {
   MuStatePod state{};
   if (!linux_host::state_snapshot(&state)) { *major = 0; *minor = 0; return; }
   *major = uint8_t(state.scene_major); *minor = uint8_t(state.scene);
+}
+// The app's controller scripts read the retail game's scene bytes (major 0x80479D30, minor 0x80479D33) for their
+// "@scene MAJOR MINOR" blocks. The source-built game keeps its scene elsewhere: those two are answered from its state.
+uint8_t rd8(uint32_t addr) {
+  if (addr == 0x80479D30u || addr == 0x80479D33u) {
+    uint8_t major = 0, minor = 0;
+    native_scene(&major, &minor);
+    return addr == 0x80479D30u ? major : minor;
+  }
+  return *ptr(addr, 1);
 }
 uint64_t now_ns() {
 #ifdef __SWITCH__

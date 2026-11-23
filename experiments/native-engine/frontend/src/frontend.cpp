@@ -59,8 +59,12 @@ namespace aurora::window { void set_frame_buffer_aspect(float aspect); }   // au
 extern "C" void switch_set_pthread_cores(int preferred, uint64_t mask);   // switch/src/switch_threads.c
 #endif
 
+namespace linux_host { uint64_t slept_nanoseconds(); }   // ../runner/mu_elf_bridge.h: the host's own 60 Hz waits so far
+
 namespace fe {
 Options options;
+uint64_t sim_cost[3] = {};
+bool in_resim = false;
 
 namespace {
 FILE* log_file = nullptr;
@@ -69,12 +73,30 @@ inline uint64_t now_ns() { return host::now_ns(); }
 inline double ms(uint64_t ns) { return double(ns) * 1e-6; }
 }  // namespace
 
+// Whole lines to the console (stdout: nxlink on the console) and to <out>/picture.log.
+void log_write(const char* text, size_t size, bool to_console, bool to_file) {
+  std::lock_guard<std::mutex> lock(log_mutex);
+  if (to_console) { std::fwrite(text, 1, size, stdout); std::fflush(stdout); }
+  if (to_file && log_file) { std::fwrite(text, 1, size, log_file); std::fflush(log_file); }
+}
+void log_open() {
+  std::lock_guard<std::mutex> lock(log_mutex);
+  if (log_file) return;
+  mkdir(options.out_dir.c_str(), 0777);
+  log_file = std::fopen((options.out_dir + "/picture.log").c_str(), "a");
+  if (log_file) std::setvbuf(log_file, nullptr, _IOFBF, 1u << 16);
+}
+void log_close() {
+  std::lock_guard<std::mutex> lock(log_mutex);
+  if (log_file) { std::fclose(log_file); log_file = nullptr; }
+}
 void say(const char* format, ...) {
   char line[2048];
-  va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
-  std::lock_guard<std::mutex> lock(log_mutex);
-  std::printf("%s\n", line); std::fflush(stdout);
-  if (log_file) { std::fprintf(log_file, "%s\n", line); std::fflush(log_file); }
+  va_list args; va_start(args, format); const int n = std::vsnprintf(line, sizeof line - 1, format, args); va_end(args);
+  if (log_queue_push(line)) return;        // play mode, while the game runs: written by the log thread (log_queue.cpp)
+  size_t length = n < 0 ? 0 : std::min<size_t>(size_t(n), sizeof line - 2);
+  line[length++] = '\n';
+  log_write(line, length, true, true);
 }
 
 namespace {
@@ -181,6 +203,11 @@ struct State {
   uint64_t last_decode = 0, last_snapshot = 0, last_record = 0, last_handoff = 0;
   hostprof::Sample prof_first{}, prof_last{}; uint64_t prof_frames = 0;   // --profile: totals at the first and the last match frame
   uint64_t prev_pad_ns = 0;      // the controller read that the frame now being simulated uses
+  // What was inside each match frame's work, to explain the slow ones (all on the simulation thread).
+  struct FrameCost { uint32_t retrace; float work, feed, wait, pad, store, sync, command; uint32_t lines, disc_reads, resim_bytes; };
+  std::vector<FrameCost> costs;
+  uint64_t last_slept = 0, last_cost[3] = {}, last_lines = 0, last_disc = 0;
+  uint64_t resim_fifo_bytes = 0, resim_fifo_frame = 0, sync_calls = 0;
   Series work_match, work_all, feed_match, wait_match, wait_all, decode_match, snapshot_match, record_match, handoff_match, pad_match, decode_all, padcost_all, padcost_match;
 #ifdef __SWITCH__
   s32 sim_priority_before = 0x2C;
@@ -198,6 +225,7 @@ void decoder_stopped(const char* reason) {
 // The game calls this from its pipe flush (C code without unwind tables): nothing may be thrown through it.
 void fifo_sink(const uint8_t* data, uint32_t size, void*) {
   if (st.decoder_failed) return;
+  if (in_resim) { st.resim_fifo_bytes += size; st.resim_fifo_frame += size; }
   const uint64_t t0 = now_ns();
   try {
     if (st.threaded) {
@@ -244,8 +272,10 @@ void retrace_sink(void*) {
   st.last_match_frame = state.match_frame;
   const uint64_t decode = host::sim_cost_ns(host::SIM_DECODE), snapshot = host::sim_cost_ns(host::SIM_SNAPSHOT), record = host::sim_cost_ns(host::SIM_RECORD);
   const uint64_t handoff = st.queue ? st.queue->handoff_ns.load(std::memory_order_relaxed) : 0;
+  // With netplay the host paces (its waits lie inside the frame, before this function): not work.
+  const uint64_t slept = linux_host::slept_nanoseconds(), lines = log_queue_lines(), disc = linux_host::counters().disc_reads;
   if (st.have_resumed) {
-    const double work = ms(entered - st.resumed);
+    const double work = ms(entered - st.resumed) - ms(slept - st.last_slept);
     st.work_all.add(work); st.wait_all.add(ms(waited)); st.decode_all.add(ms(decode - st.last_decode)); st.padcost_all.add(pad_ms);
     if (vs_match) {
       st.work_match.add(work); st.feed_match.add(ms(st.feed_ns_frame)); st.wait_match.add(ms(waited)); st.padcost_match.add(pad_ms);
@@ -254,8 +284,13 @@ void retrace_sink(void*) {
       // The game samples the controllers in its retrace handler, just before this function runs; the frame
       // simulated from that sample is the one decoded by the next retrace.
       if (st.prev_pad_ns) st.pad_match.add(ms(entered + waited - st.prev_pad_ns));
+      st.costs.push_back({linux_host::counters().retraces, float(work), float(ms(st.feed_ns_frame)), float(ms(waited)), float(pad_ms),
+                          float(ms(sim_cost[0] - st.last_cost[0])), float(ms(sim_cost[1] - st.last_cost[1])), float(ms(sim_cost[2] - st.last_cost[2])),
+                          uint32_t(lines - st.last_lines), uint32_t(disc - st.last_disc), uint32_t(st.resim_fifo_frame)});
     }
   }
+  st.last_slept = slept; st.last_lines = lines; st.last_disc = disc; st.resim_fifo_frame = 0;
+  for (int i = 0; i < 3; ++i) st.last_cost[i] = sim_cost[i];
   st.prev_pad_ns = io_last_pad_ns();
   st.last_decode = decode; st.last_snapshot = snapshot; st.last_record = record; st.last_handoff = handoff;
   st.feed_ns_frame = 0;
@@ -434,7 +469,7 @@ void* render_main(void*) {
 
 void attach() {
   if (!options.picture || st.attached) return;
-  if (!log_file) { mkdir(options.out_dir.c_str(), 0777); log_file = std::fopen((options.out_dir + "/picture.log").c_str(), "a"); }
+  log_open();
   texture_dump.init();
   st.threaded = !options.sync_decode;
   say("---- picture frontend: %s, %s, %s ----", options.pace ? "simulation paced to 60 Hz" : "simulation unpaced (the picture shows the newest frame)",
@@ -530,6 +565,34 @@ void detach() {
   r.total_match.report("picture: render thread: all work on a frame");
   r.convert_match.report("picture: render thread:   of that, converting the frame and feeding Aurora");
   r.end_frame_match.report("picture: render thread:   of that, aurora_end_frame (waits for Aurora's FIFO and render workers; they present)");
+  if (!st.costs.empty()) {
+    // The slowest match frames and what was inside them. Work is the simulation thread's time from one retrace to
+    // the next without the 60 Hz wait: the game, the stream hand-over, the mixer, and with netplay the state saves
+    // and loads, every repeated frame of a rollback and the netplay device.
+    size_t over8 = 0, over16 = 0, with_store = 0, with_sync = 0, with_command = 0, with_disc = 0, with_lines = 0, with_pad = 0, none = 0;
+    for (const auto& f : st.costs) {
+      if (f.work < 8) continue;
+      ++over8; if (f.work > 1000.0f / 60) ++over16;
+      const bool a = f.store >= 1, b = f.sync >= 1, c = f.command >= 1, d = f.disc_reads != 0, e = f.lines >= 20, g = f.pad >= 1;
+      with_store += a; with_sync += b; with_command += c; with_disc += d; with_lines += e; with_pad += g; none += !(a || b || c || d || e || g);
+    }
+    say("picture: match frames with 8 ms or more of simulation-thread work: %zu of %zu (%zu over 16.67 ms); of those, with 1 ms or more in rollback state saves and loads %zu, "
+        "waiting for the decoder before them %zu, in the netplay device %zu, reading controllers %zu, with a disc read %zu, with 20 or more log lines queued %zu, none of these %zu",
+        over8, st.costs.size(), over16, with_store, with_sync, with_command, with_pad, with_disc, with_lines, none);
+    std::vector<size_t> order(st.costs.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    const size_t top = std::min<size_t>(10, order.size());
+    std::partial_sort(order.begin(), order.begin() + top, order.end(), [&](size_t x, size_t y) { return st.costs[x].work > st.costs[y].work; });
+    for (size_t i = 0; i < top; ++i) {
+      const auto& f = st.costs[order[i]];
+      say("picture: slow frame %zu: %.3f ms at retrace %u (%zu frames into the fighting): stream hand-over %.3f, controllers %.3f, state saves and loads %.3f, decoder wait before them %.3f, "
+          "netplay device %.3f ms; %u log lines queued, %u disc reads, %u stream bytes from repeated frames; then %.3f ms waiting for the decoder at the retrace",
+          i + 1, f.work, f.retrace, order[i], f.feed, f.pad, f.store, f.sync, f.command, f.lines, f.disc_reads, f.resim_bytes, f.wait);
+    }
+  }
+  if (sim_cost[0] || st.sync_calls)
+    say("picture: netplay: the decoder was brought up to date %llu times before a state save or load (%.1f ms in all); %llu stream bytes arrived from repeated frames of rollbacks",
+        (unsigned long long)st.sync_calls, ms(sim_cost[1]), (unsigned long long)st.resim_fifo_bytes);
   if (!st.pad_match.values.empty()) {
     st.pad_match.report("picture: controllers read -> the frame simulated from them decoded (one 60 Hz period when paced, plus the decoder wait)");
     say("picture: input to picture is the three lines \"controllers read -> decoded\", \"waited in the queue\" and \"render thread: all work\" added up, "
@@ -557,13 +620,23 @@ void detach() {
   r.total.report("picture: render thread: all work on a frame");
   st.queue.reset();
   say("---- picture frontend done ----");
-  if (log_file) { std::fclose(log_file); log_file = nullptr; }
+  if (!options.play) log_close();          // play mode has more to say (play_main.cpp closes it)
 }
 }  // namespace
 }  // namespace fe
 
 // Weak hook called by the host services (patches/0101-host-frontend-hooks.patch): 1 after the host is
 // initialized and before the game runs, 0 after the run and before the game is unmapped. Simulation thread.
+namespace fe {
+// The rollback store copies and (on the console) remaps pages of game memory: the decoder thread must not be
+// reading them. Called on the simulation thread before every state save and load.
+void decoder_sync() {
+  if (!st.attached || !st.threaded || st.decoder_failed) return;
+  ++st.sync_calls;
+  try { gx::gpu_sync_all(); } catch (...) {}
+}
+}  // namespace fe
+
 extern "C" void mu_frontend_attach(int on) {
   if (on) { fe::attach(); fe::io_start(fe::st.attached); }
   else { fe::io_stop(); fe::detach(); }

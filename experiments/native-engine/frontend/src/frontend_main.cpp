@@ -3,7 +3,9 @@
 // arguments out of the command line and hands the rest to it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
+#include "fixedmap.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,7 +24,17 @@ void __wrap_consoleExit(PrintConsole*) {}
 
 int mu_runner_main(int argc, char** argv);
 
+// The runner's own check of the process layout (its main calls fixedmap_startup first). It has been made
+// already, at the top of main below, with the whole command line: that is what a restart must bring back.
+static int layout_result = 0;
+extern "C" int mu_runner_fixedmap_startup(int*, char***, const uintptr_t*, int) { return layout_result; }
+
 int main(int argc, char** argv) {
+  // Before any thread exists: can this process hold main memory with the game image behind it, and the locked
+  // cache? (../runner/fixedmap.h, "the process layout".) After a restart this brings back the first launch's arguments.
+  static const uintptr_t fixed_ranges[] = {0x80000000u, 0x04000000u, 0xE0000000u, 0x00100000u};
+  layout_result = fixedmap_startup(&argc, &argv, fixed_ranges, 2);
+  fe::options.layout = layout_result;
 #ifdef __SWITCH__
   fe::options.out_dir = "sdmc:/switch/mu-native";
 #else
@@ -51,6 +63,8 @@ int main(int argc, char** argv) {
     else if (arg == "--play-script" && i + 1 < argc) fe::options.play_script = argv[++i];
     else if (arg == "--warm-all") fe::options.warm_all = true;
     else if (arg == "--window" && i + 1 < argc) { std::sscanf(argv[++i], "%dx%d", &fe::options.width, &fe::options.height); }
+    else if (arg == "--gfx-sync-net") fe::options.sync_net = true;
+    else if (arg == "--log-direct") fe::options.log_direct = true;
     else {
       if (arg == "--out" && i + 1 < argc) fe::options.out_dir = argv[i + 1];
       if (arg == "--no-overclock") fe::options.overclock = false;
