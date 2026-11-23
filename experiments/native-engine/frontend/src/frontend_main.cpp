@@ -42,6 +42,8 @@ int main(int argc, char** argv) {
     else if (arg == "--play") fe::options.play = true;
     else if (arg == "--fresh-card") fe::options.fresh_card = true;
     else if (arg == "--auto-vs") fe::options.auto_vs = true;
+    else if (arg == "--auto-vs-menus") fe::options.auto_vs = fe::options.auto_menus = true;
+    else if (arg == "--settings" && i + 1 < argc) fe::options.settings = argv[++i];
     else if (arg == "--cache-dir" && i + 1 < argc) fe::options.cache_dir = argv[++i];
     else if (arg == "--volume" && i + 1 < argc) fe::options.volume = std::atoi(argv[++i]);
     else if (arg == "--wav" && i + 1 < argc) fe::options.wav = argv[++i];

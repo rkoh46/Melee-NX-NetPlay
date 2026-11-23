@@ -29,7 +29,9 @@ sync_tree() {
   [ -d "$src/mu/.git" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
   [ -f "$src/out/melee_game.so" ] || { echo "run ../build.sh game first" >&2; exit 1; }
   mkdir -p "$work" "$out" "$gen" "$work/mu" "$work/runner"
-  local ref="${MU_SYNC_REF:-HEAD}" stage="$work/sync-stage"
+  # The runner this frontend was last brought up against. The runner has since grown a netplay bridge (ENet,
+  # more embedded files) that this build does not link yet: MU_SYNC_REF=HEAD or =worktree to try a newer one.
+  local ref="${MU_SYNC_REF:-ae1612e}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then

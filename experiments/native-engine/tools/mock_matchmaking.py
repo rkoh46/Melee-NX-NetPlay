@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""A stand-in for the matchmaking service, for tests on the loopback interface only.
+
+Speaks just enough of the service's WebSocket protocol (as port/runtime/hle/slippi_matchmaking_ws.cpp
+and tools/test_matchmaking_ws.cpp describe it) to pair the first two clients that join: each gets
+"joined", then a "match" naming both players at 127.0.0.1 and the UDP port each one reported.
+No TLS, no accounts, nothing leaves the machine. Point a services build at it with the app's own
+override:  SLIPPI_MM_URL=ws://127.0.0.1:PORT
+
+usage: mock_matchmaking.py [PORT]   (default 8765)"""
+# SPDX-License-Identifier: GPL-3.0-or-later
+import base64, hashlib, json, socket, struct, sys
+
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(('127.0.0.1', port)); server.listen(4)
+
+def read_exact(conn, n):
+    data = b''
+    while len(data) < n:
+        chunk = conn.recv(n - len(data))
+        if not chunk: raise ConnectionError('closed')
+        data += chunk
+    return data
+
+def handshake(conn):
+    request = b''
+    while b'\r\n\r\n' not in request: request += conn.recv(4096)
+    key = [l.split(b':', 1)[1].strip() for l in request.split(b'\r\n') if l.lower().startswith(b'sec-websocket-key')][0]
+    accept = base64.b64encode(hashlib.sha1(key + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
+    conn.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
+
+def read_text(conn):
+    text = b''
+    while True:
+        head = read_exact(conn, 2)
+        opcode, length = head[0] & 0x0f, head[1] & 0x7f
+        if length == 126: length = struct.unpack('>H', read_exact(conn, 2))[0]
+        elif length == 127: length = struct.unpack('>Q', read_exact(conn, 8))[0]
+        mask = read_exact(conn, 4) if head[1] & 0x80 else b'\0\0\0\0'
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(read_exact(conn, length)))
+        if opcode == 0x9: send(conn, payload, 0xA); continue          # ping -> pong
+        if opcode == 0x8: raise ConnectionError('client closed')
+        if opcode in (0x1, 0x0): text += payload
+        if head[0] & 0x80 and opcode in (0x1, 0x0): return text.decode()
+
+def send(conn, payload, opcode=0x1):
+    if isinstance(payload, str): payload = payload.encode()
+    head = bytes([0x80 | opcode]) + (bytes([len(payload)]) if len(payload) < 126 else b'\x7e' + struct.pack('>H', len(payload)))
+    conn.sendall(head + payload)
+
+clients = []
+while len(clients) < 2:
+    conn, _ = server.accept()
+    handshake(conn)
+    join = json.loads(read_text(conn))
+    print('mock: join from %s mode %s port %s appVersion %s' % (join['user'].get('connectCode'), join['search'].get('mode'), join.get('port'), join.get('appVersion')), flush=True)
+    send(conn, json.dumps({'type': 'joined', 'ticketId': 't-%d' % len(clients), 'token': 'mock'}))
+    clients.append((conn, join))
+mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams'}.get(clients[0][1]['search'].get('mode'), 'unranked')
+for me, (conn, _) in enumerate(clients):
+    players = []
+    for k, (_, join) in enumerate(clients):
+        address = '127.0.0.1:%d' % join['port']
+        players.append({'uid': join['user']['uid'], 'displayName': join['user']['displayName'], 'connectCode': join['user']['connectCode'],
+                        'port': k + 1, 'isLocalPlayer': k == me, 'ipAddress': address, 'ipAddressLan': address})
+    send(conn, json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == 0, 'players': players,
+                           'stages': [2, 3, 8, 28, 31, 32]}))
+print('mock: matched two players in mode %s' % mode, flush=True)
+for conn, _ in clients:
+    try: read_text(conn)
+    except Exception: pass
+    conn.close()

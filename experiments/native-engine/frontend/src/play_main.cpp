@@ -37,7 +37,7 @@ void* play_thread(void* user) {
   config.max_frames = options.frames;                     // 0: until the player stops it
   config.pace = false;                                    // the frontend paces the retrace
   config.headless = true; config.no_gc_adapter = true;    // the host's own SDL2/libusb input is not built in
-  config.vanilla_game = true;
+  config.vanilla_game = settings_vanilla();               // by default melee-unlocked's game as its own hosts run it
   mkdir(config.card_dir.c_str(), 0777);
   if (options.fresh_card)
     if (DIR* dir = opendir(config.card_dir.c_str())) {
@@ -68,6 +68,9 @@ int play_main() {
   mkdir(options.out_dir.c_str(), 0777);
   say("---- mu-native-gfx --play (native engine, interactive) ----");
   if (options.iso.empty()) { say("play: --iso PATH is needed"); return 2; }
+  settings_boot_to_css(options.auto_vs && !options.auto_menus);
+  settings_load(options.settings.empty() ? options.out_dir + "/settings.ini" : options.settings);
+  if (settings_widescreen()) options.stretch = true;      // the 16:9 code draws for the whole screen
 #ifdef __SWITCH__
   // Clocks as the app sets them; the frontend adds GPU and memory when it attaches and restores those.
   const bool clock_service = switch_clocks_init();

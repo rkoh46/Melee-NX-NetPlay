@@ -42,10 +42,11 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/frontend.cpp`, `frontend.h` | FIFO sink, the wait for the decoder, 60 Hz pacing, frame queue and render thread, Aurora start-up, thread placement, per-part timing. |
 | `src/frontend_main.cpp` | `main`: takes the frontend's arguments out of the command line, then calls the runner or play mode. |
 | `src/play_main.cpp` | `--play`: starts the host without a script, a reference or a frame limit. |
-| `src/play_io.cpp` | Controllers and sound: connects the app's own `input_sdl.cpp`, `gc_adapter_usbhs.cpp` and `audio_sdl.cpp` (compiled unchanged) to the host's pad and mixer hooks; the way out (L + R + Start); keeps log lines in memory while the game runs. |
+| `src/play_io.cpp` | Controllers and sound: connects the app's own `input_sdl.cpp`, `gc_adapter_usbhs.cpp` and `audio_sdl.cpp` (compiled unchanged) to the host's pad and mixer hooks; `--auto-vs`; the way out (L + R + Start); keeps log lines in memory while the game runs. |
+| `src/settings.cpp` | Play mode's `settings.ini` and the option words the game asks its host for. |
 | `src/shim/` | The few host functions the decoder and the app's input and sound sources need, on melee-unlocked's host services. |
 | `src/switch_glue.cpp` | Two symbols the app's Switch layer expects. |
-| `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, five weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines. |
+| `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
 | `CMakeLists.txt`, `build.sh` | Three variants: `null` (Linux, no graphics device), `linux` (Aurora on Vulkan, test build), `switch` (NRO). |
 | `linux-gfx.Dockerfile`, `DawnLinux.cmake`, `test-linux.sh` | The off-console picture test: Xvfb and Mesa's software Vulkan driver. |
@@ -57,16 +58,16 @@ frontend) and `build/switch-aurora/_deps` (the sources Aurora fetched when the a
 downloaded here. Everything is written to `build/native-engine-gfx/`; `build/native-engine/` is only read.
 
 ```sh
-./build.sh sync     # melee-unlocked exported from the fetched clone, the runner and ../patches as committed, patches applied
+./build.sh sync     # melee-unlocked exported from the fetched clone, the runner and ../patches of commit ae1612e, patches applied
 ./build.sh null     # out/mu-native-gfx-null
 ./build.sh nro      # out/mu-native-gfx.nro
 # test build with a picture:
 ./build.sh image && ./build.sh deps && ./build.sh linux    # out/mu-native-gfx-linux
 ```
 
-Run `./build.sh sync` again after `../runner/` or `../patches/` change. It takes them from the last commit, not
-from the files on disk, so a half-finished edit there cannot break this build (`MU_SYNC_REF=worktree` takes the
-files on disk); it prints what it took and keeps the line in `build/native-engine-gfx/sync-state.txt`.
+`./build.sh sync` takes the runner and `../patches` from commit `ae1612e`, the last state this frontend links
+against: the runner has since grown a netplay bridge with its own libraries. `MU_SYNC_REF=HEAD` or `=worktree`
+tries a newer one. It prints what it took and keeps the line in `build/native-engine-gfx/sync-state.txt`.
 
 ## Run
 
@@ -147,36 +148,61 @@ half; the program then shuts the renderer and the sound down, prints its timing 
   retrace handler, as on the console.
 - **Sound**: the host's mixer runs on the simulation thread, as it must (it reads and writes the game's voice blocks
   and effect buffers, and the game reads them back). Each finished 5 ms block goes into the app's audio ring; SDL's
-  audio thread resamples it against the device clock and plays it. `--volume 0..100` (70 in play mode).
+  audio thread resamples it against the device clock and plays it. `--volume 0..100` (70 in play mode). The output
+  runs dry when the game stalls (a scene loading from the SD card: the first console session had one frame of
+  548 ms and 0.55 s of gaps in all, the app's own logs show the same kind). After such a gap this program puts the
+  40 ms cushion back at once instead of leaving the app's output code to rebuild it by playing 1.5% slow. Every
+  600 retraces it keeps the app's `audio: game made ... underruns ...` line, with the scene and what the last ten
+  seconds added; the lines are printed after the run.
 - **Pacing** is the app's retrace timing: a 16.667 ms grid on the steady clock, restarted after a stall of more
   than two frames. The display's vsync belongs to the render thread.
 - **Memory card**: `<out>/card-play/`, kept between sessions (`--fresh-card` empties it). The scripted runs keep
   using their own folder.
-- `--auto-vs` plays a built-in controller script from boot into a VS match (Ness against a computer player, Onett),
-  about 22 seconds; real controllers add to it on the console, so the player takes over when the match starts.
-  `--play-script FILE` takes a script in the app's format instead.
-- `--wav FILE` records what is played; `--audio-raw FILE` the mixer's blocks as it hands them over (any mode, also
-  `--headless`). `--cache-dir DIR` uses another folder for Aurora's pipeline cache.
+- `--auto-vs` walks from boot into a VS match (a fighter against a level 1 computer player, the stage under the
+  cursor) and then hands over to the controllers, which are not read before that. It goes by what the game
+  reports: the scene from the state snapshot, the picks from the `css-state` lines the game prints; inside a screen
+  the steps are counted in retraces from the moment the screen opened. It switches the Boot to CSS code on, so the
+  match starts after about 12.5 s; `--auto-vs-menus` goes through the title screen and the menus instead (23 s).
+  When a step does not take, it says which and gives up.
+- `--play-script FILE` takes a controller script in the app's format; `--wav FILE` records what is played;
+  `--audio-raw FILE` the mixer's blocks as it hands them over (any mode, also `--headless`); `--cache-dir DIR` uses
+  another folder for Aurora's pipeline cache.
 
-By hand or by a controller bot, with one controller, counted from the game's first retrace (60 a second; the
-picture appears within the first of them):
+### Game options: settings.ini
 
-| At | Press | What it does |
+Play mode reads `<out>/settings.ini` once at start (`--settings FILE` for another; a commented template is
+written when there is none) and answers the game's option words from it, the way melee-unlocked's Windows host
+builds them from its settings panel. One `key value` per line, upstream's `port-settings.ini` names. By default
+the game runs as upstream runs it: its built-in code set on (UCF and the rest), everything unlocked.
+
+| Key | Values | |
 |---|---|---|
-| 2.2 s | A | the memory card message (harmless when there is none) |
-| 6.7 s | Start | title screen |
-| 8.4 s | stick down, 0.1 s | main menu: VS Mode |
-| 8.7 s | Start | into VS Mode |
-| 9.4 s | A | Melee: the character select screen opens |
-| 13.4 s | stick up and a little right (x 61, y 127 of 127), 0.5 s | the hand moves onto Ness |
-| 14.0 s | A | Ness |
-| 15.0 s | stick full down, 0.17 s (10 retraces) | the hand moves onto the second player's N/A tag |
-| 15.5 s | A | a level 1 computer player with a random character; READY TO FIGHT |
-| 16.7 s | Start | stage select |
-| 20.0 s | stick up (y 100), 0.67 s | onto Onett |
-| 21.0 s | A | the match starts at about 21.7 s |
+| `unlock_all` | 1 / 0 | 0: the memory card decides |
+| `results_screen` | 1 / 0 | 0: back to the character select after a match |
+| `palstockicons`, `noscreenshake` | 0 / 1 | |
+| `screenshake` | 0..200 | percent |
+| `stockhudscale`, `damagehudscale` | 75..175 | percent |
+| `playertags`, `hide_ko_explosions`, `hide_hud_emblems` | 0 / 1 | |
+| `community_codes` | hex | 1000 HUD fade, 2000 respawn platform colours, 4000 Nana percent, 10000 no GO!, 20000 / 40000 / 80000 hitbox id colours / order / angles, 200000 V-cancel sound, 1000000 no fighter shadows, 4000000 centred 2P HUD; offline codes: 400000 Instant Melee, 800000 free pause camera, 2000000 boot to CSS |
+| `stadium_frozen`, `freeze_fd` | 0 / 1 | |
+| `widescreen` | 0 / 1 | the 16:9 code; the picture then fills the screen (as `--stretch`) |
+| `arcade_hitboxes`, `arcade_projectile_hitboxes`, `arcade_hitboxes_behind` | 0 / 1 | |
+| `arcade_backdrop` | 2 | a grid behind the stage; `arcade_grid_rgb RRGGBB` its colour |
+| `cpu_20xx` | 0 / 1 | |
+| `cpu_tech`, `cpu_getup` | 0..5 | |
+| `cpu_di` 0..3, `cpu_sdi` 0..6, `cpu_notaunt`, `cpu_lcancel`, `cpu_nojab`, `cpu_notransform` | | |
+| `mute_voices` | 0 / 1 | |
+| `gamelanguage` | 0 / 1 / 2 | the save's, Japanese, English |
+| `music` | 0..100 | |
+| `lowpoly`, `fodreflections`, `cssbackgroundfree`, `training_hud`, `arcade_camera_2d`, `audio_early_keyon` | | passed through, not looked at |
+| `vanilla` | 0 / 1 | ours: the retail game without the built-in code set; the CPU, 20XX and Stadium options are then not given, as upstream's vanilla session does |
 
-The two hand movements need their length to within a retrace or two; `--auto-vs` does exactly this.
+What upstream sends only outside network play (the offline community codes, the hitboxes, the 2D camera, faster
+sound effects, the CPU options) is sent here because play mode has no network session, replay or tournament.
+Left for later, because they need more than a word: the 20XX TE feature bits (upstream gives them only with a TE
+save loaded), the Training Lab bits, shield colours, True 16:9 (a renderer feature), hiding the scenery behind the
+grid and the Arcade look's plain backdrop and combo counter (renderer and overlay), the input display and
+frame-data overlay, anything from a mod disc (20XX Hack Pack, TM-CE, m-ex).
 
 ## Verified
 
@@ -197,14 +223,17 @@ Per-part times of a VS match frame on that machine (`parity_vs_onett`, no graphi
 which works 0.48 ms (0.06 texture copies, 0.28 draw records); with `--gfx-sync` the simulation thread works
 0.78 ms. The console is about ten times slower per thread at 1020 MHz.
 
-Play mode on Linux (commit `ae1612e` runner and patches, game image `6be32fe9...`):
+Play mode on Linux (runner and patches of commit `ae1612e`, game image `6be32fe9...`):
 
 | Check | Result |
 |---|---|
-| `--play` with a controller script through the app's input code (`input_poll`), empty and existing memory card | boots, walks the menus, reaches the VS match at retrace 1301 both times; screenshots show the menus, the match and the fighter moving; L + R + Start ends the run cleanly |
-| Sound: `--wav` of a scripted picture run against `--audio-raw` of a `--headless` run, `parity_vs_onett`, 149.9 s | the recording made by the app's audio output code equals the headless mixer output sample for sample; not silent |
-| Sound device path | SDL's dummy device only: ring, resampler and callback run; blocks were dropped because that device consumes slower than real time, which says nothing about the console |
-| Scripted mode after these changes | digest identical, with and without a picture |
+| `--play --auto-vs` (Boot to CSS code), `--auto-vs-menus` with `vanilla 1` on an empty card, `--auto-vs-menus` with the code set on an existing card | the match starts at retrace 751, 1388 and 1388; the right-hand move onto the tag works from 10 to 14 retraces (12 is used) |
+| `--play` with a controller script through the app's input code (`input_poll`) | menus, match, the fighter moving; L + R + Start ends the run cleanly |
+| Options, one run with 19 lines set | the program's `play: options 50000003 01800000 40001005, display 06010D32, audio 2` line; the game's own lines `offline codes 2000000`, `community codes 4010000`, `option2 00800000 in effect`, `hitbox switches 20`, `cpu training options 00001005 in effect`, `cpu 1: L-cancel`; screenshots: Japanese text, all 26 fighters and every stage, a 16:9 picture, hitbox bubbles, the grid, tags that stay, PAL stock row, HUD at 150%, no emblems, the 2P HUD centred |
+| Options not looked at, only passed | skip results (no match was played to its end), Stadium and Final Destination frozen, KO explosions hidden, no screen shake, voices muted |
+| Sound: `--wav` of a scripted picture run against `--audio-raw` of a `--headless` run, `parity_vs_onett`, 149.9 s | equal sample for sample; not silent |
+| Sound device path | SDL's dummy device only; it consumes slower than real time, so its drops say nothing about the console |
+| Scripted mode after these changes | digest identical, with and without a picture: the option hooks answer only in play mode |
 
 On the console, by the session that ran it:
 
@@ -214,7 +243,12 @@ On the console, by the session that ran it:
   VS match frame, none over 16.67 ms; waiting for the decoder 0.22 ms; decoder thread 2.96 ms; render thread 4.28 ms
   (2.22 converting and feeding Aurora, 1.92 in `aurora_end_frame`); 8987 of 8998 frames drawn; digest identical.
   `--warm-all` took 357 s there. Without it the first run had 9 match frames over budget.
-- Controllers, sound and play mode have not been on the console.
+- Play mode build (f357035): a remote controller bot, seen by the system as two pads, got through the title and
+  the menus to the character select; picture correct; L + R + Start left to HOME cleanly. Sound ran with 66
+  underruns (554 ms) in 90 s of booting and menus, none of them in a match because no match was reached: the
+  time-driven `--auto-vs` of that build was thrown off by the second pad joining as a second player. Menu frames
+  cost the simulation thread about 5 ms at 1774 MHz.
+- The state-driven `--auto-vs`, `settings.ini`, the sound refill and the statistics lines have not been on the console.
 
 Aurora's `tcg[N] source 21 (type 1) is not handled; the coordinate is zero` lines are not new with this engine: the
 app's own console logs have the same line with the same numbers.
@@ -226,9 +260,8 @@ why is not known. The same costume's portrait on the character select screen is 
 
 ## Not verified
 
-- On the console: controllers of any kind through this program (Pro Controller, Joy-Con, GameCube adapter, rumble),
-  sound output (device, underruns, latency), the L + R + Start exit after real play, `--auto-vs`, a play session
-  longer than the tests, the memory card kept between sessions.
+- On the console: the new `--auto-vs`, `settings.ini` and every option in it, whether the sound refill removes the
+  underruns that follow a loading stall, sound during a match, the GameCube adapter and rumble, a long session.
 - A real gamepad on Linux: the test drove the app's input code with a script, below its SDL and Aurora PAD part.
 - Input to picture: the program measures up to the render thread's hand-off; Aurora's render worker, the swap
   chain and the display are after that.
@@ -255,7 +288,8 @@ why is not known. The same costume's portrait on the character select screen is 
 - A first session compiles pipelines as they are first drawn and stutters; they are cached per device. The app is
   in the same position: this repository ships no pipeline seed, and the app's cache lives in its own folder
   (`--cache-dir sdmc:/switch/melee-nx-netplay/Cache` would share it; not tried).
-- Without a GameCube adapter the app's adapter code looks for one every two seconds from the simulation thread.
+- The app's adapter code looks for a GameCube adapter every two seconds from the simulation thread for as long as
+  there is none; here it gets three looks and then one a minute until an adapter has answered once.
 - No in-game menu or HUD overlay, no controller remapping, no volume control while running, no Slippi music player.
 
 ## Licensing

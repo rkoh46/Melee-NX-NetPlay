@@ -100,7 +100,7 @@ endif()
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
   "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GXSRC}/gx_aurora_bridge.cpp"
-  "${FE}/shim/shim.cpp" "${FE}/frontend.cpp" "${FE}/play_io.cpp")
+  "${FE}/shim/shim.cpp" "${FE}/frontend.cpp" "${FE}/play_io.cpp" "${FE}/settings.cpp")
 # The shim's host.h and ppc.h come first; the real render_observer.h and fatal_boundary.h are found after them.
 target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${REPO}/port/runtime/ppc" "${REPO}/port/runtime/host"
   "${MU}/port/linux" "${MU}/port/runtime/abi")
@@ -114,6 +114,8 @@ else()
     "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
   if(MU_FE_VARIANT STREQUAL "switch")
     target_sources(mu_gx PRIVATE "${GEN}/app/gc_adapter_usbhs.cpp")   # the GameCube adapter over usb:hs
+    # Its poll is called through play_io.cpp, which stops it searching for an adapter every two seconds.
+    set_source_files_properties("${GEN}/app/gc_adapter_usbhs.cpp" PROPERTIES COMPILE_DEFINITIONS "gcadapter_poll=gcadapter_poll_usb")
   else()
     target_sources(mu_gx PRIVATE "${GEN}/app/gc_adapter_none.cpp")
   endif()

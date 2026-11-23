@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <sys/stat.h>
 
@@ -48,6 +49,7 @@ namespace discord {
 void set_menus() {} void set_local_port(int) {} void set_searching(const std::string&) {}
 void set_opponent(const std::string&, const std::string&, int) {}
 }
+#ifndef MU_NET_SERVICES
 namespace report {
 // No HTTP in this build: every request fails at once without touching the network.
 bool http_request(const char*, const std::string&, const std::string&, const std::string&, const char*, int* status, std::string*, std::string* error) {
@@ -76,11 +78,40 @@ void set_log(void (*)(const char*)) {}
 void stun_build_request(uint8_t out[kStunRequestLen]) { std::memset(out, 0, kStunRequestLen); }
 bool stun_parse_response(const uint8_t*, const uint8_t*, size_t, StunObservation*) { return false; }
 }
+#endif   // MU_NET_SERVICES: the real services are the app's slippi_matchmaking_ws.cpp, slippi_report.cpp, slippi_http_curl.cpp
 }
 
 namespace netplay_bridge {
+bool has_services() {
+#ifdef MU_NET_SERVICES
+  return true;
+#else
+  return false;
+#endif
+}
+const char* ranked_refusal() { return "Ranked is not available in this build. Play Unranked, Direct or Teams."; }
+
+static bool start_services(const Setup& setup, std::string* error) {
+  if (!has_services()) { if (error) *error = "this build has no online services (build with MU_NET_SERVICES=1)"; return false; }
+  if (setup.fake_user) {
+    mkdir(setup.user_dir.c_str(), 0777);
+    if (FILE* out = std::fopen((setup.user_dir + "/user.json").c_str(), "w")) {
+      std::fprintf(out, "{\"uid\":\"mock-test-%d\",\"playKey\":\"mock-test-only\",\"connectCode\":\"MOCK#%03d\",\"displayName\":\"Mock %d\"}\n",
+                   setup.local_index, setup.local_index + 1, setup.local_index + 1);
+      std::fclose(out);
+    }
+  }
+  slippi::Matchmaking::local_peer.enabled = false;
+  auto& config = slippi::online::config();
+  config.offline = false; config.user_dir = setup.user_dir; config.delay = setup.delay_frames; config.delay_auto = false;
+  host::options.cache_dir = setup.user_dir; host::options.iso = setup.iso_path;
+  slippi::online::init();
+  return slippi::online::available();
+}
+
 bool start(const Setup& setup, std::string* error) {
   g_retrace_count = setup.retrace_count;
+  if (setup.services) return start_services(setup, error);
   mkdir(setup.user_dir.c_str(), 0777);
   // A made-up identity: the device wants a user.json before it will search. Nothing reads it but
   // this process, and the "play key" opens nothing.
@@ -104,16 +135,18 @@ void shutdown() { slippi::online::shutdown(); }
 bool handle(uint8_t command, const uint8_t* payload, uint32_t size, std::vector<uint8_t>* reply) {
   return slippi::online::handle(command, payload, size, *reply);
 }
-void request_match(uint8_t character, uint8_t color) {
+bool request_match(int mode, const std::string& connect_code, uint8_t character, uint8_t color) {
+  if (mode <= 0 || mode > 4) return false;                  // Ranked is refused; see ranked_refusal()
   std::vector<uint8_t> ignored;
   // CMD_SET_MATCH_SELECTIONS: team, character, colour, character chosen, stage (2 bytes), stage
-  // option 3 (random from the allowed list), mode 2 (direct), alternate stage flag.
-  const uint8_t selections[9] = {0, character, color, 1, 0, 0, 3, 2, 0};
+  // option 3 (random from the allowed list), mode, alternate stage flag.
+  const uint8_t selections[9] = {0, character, color, 1, 0, 0, 3, uint8_t(mode), 0};
   slippi::online::handle(0xB5, selections, sizeof selections, ignored);
-  uint8_t find[19] = {2};                                   // direct mode, then the opponent's code
-  std::memcpy(find + 1, "PEER#001", 8);
+  uint8_t find[19] = {uint8_t(mode)};                       // mode, then the opponent's code (Shift-JIS; codes are ASCII)
+  std::memcpy(find + 1, connect_code.data(), std::min<size_t>(18, connect_code.size()));
   ignored.clear();
   slippi::online::handle(0xB4, find, sizeof find, ignored);
+  return true;
 }
 uint64_t rollbacks_seen_by_device() { return slippi::online::rollback_count(); }
 }

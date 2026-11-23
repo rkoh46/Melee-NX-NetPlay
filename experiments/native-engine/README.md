@@ -202,6 +202,46 @@ the engine's own alike, so it is a property of the engine's undrawn re-simulatio
 
 The snapshot now also leaves out the sound driver's state listed in `melee_game.snapexcl`, as the engine's host does.
 
+Every netplay run ends with the same evidence on each side:
+- `net check (frame:hash ...)`: a running hash of the game's own per-frame state checksum and RNG seed (what
+  Slippi's desync detection compares), final value per frame, at every 300th frame. The lines must be equal on
+  the two machines. `0 desync messages from the game` is the game's own comparison with the other side.
+- `net: online frame without a rollback`, `... with a rollback`, `one repeated frame inside a rollback` (work
+  only, the pacing sleep taken out), rollback count and depths, save and restore times.
+- `digest-net-confirmed.csv`: the shown states that no rollback replaced. Near the end of a run a few can still
+  be predictions; the net check line is the judge.
+
+Against another machine: `tools/net_peer.sh INDEX PEER_IP PEER_PORT [--port N] [--frames N] [--delay MS --jitter MS]
+[-- runner arguments]` runs one instance in a container on the default bridge with one published UDP port (the
+only script here that gives a game-running container a network). The other machine runs
+`--net <its index>:PEER_PORT:<this machine>:<port> --frames N`.
+
+### Real services (off by default)
+
+`MU_NET_SERVICES=1 ./build.sh nro|linux` builds `mu-native-services.nro` / `mu-native-linux-services` with the
+app's real matchmaking client (WebSocket, STUN), user file, reporting and HTTP instead of the stubs, and
+`--online unranked|direct:CODE|teams|party [--user-dir DIR]`. The Switch build is pinned to the service address in
+`tools/slippi_pin.json` and reads the user file the app keeps (`sdmc:/switch/melee-nx-netplay/User`); it sends the
+app's own version string, nothing new. The Linux build is pinned to `ws://127.0.0.1:8765`, the loopback stand-in
+`tools/mock_matchmaking.py`, so a development machine cannot reach the real service. `tools/mock_online_test.sh`
+runs two such instances and the mock in one container with no network: they queue, are matched, connect and play.
+Ranked is refused as melee-unlocked refuses it: the search does not start and the match state reports an error.
+The headless runner has no controller: do not put it in a real queue (with `--net-inputs` it is a random-input bot).
+
+Not done: the Slippi menus in the native game. The engine's host sets `MU_GAME_OPT_SLIPPI_MENUS` and serves
+thirteen names over the disc layer (`MnMaAll`, `SdMenu`, `MnSlMap`, `SdSlChr`, `MnExtAll` as `.usd` and `.dat`: the
+disc file with Slippi's `.diff` applied; `slpCSS.dat`, `GameSetup_gui.dat`, and optionally `SlippiCSS_gui.dat`).
+This repository vendors the five `.diff` pairs and whole `GameSetup_gui.dat`, `SlippiCSS.dat` and `SlippiCSS_gui.dat`
+under `port/slippi_sys`; the headless Linux host has no way to add or replace disc files yet. Until then a match is
+entered without menus (`--online`, `--net`), which upstream also forces the menus off for.
+
+### Open items
+
+- The self-test's differences inside fighter data (fighter+0x6D4, +0x2968, +0x28C0, +0x2AC3 in this build's
+  64-bit layout): not yet identified as fields. Everything else it lists is drawing-related.
+- Input suggestions (message 0x87): the app's netplay ignores them on receipt and never sends them.
+- Four players and items in a netplay test (the local-peer match is two players, items off).
+
 ## Licensing
 
 Our files are GPL-3.0-or-later. melee-unlocked's host code is GPL-2.0-or-later and is compiled in from the

@@ -179,7 +179,7 @@ struct State {
   uint32_t last_match_frame = 0;
   uint64_t last_decode = 0, last_snapshot = 0, last_record = 0, last_handoff = 0;
   uint64_t prev_pad_ns = 0;      // the controller read that the frame now being simulated uses
-  Series work_match, work_all, feed_match, wait_match, wait_all, decode_match, snapshot_match, record_match, handoff_match, pad_match;
+  Series work_match, work_all, feed_match, wait_match, wait_all, decode_match, snapshot_match, record_match, handoff_match, pad_match, decode_all, padcost_all, padcost_match;
 #ifdef __SWITCH__
   s32 sim_priority_before = 0x2C;
   bool clocks_changed = false;
@@ -236,15 +236,17 @@ void retrace_sink(void*) {
   MuStatePod state{};
   linux_host::state_snapshot(&state);
   const bool fighting = state.match_frame && state.match_frame != st.last_match_frame;
-  const bool vs_match = fighting && state.scene_major == 2 && state.scene == 2;
+  const bool vs_match = fighting;      // any mode with fighters simulating (VS, training, the single-player modes)
+  io_retrace(linux_host::counters().retraces, state.scene_major, state.scene, fighting);
+  const double pad_ms = io_take_pad_ms();
   st.last_match_frame = state.match_frame;
   const uint64_t decode = host::sim_cost_ns(host::SIM_DECODE), snapshot = host::sim_cost_ns(host::SIM_SNAPSHOT), record = host::sim_cost_ns(host::SIM_RECORD);
   const uint64_t handoff = st.queue ? st.queue->handoff_ns.load(std::memory_order_relaxed) : 0;
   if (st.have_resumed) {
     const double work = ms(entered - st.resumed);
-    st.work_all.add(work); st.wait_all.add(ms(waited));
+    st.work_all.add(work); st.wait_all.add(ms(waited)); st.decode_all.add(ms(decode - st.last_decode)); st.padcost_all.add(pad_ms);
     if (vs_match) {
-      st.work_match.add(work); st.feed_match.add(ms(st.feed_ns_frame)); st.wait_match.add(ms(waited));
+      st.work_match.add(work); st.feed_match.add(ms(st.feed_ns_frame)); st.wait_match.add(ms(waited)); st.padcost_match.add(pad_ms);
       st.decode_match.add(ms(decode - st.last_decode)); st.snapshot_match.add(ms(snapshot - st.last_snapshot));
       st.record_match.add(ms(record - st.last_record)); st.handoff_match.add(ms(handoff - st.last_handoff));
       // The game samples the controllers in its retrace handler, just before this function runs; the frame
@@ -302,7 +304,7 @@ void render_one(gx::Backend& backend, const gx::Frame& frame) {
   const double age = frame.time > 0 ? double(t0) * 1e-6 - frame.time * 1000.0 : 0;   // from the decoder finishing the frame to the renderer starting on it
   std::lock_guard<std::mutex> lock(r.mutex);
   r.total.add(total); r.convert.add(convert); r.end_frame.add(end); r.age.add(age);
-  if (frame.scene_major == 2 && frame.scene_minor == 2) { r.total_match.add(total); r.convert_match.add(convert); r.end_frame_match.add(end); r.age_match.add(age); }
+  if (gx::frame_in_match(frame)) { r.total_match.add(total); r.convert_match.add(convert); r.end_frame_match.add(end); r.age_match.add(age); }
   r.draws += frame.draws.size();
   for (const auto& copy : frame.copies) if (!copy.to_xfb) ++r.texture_copies;
   ++r.frames;
@@ -508,9 +510,10 @@ void detach() {
   say("picture: %llu frames finished by the decoder, %llu drawn, %llu skipped as stale (a newer one was waiting), %llu given up because the queue was full; "
       "most draws in a frame %zu, %llu texture copies drawn%s", (unsigned long long)st.queue->finished.load(), (unsigned long long)r.frames, (unsigned long long)r.stale,
       (unsigned long long)st.queue->queue.overflow_dropped.load(), r.most_draws, (unsigned long long)r.texture_copies, r.failed ? " (RENDERER STOPPED EARLY, see above)" : "");
-  say("picture: timing of VS match frames, ms per frame, by thread%s", options.pace ? " (the runner's own frame times below include the 60 Hz wait; these do not)" : "");
+  say("picture: timing of match frames (fighters simulating), ms per frame, by thread%s", options.pace ? " (the runner's own frame times below include the 60 Hz wait; these do not)" : "");
   st.work_match.report("picture: simulation thread: work (game, handing the stream over, audio mixing)", true);
   st.feed_match.report(st.threaded ? "picture: simulation thread:   of that, handing the stream to the decoder" : "picture: simulation thread:   of that, the decoder (--gfx-sync)");
+  if (options.play) st.padcost_match.report("picture: simulation thread:   of that, reading the controllers");
   if (st.threaded) st.wait_match.report("picture: simulation thread: then waiting for the decoder at the retrace (inside the 60 Hz wait when paced)");
   if (st.threaded) st.decode_match.report("picture: decoder thread: all work");
   st.snapshot_match.report("picture: decoder:   of that, texture copies out of game memory");
@@ -527,6 +530,8 @@ void detach() {
   }
   say("picture: all frames (menus, loading, match):");
   st.work_all.report("picture: simulation thread: work", true);
+  if (options.play) st.padcost_all.report("picture: simulation thread:   of that, reading the controllers");
+  if (st.threaded) st.decode_all.report("picture: decoder thread: all work");
   if (st.threaded) st.wait_all.report("picture: simulation thread: waiting for the decoder");
   r.total.report("picture: render thread: all work on a frame");
   st.queue.reset();

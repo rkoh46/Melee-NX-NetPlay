@@ -25,6 +25,8 @@ struct Options {
   std::string play_script;    // --play-script FILE: a controller script in the app's format, through the app's input layer
   std::string iso;            // the runner's --iso and --frames, read here for play mode
   unsigned frames = 0;
+  std::string settings;       // --settings FILE (default <out>/settings.ini)
+  bool auto_menus = false;    // --auto-vs-menus: --auto-vs through the menus instead of the Boot to CSS code
   std::string cache_dir;      // --cache-dir DIR: Aurora's pipeline cache folder (default <out>/aurora)
   int width = 1280, height = 720;
   std::string out_dir;        // the runner's --out
@@ -35,6 +37,13 @@ void say(const char* format, ...);   // stdout (nxlink) and <out>/picture.log
 void io_start(bool picture);         // run start: sound output (with a picture only), held log, raw sound dump
 void io_stop();                      // run end: closes the sound output, prints its statistics and the held log lines
 uint64_t io_last_pad_ns();           // when the game last read the controllers (0: never)
+void io_retrace(uint32_t retrace, uint32_t scene_major, uint32_t scene_minor, bool fighting);   // once per retrace, simulation thread
+double io_take_pad_ms();             // time spent reading controllers since the last call
+// settings.cpp (play mode)
+void settings_load(const std::string& path);
+bool settings_vanilla();
+bool settings_widescreen();
+void settings_boot_to_css(bool on);
 // play_main.cpp
 int play_main();
 }  // namespace fe

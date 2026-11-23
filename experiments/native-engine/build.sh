@@ -84,6 +84,21 @@ SOURCES=$(echo $SOURCES); INCLUDES=$(echo $INCLUDES)
 NET_INC='-Iexperiments/native-engine/runner -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app'
 NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"wss://invalid.invalid/\"'
 NET_CXX='port/runtime/hle/slippi_online.cpp port/runtime/hle/slippi_net.cpp port/runtime/hle/slippi_offline.cpp port/runtime/hle/slippi_net_diag.cpp port/runtime/hle/slippi_match_quality.cpp port/runtime/hle/slippi_text.cpp port/runtime/hle/slippi_version.cpp experiments/native-engine/runner/netplay_bridge.cpp'
+# MU_NET_SERVICES=1 builds the variant with the app's real services instead of stubs: the matchmaking
+# service client (WebSocket, STUN), the user file, game reporting and HTTP (libcurl, mbedTLS on the Switch).
+# Off by default; the outputs get the suffix "-services". Never point it at a real service from a
+# development machine: SLIPPI_MM_URL (the app's own override) selects a local mock.
+NET_SUFFIX=''; NET_LIBS_LINUX=''; NET_LIBS_NX=''; NET_URL_NX='wss://invalid.invalid/'; NET_URL_LINUX='wss://invalid.invalid/'
+if [ "${MU_NET_SERVICES:-0}" = 1 ]; then
+  NET_CXX="$NET_CXX port/runtime/hle/slippi_matchmaking_ws.cpp port/runtime/hle/slippi_report.cpp port/runtime/hle/slippi_http_curl.cpp port/runtime/hle/slippi_login.cpp"
+  NET_DEF="$NET_DEF -DMU_NET_SERVICES"
+  # The Switch build gets the service address the app is pinned to (tools/slippi_pin.json). The Linux
+  # build never does: it is pinned to the loopback mock (tools/mock_matchmaking.py), so a development
+  # machine cannot reach the real service even by accident.
+  NET_URL_NX="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["matchmaking_url"])' "$repo/tools/slippi_pin.json")"
+  NET_URL_LINUX='ws://127.0.0.1:8765'
+  NET_SUFFIX='-services'; NET_LIBS_LINUX='-lcurl'; NET_LIBS_NX='-lcurl -lmbedtls -lmbedx509 -lmbedcrypto'
+fi
 NET_C='callbacks compress host list packet peer protocol unix'
 # \$1 C compiler, \$2 C++ compiler, \$3 extra flags, \$4 object directory, \$5 ld, \$6 objcopy; run inside a container.
 # Everything but the bridge's own interface becomes local to the combined object.
@@ -92,22 +107,22 @@ NET_BUILD='net_build() { mkdir -p $4/net; for f in '"$NET_C"'; do $1 $3 -O2 -w -
 build_linux() {
   generate
   dock 600 "$LINUX_IMG" "
-    o=build/native-engine/obj-linux; mkdir -p \$o
+    o=build/native-engine/obj-linux$NET_SUFFIX; mkdir -p \$o
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/fixedmap_linux.c -o \$o/fixedmap.o
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/mu_imports.c -o \$o/mu_imports.o
     gcc -c build/native-engine/gen/embedded.S -o \$o/embedded.o
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/dirtytrack_linux.c -o \$o/dirtytrack.o
     gcc -fPIE -c experiments/native-engine/runner/hostprof.S -o \$o/hostprof.o
-    $NET_BUILD; net_build gcc g++ -fPIE \$o ld objcopy
-    g++ $CXXFLAGS $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/hostprof.o \$o/netplay.o -DMU_CARD_SIMPLE_COMMIT -pie -fPIE -lpthread -lz -lm -o build/native-engine/out/mu-native-linux"
-  echo "built $out/mu-native-linux"
+    ${NET_BUILD//wss:\/\/invalid.invalid\//$NET_URL_LINUX}; net_build gcc g++ -fPIE \$o ld objcopy
+    g++ $CXXFLAGS $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/hostprof.o \$o/netplay.o -DMU_CARD_SIMPLE_COMMIT -pie -fPIE -lpthread $NET_LIBS_LINUX -lz -lm -o build/native-engine/out/mu-native-linux$NET_SUFFIX"
+  echo "built $out/mu-native-linux$NET_SUFFIX"
 }
 
 build_nro() {
   generate
   dock 600 "$NX_IMG" "
     export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:\$PATH
-    o=build/native-engine/obj-nx; mkdir -p \$o
+    o=build/native-engine/obj-nx$NET_SUFFIX; mkdir -p \$o
     ARCH='-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -ffunction-sections -D__SWITCH__ -I/opt/devkitpro/libnx/include'
     aarch64-none-elf-gcc -O2 -g -Wall \$ARCH -c experiments/native-engine/runner/fixedmap_horizon.c -o \$o/fixedmap.o
     aarch64-none-elf-gcc -O2 -g -Wall \$ARCH -c experiments/native-engine/runner/mu_imports.c -o \$o/mu_imports.o
@@ -115,13 +130,13 @@ build_nro() {
     aarch64-none-elf-gcc -O2 -g -Wall \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.c -o \$o/dirtytrack.o
     aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.S -o \$o/dirtytrack_entry.o
     aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/hostprof.S -o \$o/hostprof.o
-    $NET_BUILD; net_build aarch64-none-elf-gcc aarch64-none-elf-g++ \"\$ARCH\" \$o aarch64-none-elf-ld aarch64-none-elf-objcopy
+    ${NET_BUILD//wss:\/\/invalid.invalid\//$NET_URL_NX}; net_build aarch64-none-elf-gcc aarch64-none-elf-g++ \"\$ARCH -idirafter /opt/devkitpro/portlibs/switch/include\" \$o aarch64-none-elf-ld aarch64-none-elf-objcopy
     aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES -Iswitch/src $SOURCES switch/src/switch_clocks.cpp \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \$o/hostprof.o \$o/netplay.o \
-      -I/opt/devkitpro/portlibs/switch/include -specs=/opt/devkitpro/libnx/switch.specs -L/opt/devkitpro/portlibs/switch/lib -L/opt/devkitpro/libnx/lib -lz -lnx -lm -o build/native-engine/out/mu-native.elf
+      -I/opt/devkitpro/portlibs/switch/include -specs=/opt/devkitpro/libnx/switch.specs -L/opt/devkitpro/portlibs/switch/lib -L/opt/devkitpro/libnx/lib -lnx $NET_LIBS_NX -lz -lnx -lm -o build/native-engine/out/mu-native$NET_SUFFIX.elf
     nacptool --create 'mu-native' 'Melee-NX-NetPlay' '0.1' build/native-engine/out/mu-native.nacp
-    elf2nro build/native-engine/out/mu-native.elf build/native-engine/out/mu-native.nro --nacp=build/native-engine/out/mu-native.nacp
-    ls -l build/native-engine/out/mu-native.nro"
-  echo "built $out/mu-native.nro"
+    elf2nro build/native-engine/out/mu-native$NET_SUFFIX.elf build/native-engine/out/mu-native$NET_SUFFIX.nro --nacp=build/native-engine/out/mu-native.nacp
+    ls -l build/native-engine/out/mu-native$NET_SUFFIX.nro"
+  echo "built $out/mu-native$NET_SUFFIX.nro"
 }
 
 case "${1:-all}" in
