@@ -3,6 +3,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fe {
 struct Options {
@@ -27,6 +28,8 @@ struct Options {
   unsigned frames = 0;
   std::string settings;       // --settings FILE (default <out>/settings.ini)
   bool auto_menus = false;    // --auto-vs-menus: --auto-vs through the menus instead of the Boot to CSS code
+  bool profile = false;       // --profile: per host service time on the simulation thread (the runner's hostprof)
+  std::vector<std::string> rest;   // the arguments the frontend did not take (play mode reads the netplay ones from them)
   std::string cache_dir;      // --cache-dir DIR: Aurora's pipeline cache folder (default <out>/aurora)
   int width = 1280, height = 720;
   std::string out_dir;        // the runner's --out
@@ -44,6 +47,24 @@ void settings_load(const std::string& path);
 bool settings_vanilla();
 bool settings_widescreen();
 void settings_boot_to_css(bool on);
+void settings_report();
+const std::string& settings_profile();
+uint32_t& settings_cpu_word();
+uint32_t& settings_te_word(int which);       // 1 or 2
+int& settings_te_music();
+void settings_state_changed();
+// mods.cpp (play mode)
+std::string mods_configure(const std::string& profile);   // before the host starts; the profile's memory card folder
+bool mods_te_owned();
+bool mods_hackpack();
+uint32_t mods_flags();
+uint32_t mods_stage_bits();
+// slippi_files.cpp (play mode, `slippi_menus 1`)
+bool settings_slippi_menus();
+void slippi_files_build();
+std::vector<std::string> slippi_files_publish();
+int slippi_file_read(uint64_t offset, void* out, size_t bytes);
+bool slippi_menus_on();
 // play_main.cpp
 int play_main();
 }  // namespace fe

@@ -31,7 +31,7 @@ sync_tree() {
   mkdir -p "$work" "$out" "$gen" "$work/mu" "$work/runner"
   # The runner this frontend was last brought up against. The runner has since grown a netplay bridge (ENet,
   # more embedded files) that this build does not link yet: MU_SYNC_REF=HEAD or =worktree to try a newer one.
-  local ref="${MU_SYNC_REF:-ae1612e}" stage="$work/sync-stage"
+  local ref="${MU_SYNC_REF:-8428269}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
@@ -60,12 +60,20 @@ sync_tree() {
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"
   rm -rf "$stage"
   cmp -s "$src/out/melee_game.so" "$out/melee_game.so" || cp "$src/out/melee_game.so" "$out/melee_game.so"
+  # The netplay host's pieces, made by ../build.sh: the image's snapshot exclusions and the netplay object for
+  # each target (the bridge, this repository's netplay sources and ENet in one object; see ../README.md).
+  for f in out/melee_game.snapexcl obj-linux/netplay.o obj-nx/netplay.o; do
+    [ -f "$src/$f" ] || { echo "missing $src/$f: run ../build.sh first" >&2; exit 1; }
+    mkdir -p "$work/net/$(dirname "$f")"; cmp -s "$src/$f" "$work/net/$f" || cp "$src/$f" "$work/net/$f"
+  done
   echo "runner and patches: $ref ($([ "$ref" = worktree ] && echo files on disk || git -C "$repo" rev-parse --short "$ref")); game image sha256 $(shasum -a 256 "$out/melee_game.so" | cut -c1-16)" | tee "$work/sync-state.txt"
   # This repository's GX decoder, with the address handling the native memory layout needs.
   mkdir -p "$gen/gxsrc/port/runtime/gx"
   cp "$repo/port/runtime/gx/gx_core.cpp" "$gen/gxsrc/port/runtime/gx/gx_core.cpp"
+  cp "$repo/port/runtime/gx/gx_aurora_bridge.cpp" "$gen/gxsrc/port/runtime/gx/gx_aurora_bridge.cpp"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0102-gx-core-native-memory.patch"
-  cp "$gen/gxsrc/port/runtime/gx/gx_core.cpp" "$gen/gx_core.cpp"
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0103-gx-bridge-lines-points.patch"
+  for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
   mkdir -p "$gen/app"
@@ -80,6 +88,8 @@ sync_tree() {
     echo '.section .rodata'
     echo '.balign 16'; echo '.global mu_embedded_game'; echo "mu_embedded_game: .incbin \"$W/out/melee_game.so\""
     echo '.global mu_embedded_game_end'; echo 'mu_embedded_game_end:'
+    echo '.balign 8'; echo '.global mu_embedded_snapexcl'; echo "mu_embedded_snapexcl: .incbin \"$W/net/out/melee_game.snapexcl\""
+    echo '.global mu_embedded_snapexcl_end'; echo 'mu_embedded_snapexcl_end:'
     for f in "$gen"/scripts/*.txt; do n=$(basename "$f" .txt)
       echo ".balign 8"; echo "mu_script_$n: .incbin \"$W/gen/scripts/$n.txt\""; echo "mu_script_${n}_end:"
       echo ".global mu_script_$n"; echo ".global mu_script_${n}_end"
@@ -87,6 +97,11 @@ sync_tree() {
     for f in "$here"/../reference/*.csv.gz; do n=$(basename "$f" .csv.gz)
       echo ".balign 8"; echo "mu_ref_$n: .incbin \"experiments/native-engine/reference/$n.csv.gz\""; echo "mu_ref_${n}_end:"
       echo ".global mu_ref_$n"; echo ".global mu_ref_${n}_end"
+    done
+    # Slippi's menu patches and files (this repository's port/slippi_sys), for play mode's `slippi_menus 1`.
+    i=0; for f in "$repo"/port/slippi_sys/GameFiles/GALE01/*; do i=$((i+1))
+      echo ".balign 8"; echo "mu_sys_$i: .incbin \"port/slippi_sys/GameFiles/GALE01/$(basename "$f")\""; echo "mu_sys_${i}_end:"
+      echo ".global mu_sys_$i"; echo ".global mu_sys_${i}_end"
     done
     echo '.section .note.GNU-stack,"",%progbits'
   } > "$gen/embedded.S"
@@ -104,6 +119,11 @@ sync_tree() {
     for f in "$here"/../reference/*.csv.gz; do n=$(basename "$f" .csv.gz); echo "  {\"$n\", mu_ref_$n, mu_ref_${n}_end},"; done
     echo '};'
     echo 'extern const size_t mu_embedded_reference_count = sizeof mu_embedded_references / sizeof mu_embedded_references[0];'
+    i=0; for f in "$repo"/port/slippi_sys/GameFiles/GALE01/*; do i=$((i+1)); echo "extern \"C\" const uint8_t mu_sys_$i[], mu_sys_${i}_end[];"; done
+    echo 'extern const EmbeddedFile mu_embedded_sys[] = {'
+    i=0; for f in "$repo"/port/slippi_sys/GameFiles/GALE01/*; do i=$((i+1)); echo "  {\"$(basename "$f")\", mu_sys_$i, mu_sys_${i}_end},"; done
+    echo '};'
+    echo 'extern const size_t mu_embedded_sys_count = sizeof mu_embedded_sys / sizeof mu_embedded_sys[0];'
   } > "$gen/embedded_tables.cpp"
   python3 -I "$here/../tools/gen_api_names.py" "$work/mu/port/runtime/abi/mu_host.h" "$gen/api_names.cpp"   # the runner's host profiler
   echo "synced $work"
@@ -121,6 +141,11 @@ DEPS_ARGS="-DFETCHCONTENT_FULLY_DISCONNECTED=ON -DFETCHCONTENT_SOURCE_DIR_FMT=/w
   -DFETCHCONTENT_SOURCE_DIR_SQLITE3=/w/$W/deps/sqlite3-src -DFETCHCONTENT_SOURCE_DIR_TRACY=/w/$W/deps/tracy-src -DFETCHCONTENT_SOURCE_DIR_XXHASH=/w/$W/deps/xxhash-src"
 DEPS_ARGS=$(echo $DEPS_ARGS)
 
+# The netplay object went through a relocatable link that dissolved its COMDAT groups, so the inline variables and
+# template instances it shares with this program (standard library, the app's headers) are plain definitions in
+# it: made weak in a copy, they join ours instead of clashing.
+WEAKEN_LINUX="[ $W/net/obj-linux/netplay-weak.o -nt $W/net/obj-linux/netplay.o ] || objcopy --weaken $W/net/obj-linux/netplay.o $W/net/obj-linux/netplay-weak.o"
+
 build_image() { timeout 900 docker build -t "$GFX_IMG" -f "$here/linux-gfx.Dockerfile" "$here"; }
 
 build_deps() {
@@ -136,6 +161,7 @@ build_deps() {
 
 build_null() {
   dock 900 "$LINUX_IMG" "
+    $WEAKEN_LINUX
     cmake -S experiments/native-engine/frontend -B $W/null -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=null \
       -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ >/dev/null
     cmake --build $W/null --parallel $jobs > $W/null-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/null-build.log | head -60; exit 1; }
@@ -147,6 +173,7 @@ build_linux() {
   [ -f "$work/dawn-linux/src/dawn/native/libwebgpu_dawn.a" ] && [ -f "$work/sdl-linux/libSDL3.a" ] || { echo "run ./build.sh deps first" >&2; exit 1; }
   fetched_deps
   dock 2400 "$GFX_IMG" "
+    $WEAKEN_LINUX
     cmake -S experiments/native-engine/frontend -B $W/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=linux \
       -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ $DEPS_ARGS >$W/linux-configure.log 2>&1 || { tail -30 $W/linux-configure.log; exit 1; }
     cmake --build $W/linux --target mu_native_gfx --parallel $jobs > $W/linux-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux-build.log | head -60; exit 1; }
@@ -158,6 +185,8 @@ build_nro() {
   [ -f "$repo/build/sdk/SDK_MANIFEST.json" ] || { echo "build/sdk is missing: unpack the melee-nx-netplay-sdk archive there (BUILDING.md)" >&2; exit 1; }
   fetched_deps
   dock 2400 "$NX_IMG" "
+    export PATH=/opt/devkitpro/devkitA64/bin:\$PATH
+    [ $W/net/obj-nx/netplay-weak.o -nt $W/net/obj-nx/netplay.o ] || aarch64-none-elf-objcopy --weaken $W/net/obj-nx/netplay.o $W/net/obj-nx/netplay-weak.o
     cmake -S experiments/native-engine/frontend -B $W/nx -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=switch \
       -DCMAKE_TOOLCHAIN_FILE=/w/switch/cmake/SwitchGCC.cmake -DMELEE_NX_SDK_DIR=/w/build/sdk $DEPS_ARGS >$W/nx-configure.log 2>&1 || { tail -30 $W/nx-configure.log; exit 1; }
     cmake --build $W/nx --parallel $jobs > $W/nx-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/nx-build.log | head -60; exit 1; }

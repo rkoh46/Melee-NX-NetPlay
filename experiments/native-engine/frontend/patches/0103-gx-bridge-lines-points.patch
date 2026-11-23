@@ -1,0 +1,29 @@
+--- a/port/runtime/gx/gx_aurora_bridge.cpp
++++ b/port/runtime/gx/gx_aurora_bridge.cpp
+@@ -48,7 +48,10 @@
+ // Unsupported-but-harmless render state: reported once per reason, then rendered as-is.
+ void warn(const Frame& frame, const std::string& where, const char* reason) {
+   static std::set<std::string> reported;
+-  if (reported.insert(reason).second)
++  // Once per kind of reason: a relayed coverage error carries its own frame and draw numbers in front, and a
++  // screen drawn from thousands of such draws printed thousands of lines a frame.
++  const char* kind = std::strrchr(reason, ':');
++  if (reported.insert(kind ? kind : reason).second)
+     std::fprintf(stderr, "aurora bridge: frame %llu %s: %s (rendered without it; reported once)\n",
+                  (unsigned long long)frame.sequence, where.c_str(), reason);
+ }
+@@ -132,9 +135,12 @@
+   check(d.vertex_count > 0 && d.vertex_count <= 65535 &&
+         (d.raw_size || (d.first_vertex <= frame.vertices.size() && d.vertex_count <= frame.vertices.size() - d.first_vertex)),
+         "invalid vertex range");
+-  check(d.primitive == 0x80 || d.primitive == 0x90 || d.primitive == 0x98 || d.primitive == 0xa0,
++  // Lines, line strips and points too, when the draw carries the game's own vertex bytes: Aurora's command
++  // processor draws them, and the game's debug text screens (20XX TE's menu, the Hack Pack's) are made of them.
++  check(d.primitive == 0x80 || d.primitive == 0x90 || d.primitive == 0x98 || d.primitive == 0xa0 ||
++        (d.raw_size && (d.primitive == 0xa8 || d.primitive == 0xb0 || d.primitive == 0xb8)),
+         "only quads and triangle primitives are supported by the locked baseline");
+-  check(d.vertex_count >= (d.primitive == 0x80 ? 4u : 3u) &&
++  check(d.vertex_count >= (d.primitive == 0x80 ? 4u : d.primitive == 0xb8 ? 1u : d.primitive == 0xa8 || d.primitive == 0xb0 ? 2u : 3u) &&
+         (d.primitive != 0x80 || d.vertex_count % 4 == 0) &&
+         (d.primitive != 0x90 || d.vertex_count % 3 == 0), "incomplete primitive");
+   constexpr uint32_t supported = 0x1ff | VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_HAS_COL0 | VB_HAS_COL1 |

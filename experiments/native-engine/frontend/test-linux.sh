@@ -11,7 +11,8 @@ repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; script="${2:-parity_vs_onett}"; frames="${3:-9000}"; every="${4:-5}"; shift $(( $# > 4 ? 4 : $# ))
 work="$repo/build/native-engine-gfx"; run="$work/run-linux"
 rm -rf "$run/shots" "$run"/*.log; mkdir -p "$run/shots"     # run-linux/aurora (the pipeline cache) is kept, so a second run tests the warm-up
-timeout "${MU_TEST_LIMIT:-1500}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" \
+mods=(); [ -n "${MU_MODS_DIR:-}" ] && mods=(-v "$MU_MODS_DIR:/out/mods:ro")     # mod discs and saves, read-only, where play mode looks for them
+timeout "${MU_TEST_LIMIT:-1500}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" ${mods[@]+"${mods[@]}"} \
   -e SCRIPT="$script" -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$*" -e MU_GFX_DRAW_DUMP="${MU_GFX_DRAW_DUMP:-}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp

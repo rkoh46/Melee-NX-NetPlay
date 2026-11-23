@@ -9,6 +9,7 @@
 #include "frontend.h"
 
 #include "mu_host.h"
+#include "hackpack_source.h"     // melee-unlocked (fetched tree): the Hack Pack's saved choices
 
 #include <algorithm>
 #include <cstdio>
@@ -38,8 +39,19 @@ struct Settings {
   // Sound
   bool mute_voices = false, audio_early_keyon = false;
   int music = 100;
+  // Mods
+  std::string mod_profile;                // <out>/mods/Profiles/<name>.ini, or the folder <out>/mods/<name>/
+  bool mod_te_enabled = true;             // 20XX TE's features, when its save is in the profile
+  uint32_t te_options = 0x10u, te_options2 = 0;   // 20XX TE's two feature words (its in-game menu changes them)
+  int te_menu_music = 0;
+  bool slippi_menus = false;              // ours: Slippi's menu files and online menu rows
 } settings;
 bool active = false, boot_to_css = false;
+uint32_t cpu_word = 0;                    // option word 3's CPU bits: from the cpu_* keys, then the Hack Pack's menu
+bool cpu_word_from_menu = false;
+std::string state_path;
+
+uint32_t cpu_word_of_settings();
 
 const char kTemplate[] =
   "# mu-native-gfx play mode settings. One \"key value\" per line; names are melee-unlocked's where it has one.\n"
@@ -77,7 +89,11 @@ const char kTemplate[] =
   "#mute_voices 0\n"
   "#gamelanguage 0          # 1 Japanese, 2 English\n"
   "#music 100               # 0..100\n"
-  "#vanilla 0               # 1: the retail game without the built-in code set (and without the options above that need it)\n";
+  "#vanilla 0               # 1: the retail game without the built-in code set (and without the options above that need it)\n"
+  "#slippi_menus 0          # 1: Slippi's menu files (the online menu rows on the main menu)\n"
+  "#mod_profile hackpack    # mod files: mods/Profiles/<name>.ini (\"iso = file\" and \"gci = file\" lines), or every disc image\n"
+  "#                        # and save in the folder mods/<name>/. Its own memory card folder is card-<name>.\n"
+  "#mod_te_enabled 1        # 0: a 20XX TE save in the profile does not switch its features on\n";
 
 void set(const std::string& key, const std::string& value) {
   auto& s = settings;
@@ -121,8 +137,24 @@ void set(const std::string& key, const std::string& value) {
   else if (key == "cssbackgroundfree") s.css_background_free = on;
   else if (key == "training_hud") s.training_hud = value != "0";
   else if (key == "vanilla") s.vanilla = on;
+  else if (key == "slippi_menus") s.slippi_menus = on;
+  else if (key == "mod_profile") s.mod_profile = value;
+  else if (key == "mod_te_enabled") s.mod_te_enabled = value != "0";
+  else if (key == "te_options") s.te_options = uint32_t(std::strtoul(value.c_str(), nullptr, 16));
+  else if (key == "te_options2") s.te_options2 = uint32_t(std::strtoul(value.c_str(), nullptr, 16));
+  else if (key == "te_menu_music") s.te_menu_music = n;
+  else if (key == "hp_settings") source_port::hackpack::settings_parse(value);
+  else if (key == "cpu_word") { cpu_word = uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & MU_GAME_OPTION3_CPU_ALL; cpu_word_from_menu = true; }
   else say("play: settings: unknown key \"%s\"", key.c_str());
 }
+
+// As source_host.cpp's te_words_mask1/2 and kHpTeOptions/2.
+constexpr uint32_t kPackTe1 = MU_GAME_OPTION_TE_NO_STAR_KO | MU_GAME_OPTION_TE_TAUNT_CANCEL | MU_GAME_OPTION_TE_FIXED_CAMERA;
+constexpr uint32_t kPackTe2 = MU_GAME_OPTION2_TE_NO_SCREEN_RUMBLE | MU_GAME_OPTION2_TE_LCANCEL_FLASH | 0x00780000u | MU_GAME_OPTION2_TE_BUBBLES |
+                              MU_GAME_OPTION2_TE_INPUT_DISPLAY | MU_GAME_OPTION2_TE_COLOR_OVERLAYS;
+bool te_on() { return mods_te_owned() && settings.mod_te_enabled; }
+uint32_t te_mask1() { return te_on() ? 0x00007FF0u : mods_hackpack() ? kPackTe1 : 0u; }
+uint32_t te_mask2() { return te_on() ? 0xFFFFFFFFu : mods_hackpack() ? kPackTe2 : 0u; }
 
 // The words, as port/app/source_host.cpp assembles them for an offline session that is no replay.
 uint32_t word_options() {
@@ -130,23 +162,30 @@ uint32_t word_options() {
   return (s.no_screen_shake ? MU_GAME_OPTION_NO_SCREEN_SHAKE : 0u) | (s.pal_stock_icons ? MU_GAME_OPTION_PAL_STOCK_ICONS : 0u) |
          (s.widescreen ? MU_GAME_OPTION_WIDESCREEN : 0u) |
          ((uint32_t(s.language) << MU_GAME_OPTION_LANGUAGE_SHIFT) & MU_GAME_OPTION_LANGUAGE_MASK) |
-         (s.vanilla ? MU_GAME_OPTION_VANILLA : 0u);
-  // Not offered: the 20XX TE bits (they need its save, which that host checks) and the Training Lab bits.
+         (s.vanilla ? MU_GAME_OPTION_VANILLA : 0u) |
+         (slippi_menus_on() ? MU_GAME_OPT_SLIPPI_MENUS : 0u) |
+         // 20XX TE's own bits only with its save in the profile; with the Hack Pack and no TE save, the pack's share.
+         (s.vanilla ? 0u : s.te_options & te_mask1());
+  // Not offered: the Training Lab bits.
 }
 uint32_t word_options2() {
   const auto& s = settings;
   if (s.vanilla) return 0;
-  return (s.cpu_20xx ? MU_GAME_OPTION2_TE_20XX_CPUS : 0u) | (s.stadium_frozen ? MU_GAME_OPTION2_STADIUM_FROZEN : 0u);
+  return (s.te_options2 & te_mask2() & ~(MU_GAME_OPTION2_STADIUM_FROZEN | MU_GAME_OPTION2_ARCADE_PACK)) |
+         (s.cpu_20xx ? MU_GAME_OPTION2_TE_20XX_CPUS : 0u) | (s.stadium_frozen ? MU_GAME_OPTION2_STADIUM_FROZEN : 0u);
 }
-uint32_t word_options3() {
+uint32_t cpu_word_of_settings() {
   const auto& s = settings;
   const auto field = [](int value, int max, int shift) { return value >= 1 && value <= max ? uint32_t(value) << shift : 0u; };
   const int sdi = s.cpu_sdi == 3 ? 4 : s.cpu_sdi == 4 ? 3 : s.cpu_sdi;   // the panel's row order to the game's (render_options.h)
-  const uint32_t cpu = field(s.cpu_tech, 5, MU_GAME_OPTION3_CPU_TECH_SHIFT) | field(s.cpu_getup, 5, MU_GAME_OPTION3_CPU_GETUP_SHIFT) |
-                       field(s.cpu_di, 3, MU_GAME_OPTION3_CPU_DI_SHIFT) | field(sdi, 6, MU_GAME_OPTION3_CPU_SDI_SHIFT) |
-                       (s.cpu_no_taunt ? MU_GAME_OPTION3_CPU_NO_TAUNT : 0u) | (s.cpu_lcancel ? MU_GAME_OPTION3_CPU_LCANCEL : 0u) |
-                       (s.cpu_no_rapid_jab ? MU_GAME_OPTION3_CPU_NO_RAPID_JAB : 0u) | (s.cpu_no_transform ? MU_GAME_OPTION3_CPU_NO_TRANSFORM : 0u);
-  return (s.vanilla ? 0u : cpu & MU_GAME_OPTION3_CPU_ALL) | (s.unlock_all ? 0u : MU_GAME_OPTION3_LOCKED_CONTENT) |
+  return field(s.cpu_tech, 5, MU_GAME_OPTION3_CPU_TECH_SHIFT) | field(s.cpu_getup, 5, MU_GAME_OPTION3_CPU_GETUP_SHIFT) |
+         field(s.cpu_di, 3, MU_GAME_OPTION3_CPU_DI_SHIFT) | field(sdi, 6, MU_GAME_OPTION3_CPU_SDI_SHIFT) |
+         (s.cpu_no_taunt ? MU_GAME_OPTION3_CPU_NO_TAUNT : 0u) | (s.cpu_lcancel ? MU_GAME_OPTION3_CPU_LCANCEL : 0u) |
+         (s.cpu_no_rapid_jab ? MU_GAME_OPTION3_CPU_NO_RAPID_JAB : 0u) | (s.cpu_no_transform ? MU_GAME_OPTION3_CPU_NO_TRANSFORM : 0u);
+}
+uint32_t word_options3() {
+  const auto& s = settings;
+  return (s.vanilla ? 0u : (cpu_word & MU_GAME_OPTION3_CPU_ALL) | mods_stage_bits()) | (s.unlock_all ? 0u : MU_GAME_OPTION3_LOCKED_CONTENT) |
          (s.results_screen ? 0u : MU_GAME_OPTION3_SKIP_RESULTS);
 }
 uint32_t word_display() {
@@ -165,6 +204,23 @@ uint32_t word_display() {
 }  // namespace
 
 bool settings_vanilla() { return settings.vanilla; }
+bool settings_slippi_menus() { return settings.slippi_menus && !settings.vanilla; }
+const std::string& settings_profile() { return settings.mod_profile; }
+uint32_t& settings_cpu_word() { return cpu_word; }
+uint32_t& settings_te_word(int which) { return which == 1 ? settings.te_options : settings.te_options2; }
+int& settings_te_music() { return settings.te_menu_music; }
+// What the game changes from its own menus (20XX TE's settings menu, the Hack Pack's menu and choices) is kept
+// beside the settings file and read after it at the next start. Called from the simulation thread, rarely.
+void settings_state_changed() {
+  cpu_word_from_menu = true;
+  if (state_path.empty()) return;
+  if (FILE* out = std::fopen(state_path.c_str(), "w")) {
+    std::fprintf(out, "# written by mu-native-gfx: what was changed from inside the game\nte_options %X\nte_options2 %X\nte_menu_music %d\ncpu_word %X\n",
+                 settings.te_options, settings.te_options2, settings.te_menu_music, cpu_word);
+    if (!source_port::hackpack::settings_are_default()) std::fprintf(out, "hp_settings %s\n", source_port::hackpack::settings_text().c_str());
+    std::fclose(out);
+  }
+}
 bool settings_widescreen() { return settings.widescreen; }
 void settings_boot_to_css(bool on) { boot_to_css = on; }
 
@@ -178,12 +234,27 @@ void settings_load(const std::string& path) {
     char line[512]; int count = 0;
     while (std::fgets(line, sizeof line, in)) {
       if (char* hash = std::strchr(line, '#')) *hash = 0;
-      char key[64], value[128];
-      if (std::sscanf(line, " %63s %127s", key, value) == 2) { set(key, value); ++count; }
+      char key[64], value[256];
+      if (std::sscanf(line, " %63s %255s", key, value) == 2) { set(key, value); ++count; }
     }
     std::fclose(in);
     say("play: settings: %d lines read from %s", count, path.c_str());
   }
+  if (!cpu_word_from_menu) cpu_word = cpu_word_of_settings();
+  state_path = path + ".state";
+  if (FILE* state = std::fopen(state_path.c_str(), "r")) {
+    char line[512];
+    while (std::fgets(line, sizeof line, state)) {
+      if (char* hash = std::strchr(line, '#')) *hash = 0;
+      char key[64], value[256];
+      if (std::sscanf(line, " %63s %255s", key, value) == 2) set(key, value);
+    }
+    std::fclose(state);
+  }
+}
+
+// After the host has started (the profile's layers are known): what the game will be told.
+void settings_report() {
   say("play: options %08X %08X %08X, display %08X, audio %X, HUD %d/%d%%, screen shake %d%%, music %d%%", word_options(), word_options2(), word_options3(),
       word_display(), (settings.mute_voices ? MU_AUDIO_OPTION_MUTE_VOICES : 0u) | (settings.audio_early_keyon ? MU_AUDIO_OPTION_EARLY_KEYON : 0u),
       settings.stock_hud_scale, settings.damage_hud_scale, settings.screen_shake, settings.music);
@@ -205,6 +276,7 @@ extern "C" int mu_frontend_option(int which, uint32_t* value) {
     case 6: *value = uint32_t(settings.music); return 1;
     case 7: { const float scale = settings.screen_shake / 100.0f; std::memcpy(value, &scale, 4); return 1; }
     case 8: *value = settings.arcade_grid_rgb; return 1;
+    case 9: *value = mods_flags(); return 1;
     default: return 0;
   }
 }

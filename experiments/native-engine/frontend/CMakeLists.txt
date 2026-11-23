@@ -26,10 +26,11 @@ foreach(_needed "${MU}/port/linux/host_services.cpp" "${RUN}/runner_main.cpp" "$
 endforeach()
 
 if(MU_FE_VARIANT STREQUAL "switch")
-  # Dawn, SDL3, Aurora and the Mesa/NVK archives, exactly as the app gets them.
+  # Dawn, SDL3, Aurora and the Mesa/NVK archives, exactly as the app gets them. libnx also before libc, so the
+  # netplay object's ENet gets libnx's socket-aware fcntl (../README.md, the netplay hand-over).
   include("${REPO}/switch/cmake/Graphics.cmake")
   set(CMAKE_CXX_STANDARD_LIBRARIES
-    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
+    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
     CACHE STRING "" FORCE)
 elseif(MU_FE_VARIANT STREQUAL "linux")
   # The same Dawn revision and Aurora source as the Switch build, for Linux (build.sh deps).
@@ -70,8 +71,8 @@ endif()
 set(MU_HOST_SOURCES
   "${MU}/port/linux/host_services.cpp" "${MU}/port/linux/input_script.cpp"
   "${MU}/port/runtime/hle/ax_ucode.cpp" "${MU}/port/runtime/hle/native_savestate.cpp"
-  "${RUN}/runner_main.cpp" "${RUN}/mu_elf.cpp" "${RUN}/rollback.cpp" "${RUN}/hostprof.cpp" "${RUN}/mu_imports.c"
-  "${GEN}/embedded_tables.cpp" "${GEN}/api_names.cpp" "${GEN}/embedded.S" "${FE}/play_main.cpp")
+  "${RUN}/runner_main.cpp" "${RUN}/mu_elf.cpp" "${RUN}/rollback.cpp" "${RUN}/net_host.cpp" "${RUN}/hostprof.cpp" "${RUN}/mu_imports.c"
+  "${GEN}/embedded_tables.cpp" "${GEN}/api_names.cpp" "${GEN}/embedded.S" "${FE}/play_main.cpp" "${FE}/mods.cpp")
 if(MU_FE_VARIANT STREQUAL "switch")
   list(APPEND MU_HOST_SOURCES "${RUN}/fixedmap_horizon.c" "${RUN}/dirtytrack_horizon.c")
   # Its own target: the toolchain names objects without the source extension, and dirtytrack_horizon.c sits beside it.
@@ -87,6 +88,7 @@ set_target_properties(mu_host PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
 target_include_directories(mu_host PRIVATE "${RUN}" "${MU}/port/linux" "${MU}/port/runtime/abi" "${MU}/port/runtime/hle"
   "${MU}/port/runtime/host" "${MU}/port/runtime/ppc" "${MU}/port/runtime/gx" "${MU}/native")
 target_include_directories(mu_host PRIVATE "${FE}")
+target_include_directories(mu_host PRIVATE "${REPO}/port/runtime/host")   # last: sha256.h for mods.cpp
 target_compile_definitions(mu_host PRIVATE MU_FOREIGN_ELF MU_SQUAD=1 MELEE_NO_SLIPPI MELEE_PORT_VERSION="mu-native" MELEE_LINUX_CPU_BASELINE="AArch64")
 target_compile_options(mu_host PRIVATE -O2 -g -Wall -fno-strict-aliasing $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>)
 # The runner's main becomes mu_runner_main (frontend_main.cpp calls it).
@@ -99,11 +101,15 @@ endif()
 
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
-  "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GXSRC}/gx_aurora_bridge.cpp"
-  "${FE}/shim/shim.cpp" "${FE}/frontend.cpp" "${FE}/play_io.cpp" "${FE}/settings.cpp")
+  "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GEN}/gx_aurora_bridge.cpp"
+  "${FE}/shim/shim.cpp" "${FE}/frontend.cpp" "${FE}/play_io.cpp" "${FE}/settings.cpp" "${FE}/slippi_files.cpp"
+  # This repository's VCDIFF decoder and Slippi link resolver (neither includes the app's host.h).
+  "${REPO}/port/runtime/host/vcdiff.cpp" "${REPO}/port/runtime/hle/slippi_hsd_link.cpp")
 # The shim's host.h and ppc.h come first; the real render_observer.h and fatal_boundary.h are found after them.
-target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${REPO}/port/runtime/ppc" "${REPO}/port/runtime/host"
-  "${MU}/port/linux" "${MU}/port/runtime/abi")
+target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${REPO}/port/runtime/host"
+  "${MU}/port/linux" "${MU}/port/runtime/abi"
+  "${MU}/port/runtime/host")   # last: only for hackpack_source.h (settings.cpp); every other name is found before it
+target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle")   # slippi_hsd_link.h, jukebox.h
 target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 if(MU_FE_VARIANT STREQUAL "null")
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=0)
@@ -119,7 +125,6 @@ else()
   else()
     target_sources(mu_gx PRIVATE "${GEN}/app/gc_adapter_none.cpp")
   endif()
-  target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle")   # jukebox.h (audio_sdl.cpp)
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=1)
   target_include_directories(mu_gx PRIVATE "${MELEE_AURORA_SOURCE}/lib")   # gx_aurora.cpp writes Aurora's FIFO directly
   target_link_libraries(mu_gx PUBLIC aurora::core aurora::gx aurora::vi aurora::os aurora::mtx aurora::pad
@@ -128,7 +133,13 @@ endif()
 
 add_executable(mu_native_gfx "${FE}/frontend_main.cpp")
 target_include_directories(mu_native_gfx PRIVATE "${FE}")
-target_link_libraries(mu_native_gfx PRIVATE mu_gx mu_host mu_gx)
+# The netplay object of ../build.sh (copied by build.sh sync): everything behind net_host, with its other symbols local.
+if(MU_FE_VARIANT STREQUAL "switch")
+  set(MU_NETPLAY_OBJECT "${GFX}/net/obj-nx/netplay-weak.o")
+else()
+  set(MU_NETPLAY_OBJECT "${GFX}/net/obj-linux/netplay-weak.o")
+endif()
+target_link_libraries(mu_native_gfx PRIVATE mu_gx mu_host mu_gx "${MU_NETPLAY_OBJECT}")
 if(NOT MU_FE_VARIANT STREQUAL "null")
   # The render thread's time inside Aurora's two frame calls is measured through these (frontend.cpp).
   target_link_options(mu_native_gfx PRIVATE -Wl,--wrap=aurora_begin_frame -Wl,--wrap=aurora_end_frame)

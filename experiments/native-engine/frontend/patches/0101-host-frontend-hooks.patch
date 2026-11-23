@@ -1,11 +1,9 @@
 --- a/port/linux/host_services.cpp
 +++ b/port/linux/host_services.cpp
-@@ -312,6 +312,28 @@
-   check_stop();
- }
+@@ -56,6 +56,30 @@
+ #include <SDL.h>
+ #endif
  
-+} // namespace
-+} // namespace linux_host
 +// Picture frontend (experiments/native-engine/frontend). All of these are absent in the headless runner.
 +extern "C" {
 +// 1 after initialize and before run, 0 after run and before shutdown unmaps the game.
@@ -23,13 +21,66 @@
 +// 5 hud_scales, 6 music_volume, 7 screen_shake_scale (float bits), 8 grid_color; -1 asks whether the frontend
 +// answers at all. Nonzero when *value was set; zero (always, in the scripted runs) keeps this host's own answer.
 +__attribute__((weak)) int mu_frontend_option(int which, uint32_t* value);
++// Mod files (frontend/src/mods.cpp). disc_ready: the retail disc's table is loaded and may be changed through
++// linux_host::fe_disc_*. disc_read: a read of the game; -1 not a mod file's range, 0 failed, 1 done.
++// command: slippi_command; INT32_MIN when the frontend does not know it.
++__attribute__((weak)) void mu_frontend_disc_ready(void);
++__attribute__((weak)) int mu_frontend_disc_read(uint64_t offset, void* out, size_t bytes);
++__attribute__((weak)) int32_t mu_frontend_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size);
 +}
-+namespace linux_host {
+ namespace linux_host {
+ namespace {
+ constexpr uintptr_t locked_cache_base = 0xE0000000u;
+@@ -144,7 +168,40 @@
+   return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
+ }
+ 
++bool read_disc(uint64_t offset, void* out, size_t bytes);
++} // namespace
++// The frontend's view of the disc table: find a file (lower-case path with a leading slash; -1 none, -2 a
++// directory), replace or add one, read the retail disc.
++int32_t fe_disc_find(const char* path, uint32_t* start, uint32_t* length) {
++  const auto at = paths.find(path);
++  if (at == paths.end()) return -1;
++  if (files[at->second].directory) return -2;
++  if (start) *start = files[at->second].start;
++  if (length) *length = files[at->second].length;
++  return at->second;
++}
++int32_t fe_disc_set(const char* path, uint32_t start, uint32_t length) {
++  const auto at = paths.find(path);
++  if (at != paths.end()) { if (files[at->second].directory) return -2; files[at->second] = {start, length, false}; return at->second; }
++  files.push_back({start, length, false});
++  paths[path] = int32_t(files.size() - 1);
++  return int32_t(files.size() - 1);
++}
++void fe_disc_remove(const char* path) { paths.erase(path); }
++bool fe_disc_read_base(uint32_t offset, void* out, uint32_t bytes) {
++  if (disc_fd < 0 || offset > disc_size || bytes > disc_size - offset) return false;
++  size_t done = 0;
++  while (done < bytes) {
++    const ssize_t n = pread(disc_fd, static_cast<uint8_t*>(out) + done, bytes - done, static_cast<off_t>(offset + done));
++    if (n < 0 && errno == EINTR) continue;
++    if (n <= 0) return false;
++    done += size_t(n);
++  }
++  return true;
++}
 +namespace {
- void audio_tick() {
-   if (!audio.running || !audio.buffer || !audio.bytes || audio.awaiting || count.ticks < audio.next) return;
-   const uint64_t period = uint64_t(audio.bytes) * MU_TB_HZ / (uint64_t(audio.rate) * 4);
-@@ -356,6 +378,7 @@
+ bool read_disc(uint64_t offset, void* out, size_t bytes) {
++  if (mu_frontend_disc_read) { const int mine = mu_frontend_disc_read(offset, out, bytes); if (mine >= 0) return mine != 0; }
+   if (disc_fd < 0 || offset > disc_size || bytes > disc_size - offset || (!out && bytes)) return false;
+   auto* dst = static_cast<uint8_t*>(out);
+ #ifdef MU_FOREIGN_ELF
+@@ -255,6 +312,7 @@
+   low(0x28, 24u << 20); low(0xCC, 0); low(0xF0, 24u << 20);
+   low(0xF8, 162000000); low(0xFC, 486000000);
+   log("disc: retail NTSC 1.02, %zu filesystem entries, %llu bytes", files.size(), (unsigned long long)disc_size);
++  if (mu_frontend_disc_ready) mu_frontend_disc_ready();
+   return true;
+ }
+ 
+@@ -356,6 +414,7 @@
  
  void h_log(const char* text) {
    if (!text) return;
@@ -37,7 +88,7 @@
    const size_t n = std::strlen(text);
    if (n && text[n-1] == '\n') log("[game] %.*s", int(n-1), text);
    else log("[game] %s", text);
-@@ -414,6 +437,7 @@
+@@ -414,6 +473,7 @@
      }
      log("script: released, controllers live");
    }
@@ -45,7 +96,7 @@
    std::memset(out, 0, sizeof(MuPadStatus) * 4);
  #ifdef MELEE_LINUX_USB
    MuPadStatus usb_pads[4]{};
-@@ -485,6 +509,7 @@
+@@ -485,6 +545,7 @@
    }
  }
  void h_pad_rumble(int32_t port, int32_t on) {
@@ -53,7 +104,7 @@
  #ifdef MELEE_LINUX_USB
    linux_gc::rumble(port,on!=0);
  #endif
-@@ -866,9 +891,16 @@
+@@ -866,9 +927,17 @@
    input_script.mark_match_start(count.retraces);
    log("match: rules and players finalized at retrace %u", count.retraces);
  }
@@ -70,23 +121,40 @@
 +uint32_t h_hud_scales() { return fe_option(5, 100u | (100u << 8)); }
 +float h_screen_shake_scale() { const uint32_t bits = fe_option(7, 0x3F800000u); float scale; std::memcpy(&scale, &bits, 4); return scale; }
 +uint32_t h_grid_color() { return fe_option(8, 0xFFFFFFu); }
++uint32_t h_mod_flags() { return fe_option(9, 0); }
  #ifdef MELEE_LINUX_GRAPHICS
  int32_t h_pose_enabled() { return gx::native_pose_capture_enabled() ? 1 : 0; }
  void h_pose_snapshot(const MuNativePoseSnapshot* snapshot) { if (snapshot) gx::native_pose_snapshot(snapshot); }
-@@ -917,8 +949,10 @@
+@@ -877,8 +946,12 @@
+ }
+ int32_t h_draw_identity() { return 1; }
+ #endif
+-int32_t h_slippi(uint8_t, const uint8_t*, uint32_t, uint8_t*, uint32_t, uint32_t* size) {
++int32_t h_slippi(uint8_t command, const uint8_t* payload, uint32_t payload_size, uint8_t* response, uint32_t capacity, uint32_t* size) {
+   if (size) *size = 0;
++  if (mu_frontend_command) {
++    const int32_t result = mu_frontend_command(command, payload, payload_size, response, capacity, size);
++    if (result != INT32_MIN) return result;
++  }
+   return -1;
+ }
+ void h_resim(int32_t entering) { resimulating = entering != 0; }
+@@ -917,9 +990,11 @@
    h.reset_code=h_zero_i32; h.reset_switch=h_zero_i32; h.stop=h_stop;
    h.match_override=h_match; h.rng_seed_override=h_rng; h.mark_match_start=h_match_start;
    h.native_pose_capture_enabled=h_zero_i32; h.native_owner_tracking=h_zero_i32;
 -  h.game_options=h_options; h.game_options2=h_zero_u32; h.game_options3=h_zero_u32;
 -  h.display_options=h_zero_u32; h.music_volume=h_music; h.native_draw_identity=h_zero_i32;
+-  h.mod_flags=h_zero_u32; h.slippi_command=h_slippi; h.resim_phase=h_resim;
 +  h.game_options=h_options; h.game_options2=h_options2; h.game_options3=h_options3;
 +  h.display_options=h_display_options; h.music_volume=h_music;
 +  // Left absent in the scripted runs, as before; answered in play mode.
 +  if (mu_frontend_option && mu_frontend_option(-1, nullptr)) { h.audio_options=h_audio_options; h.screen_shake_scale=h_screen_shake_scale; h.grid_color=h_grid_color; } h.native_draw_identity=h_zero_i32;
-   h.mod_flags=h_zero_u32; h.slippi_command=h_slippi; h.resim_phase=h_resim;
++  h.mod_flags=h_mod_flags; h.slippi_command=h_slippi; h.resim_phase=h_resim;
    h.hud_scales=h_hud_scales; h.vi_idle_step=h_vi_idle;
  #ifdef MELEE_LINUX_GRAPHICS
-@@ -944,6 +978,7 @@
+   h.native_pose_capture_enabled=h_pose_enabled;
+@@ -944,6 +1019,7 @@
  }
  void ax_output(const int16_t* rl, uint32_t frames) {
    ++count.audio_blocks;
@@ -94,7 +162,7 @@
  #ifdef MELEE_LINUX_SDL
    if (!audio_device || !rl || !frames) return;
    std::vector<int16_t> lr(size_t(frames) * 2);
-@@ -1002,7 +1037,10 @@
+@@ -1002,7 +1078,10 @@
  
  void log(const char* format, ...) { va_list args; va_start(args, format); write_log(format, args); va_end(args); }
  void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink=fifo; retrace_sink=retrace; video_user=user; }
@@ -106,7 +174,7 @@
  bool reserve_memory(std::string* error) {
    if (memory_reserved) return true;
  #ifdef MU_FOREIGN_ELF
-@@ -1314,6 +1352,7 @@
+@@ -1314,6 +1393,7 @@
  void log(const char* format, ...) {
    char line[4096];
    va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);

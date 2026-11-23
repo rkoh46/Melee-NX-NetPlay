@@ -44,9 +44,12 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/play_main.cpp` | `--play`: starts the host without a script, a reference or a frame limit. |
 | `src/play_io.cpp` | Controllers and sound: connects the app's own `input_sdl.cpp`, `gc_adapter_usbhs.cpp` and `audio_sdl.cpp` (compiled unchanged) to the host's pad and mixer hooks; `--auto-vs`; the way out (L + R + Start); keeps log lines in memory while the game runs. |
 | `src/settings.cpp` | Play mode's `settings.ini` and the option words the game asks its host for. |
+| `src/mods.cpp` | Mod profiles: what a patched disc image changes is served over the retail disc's files; the 20XX Hack Pack and 20XX TE; the mod commands of `slippi_command`; a memory card folder per profile. |
+| `src/slippi_files.cpp` | Slippi's menu files (`slippi_menus 1`), built from this repository's vendored patches and the player's disc. |
 | `src/shim/` | The few host functions the decoder and the app's input and sound sources need, on melee-unlocked's host services. |
 | `src/switch_glue.cpp` | Two symbols the app's Switch layer expects. |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
+| `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
 | `CMakeLists.txt`, `build.sh` | Three variants: `null` (Linux, no graphics device), `linux` (Aurora on Vulkan, test build), `switch` (NRO). |
 | `linux-gfx.Dockerfile`, `DawnLinux.cmake`, `test-linux.sh` | The off-console picture test: Xvfb and Mesa's software Vulkan driver. |
@@ -65,9 +68,9 @@ downloaded here. Everything is written to `build/native-engine-gfx/`; `build/nat
 ./build.sh image && ./build.sh deps && ./build.sh linux    # out/mu-native-gfx-linux
 ```
 
-`./build.sh sync` takes the runner and `../patches` from commit `ae1612e`, the last state this frontend links
-against: the runner has since grown a netplay bridge with its own libraries. `MU_SYNC_REF=HEAD` or `=worktree`
-tries a newer one. It prints what it took and keeps the line in `build/native-engine-gfx/sync-state.txt`.
+`./build.sh sync` takes the runner and `../patches` from commit `8428269` (the netplay host as its own module),
+and from `build/native-engine/` the game image, its snapshot exclusion list and the netplay objects `../build.sh`
+made. `MU_SYNC_REF=HEAD` or `=worktree` tries a newer runner. It prints what it took and keeps the line in `build/native-engine-gfx/sync-state.txt`.
 
 ## Run
 
@@ -199,10 +202,48 @@ the game runs as upstream runs it: its built-in code set on (UCF and the rest), 
 
 What upstream sends only outside network play (the offline community codes, the hitboxes, the 2D camera, faster
 sound effects, the CPU options) is sent here because play mode has no network session, replay or tournament.
-Left for later, because they need more than a word: the 20XX TE feature bits (upstream gives them only with a TE
-save loaded), the Training Lab bits, shield colours, True 16:9 (a renderer feature), hiding the scenery behind the
-grid and the Arcade look's plain backdrop and combo counter (renderer and overlay), the input display and
-frame-data overlay, anything from a mod disc (20XX Hack Pack, TM-CE, m-ex).
+Left for later, because they need more than a word: the Training Lab bits, shield colours, True 16:9 (a renderer
+feature), hiding the scenery behind the grid and the Arcade look's plain backdrop and combo counter (renderer and
+overlay), the input display and frame-data overlay, m-ex discs, Training Mode CE, Akaneia, rogueMelee and Melee
+Maker (their layers load as files; what the host does for each beyond that is not written).
+
+### Mod profiles
+
+`mod_profile NAME` in settings.ini loads the layers of `<out>/mods/Profiles/NAME.ini` (upstream's form: `iso = file`
+and `gci = file` lines in load order, paths relative to `<out>/mods`) or, without that file, every disc image and
+then every save in the folder `<out>/mods/NAME/`. Several names separated by commas load one after the other. On
+the console `<out>` is `sdmc:/switch/mu-native`.
+
+- A disc image must be a patched NTSC 1.02 disc. It is compared with the retail disc file by file; only files that
+  differ or are new are served, read from the image on demand. Later layers win. Nothing from a mod's `main.dol`
+  runs. The comparison reads both discs whole (minutes from an SD card, the first time); its result is kept in
+  `<out>/mods-cache/` while the image's size and time stamp stay the same.
+- The 20XX Hack Pack is recognised by its own files. Its menu files and the files that carry its code are not
+  served, and the game's native rewrites of its features get its data through command 0xFA (upstream's
+  `hackpack_source.h`, compiled from the fetched tree).
+- The 20XX Tournament Edition save is recognised by the SHA-256 of the released `20XXTE-v2d-r4-USA.gci` (upstream
+  also accepts a copy that has been played on). It is not put on the memory card and none of it is loaded; it
+  switches the game's native TE features on (`mod_te_enabled 0` keeps them off). Any other save is copied to the
+  profile's memory card once.
+- A profile has its own memory card folder, `<out>/card-NAME`.
+- What the game changes from its own menus (TE's settings, the pack's choices) is written to `settings.ini.state`
+  and read back at the next start.
+- An online mode that plays the retail game gets the retail files back (command 0xF5), as upstream. Netplay in this
+  program does not read settings.ini or profiles at all (below).
+
+`slippi_menus 1` serves Slippi 3.7.0's menu files (ten of the disc's files with Slippi's patch applied, plus
+`GameSetup_gui.dat` and `SlippiCSS_gui.dat` with their links into the disc resolved) and sets the game's
+Slippi-menus bit: the game then starts on its Online Play page. Nothing is sent anywhere by this.
+
+### Netplay
+
+`--play --net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT` (and the runner's other netplay options: `--net-delay`,
+`--track-remap`, `--net-inputs`, `--online ...` in a services build) runs the netplay host of `../runner/net_host.*`
+under play mode: picture, the app's controller input and sound, with the engine's own online code and this
+repository's Slippi netplay. The pads are play mode's unless `--net-inputs` is given. Such a run plays the retail
+game with the runner's seed and clock and reads neither settings.ini nor a mod profile; the host paces it. On the
+console the stream is then decoded inside the game's flush (as `--gfx-sync`), because the rollback snapshots remap
+pages of the game's memory that the decoder thread would be reading.
 
 ## Verified
 
@@ -235,6 +276,22 @@ Play mode on Linux (runner and patches of commit `ae1612e`, game image `6be32fe9
 | Sound device path | SDL's dummy device only; it consumes slower than real time, so its drops say nothing about the console |
 | Scripted mode after these changes | digest identical, with and without a picture: the option hooks answer only in play mode |
 
+Mods, Slippi menus and netplay on Linux (runner and patches of commit `8428269`, game image `6be32fe9...`):
+
+| Check | Result |
+|---|---|
+| `mod_profile hackpack` (20XX Hack Pack 5.0.2 image) | 786 files differ, 59 replaced and 717 added, its menu and code files not served; the game logs the pack's music table, `music 34 -> 01.hps`, `stage swap table: 1488 bytes`, `pick: stage 9 page 1`, `match on stage 9: state 00008000`; screenshots show the pack's stage select (its page indicator and legal-stage borders) and a match on its files; the second start uses the kept comparison |
+| `mod_profile te` (the 20XX TE save) | recognised; `play: options 00000010`; the game logs `[20xx] options 00000010`; Tournament Melee opens the native 20XX TE SETTINGS screen (screenshot, drawn through the lines-and-points patch); two switches set there arrive through command 0xF8 (`te_options D0` in `settings.ini.state`) |
+| `mod_profile hackpack,te` | both load; TE's bit and the pack's files together |
+| `slippi_menus 1` | 10 files replaced by Slippi's copies, 2 added; `play: options 00000008`; the game starts on the Online Play page (screenshot: 1-P Mode > Online Play, "Log-in") |
+| Netplay: two `--play --net` instances in one container over loopback, each with a picture and its own controller script | 2670 match frames in common, no differing shown state, final state identical on both sides, 6 and 12 rollbacks, no desync message; `test-net-linux.sh` |
+| Cost of options (`--profile`, match frames, unpaced): default 0.504 ms; widescreen 0.504; hitboxes 0.521; 20XX CPUs 0.540; HUD options 0.513; all of the console test's 0.543 | the options are not what makes a play-mode match frame cost more than the scripted run's (0.38 ms here): that is the match itself (two fighters fighting, one of them a CPU, against two that stand still) and upstream's built-in code set |
+| Scripted mode after these changes | digest identical, with and without a picture |
+
+Not looked at: the Hack Pack's debug menu, hidden characters, playlists and stage variants beyond the first pick;
+TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
+holds beyond what is listed.
+
 On the console, by the session that ran it:
 
 - First build (decoder inside the flush, no thread placement, cold cache): picture correct, digest identical, too
@@ -260,8 +317,12 @@ why is not known. The same costume's portrait on the character select screen is 
 
 ## Not verified
 
-- On the console: the new `--auto-vs`, `settings.ini` and every option in it, whether the sound refill removes the
-  underruns that follow a loading stall, sound during a match, the GameCube adapter and rumble, a long session.
+- On the console: mod profiles (the disc comparison from the SD card, reading mod files during play), the Hack Pack,
+  20XX TE and its settings screen (lines and points on NVK), Slippi's menu files, netplay in play mode (the netplay
+  object linked with Clang-built code, sockets, write tracking beside the renderer), the GameCube adapter and
+  rumble, a long session.
+- Console results so far: `--auto-vs` with options reached a match (16:9, big HUD, PAL stock icons, tags); sound had
+  no new underruns during the match; the simulation thread's work was 6.9 ms per match frame at 1774 MHz.
 - A real gamepad on Linux: the test drove the app's input code with a script, below its SDL and Aurora PAD part.
 - Input to picture: the program measures up to the render thread's hand-off; Aurora's render worker, the swap
   chain and the display are after that.

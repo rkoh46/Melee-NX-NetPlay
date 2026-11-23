@@ -54,11 +54,13 @@ int main(int argc, char** argv) {
     else {
       if (arg == "--out" && i + 1 < argc) fe::options.out_dir = argv[i + 1];
       if (arg == "--no-overclock") fe::options.overclock = false;
+      if (arg == "--profile") fe::options.profile = true;
       if (arg == "--iso" && i + 1 < argc) fe::options.iso = argv[i + 1];
       if (arg == "--frames" && i + 1 < argc) fe::options.frames = unsigned(std::strtoul(argv[i + 1], nullptr, 0));
       rest.push_back(argv[i]);
     }
   }
+  for (size_t i = 1; i < rest.size(); ++i) fe::options.rest.push_back(rest[i]);
   rest.push_back(nullptr);
 #ifdef __SWITCH__
   if (fe::options.play && fe::options.iso.empty()) fe::options.iso = "sdmc:/switch/melee-nx-netplay/GALE01.iso";   // the runner's default

@@ -27,6 +27,7 @@
 #include "gx_core.h"
 #include "gx_aurora_bridge.h"
 #include "frame_queue.h"
+#include "hostprof.h"                // the runner's host service profiler (--profile)
 #if MU_FE_AURORA
 #include "gx_aurora.h"
 #include <aurora/aurora.h>
@@ -178,6 +179,7 @@ struct State {
   bool have_deadline = false;
   uint32_t last_match_frame = 0;
   uint64_t last_decode = 0, last_snapshot = 0, last_record = 0, last_handoff = 0;
+  hostprof::Sample prof_first{}, prof_last{}; uint64_t prof_frames = 0;   // --profile: totals at the first and the last match frame
   uint64_t prev_pad_ns = 0;      // the controller read that the frame now being simulated uses
   Series work_match, work_all, feed_match, wait_match, wait_all, decode_match, snapshot_match, record_match, handoff_match, pad_match, decode_all, padcost_all, padcost_match;
 #ifdef __SWITCH__
@@ -265,6 +267,11 @@ void retrace_sink(void*) {
     st.next_deadline += std::chrono::microseconds(16667);
     if (st.next_deadline > now) std::this_thread::sleep_until(st.next_deadline);
     else if (now - st.next_deadline > std::chrono::milliseconds(34)) st.next_deadline = now;
+  }
+  if (hostprof::installed()) {
+    // This function runs inside a host service (the retrace): its waits are not that service's work.
+    hostprof::discount((now_ns() - entered) * hostprof::frequency() / 1000000000ull);
+    if (vs_match) { hostprof::read(&st.prof_last); if (!st.prof_frames++) st.prof_first = st.prof_last; }
   }
   st.resumed = now_ns();
   st.have_resumed = true;
@@ -527,6 +534,20 @@ void detach() {
     st.pad_match.report("picture: controllers read -> the frame simulated from them decoded (one 60 Hz period when paced, plus the decoder wait)");
     say("picture: input to picture is the three lines \"controllers read -> decoded\", \"waited in the queue\" and \"render thread: all work\" added up, "
         "plus Aurora's render worker and the display's own wait for its next refresh, which are not measured here");
+  }
+  if (st.prof_frames > 1) {
+    // Where the simulation thread's time goes in a match frame: each host service the game calls (exclusive
+    // time, the frontend's sinks included in theirs) and each game function the host calls.
+    const double frames = double(st.prof_frames - 1), tick_ms = 1000.0 / double(hostprof::frequency());
+    say("picture: profile of the simulation thread over %llu match frames (calls and ms per frame; the game's own code is the rest of the work line above):", (unsigned long long)st.prof_frames - 1);
+    double services = 0;
+    for (int i = 0; i < hostprof::kSlots; ++i) {
+      const double calls = double(st.prof_last.calls[i] - st.prof_first.calls[i]) / frames, ms_frame = double(st.prof_last.ticks[i] - st.prof_first.ticks[i]) * tick_ms / frames;
+      if (ms_frame < 0.005) continue;
+      say("picture:   %-34s %9.2f calls %8.3f ms", hostprof::name(i) ? hostprof::name(i) : "?", calls, ms_frame);
+      if (hostprof::name(i) && !std::strncmp(hostprof::name(i), "host ", 5)) services += ms_frame;
+    }
+    say("picture:   host services together %.3f ms", services);
   }
   say("picture: all frames (menus, loading, match):");
   st.work_all.report("picture: simulation thread: work", true);
