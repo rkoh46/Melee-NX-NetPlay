@@ -14,6 +14,8 @@
 #include "native_savestate.h"
 #include "mu_elf_bridge.h"
 #include "fixedmap.h"
+#include "rollback.h"
+#include "dirtytrack.h"
 
 #include <algorithm>
 #include <chrono>
@@ -22,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <dirent.h>
 #include <pthread.h>
@@ -57,6 +60,11 @@ struct Options {
   uint32_t frames = 9000;
   uint32_t snapshot_at = 0;         // VS match frame at which the snapshot is timed; 0 = off
   bool print_digest = false;
+  uint32_t rollback_every = 0;      // rollback test: every this many VS match frames...
+  uint32_t rollback_depth = 7;      // ...go back this many frames and simulate them again
+  bool rollback_keep_clock = false; // do not put the console clock back with the state (diagnosis)
+  bool rollback_verify = false;     // also prove that no write escaped the tracking (slow: compares the whole state)
+  std::string dirty_dump;           // measurement: write which 4 KiB pages of the snapshot ranges each VS match frame changed
 };
 
 FILE* run_log = nullptr;
@@ -157,7 +165,68 @@ struct Run {
   // Comparison with the reference.
   uint32_t first_diff = 0, diff_in_match = 0, diff_outside = 0, compared = 0;
   std::string diff_ours, diff_reference;
+  // Rollback test (--rollback-test).
+  std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> reference_by_frame;   // VS match frame -> row text after the retrace column
+  bool rb_failed = false;
+  uint32_t rb_next = 0, rb_pending = 0, rb_count = 0, rb_compared = 0, rb_different = 0, rb_first_different = 0;
+  double rb_total = 0;
+  uint64_t rb_last_faults = 0;
+  uint32_t rb_last_disc_retrace = 0;
+  size_t rb_missed = 0, rb_checks = 0;
+  std::vector<float> save_ms, restore_ms, rollback_ms;
+  std::vector<uint32_t> faults_per_frame;
 } run_state;
+
+// Measurement only (--dirty-dump FILE): exact per-frame dirty pages, found by comparing every page
+// of the snapshot ranges with a copy from the previous frame. Record: u32 match_frame, u32 count,
+// count * u32 page address. A header record (match_frame 0xFFFFFFFF) lists the spans as address,size pairs.
+struct DirtyDump {
+  FILE* out = nullptr;
+  std::vector<native_savestate::Span> spans;
+  std::vector<std::vector<uint8_t>> shadow;
+  std::vector<uint32_t> pages;
+} dirty;
+std::vector<native_savestate::Span> snapshot_spans() {
+  const auto& game = linux_host::game_api();
+  std::vector<MuStateRegion> ranges(game.snapshot_ranges(nullptr, 0));
+  ranges.resize(game.snapshot_ranges(ranges.data(), uint32_t(ranges.size())));
+  std::vector<MuStateRegion> exclusions(game.state_exclusions(nullptr, 0));
+  exclusions.resize(game.state_exclusions(exclusions.data(), uint32_t(exclusions.size())));
+  return native_savestate::subtract(ranges, exclusions);
+}
+void dirty_frame(uint32_t match_frame) {
+  auto& d = dirty;
+  if (d.spans.empty()) {
+    d.spans = snapshot_spans();
+    std::vector<uint32_t> header{0xFFFFFFFFu, uint32_t(d.spans.size() * 2)};
+    for (const auto& span : d.spans) {
+      d.shadow.emplace_back(span.address, span.address + span.size);
+      header.push_back(uint32_t(uintptr_t(span.address))); header.push_back(span.size);
+    }
+    std::fwrite(header.data(), 4, header.size(), d.out);
+    const auto& game = linux_host::game_api();
+    std::vector<MuStateRegion> ranges(game.snapshot_ranges(nullptr, 0));
+    ranges.resize(game.snapshot_ranges(ranges.data(), uint32_t(ranges.size())));
+    for (const auto& range : ranges) std::printf("dirty-dump: snapshot range %08lx +%u\n", (unsigned long)uintptr_t(range.address), range.size);
+    return;
+  }
+  d.pages.clear();
+  for (size_t i = 0; i < d.spans.size(); ++i) {
+    const uintptr_t begin = uintptr_t(d.spans[i].address), end = begin + d.spans[i].size;
+    for (uintptr_t at = begin; at < end;) {
+      const uintptr_t next = std::min(end, (at + 4096) & ~uintptr_t(4095));
+      uint8_t* copy = d.shadow[i].data() + (at - begin);
+      if (std::memcmp(copy, reinterpret_cast<void*>(at), next - at)) {
+        std::memcpy(copy, reinterpret_cast<void*>(at), next - at);
+        d.pages.push_back(uint32_t(at & ~uintptr_t(4095)));
+      }
+      at = next;
+    }
+  }
+  const uint32_t head[2] = {match_frame, uint32_t(d.pages.size())};
+  std::fwrite(head, 4, 2, d.out);
+  std::fwrite(d.pages.data(), 4, d.pages.size(), d.out);
+}
 
 double ms_since(Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
 
@@ -186,6 +255,78 @@ void time_snapshot(uint32_t match_frame) {
   say("snapshot: state %s by save and restore", unchanged ? "unchanged" : "CHANGED (this run's digest is not valid)");
 }
 
+// Rollback test: save every VS match frame; every `rollback_every` frames restore the state of
+// `rollback_depth` frames earlier and let the game simulate those frames again (the scripted inputs
+// depend only on the match frame, so they repeat). Every row, first pass or repeated, is compared
+// with the reference row of the same match frame. Returns the match frame the game is at afterwards.
+uint32_t rollback_step(uint32_t frame, double frame_ms, const char* row, int length, bool disc_quiet) {
+  auto& r = run_state;
+  const auto& o = r.options;
+  if (!mu_rollback::active()) {
+    if (r.rb_failed) return frame;
+    std::string error;
+    if (!mu_rollback::begin(snapshot_spans(), int(o.rollback_depth) + 2, o.rollback_verify, &error)) {
+      r.rb_failed = true; say("rollback: cannot start tracking: %s", error.c_str()); return frame;
+    }
+    r.rb_next = frame + 120;
+    r.rb_last_faults = dirtytrack_faults();
+    say("rollback: tracking %zu pages (%.1f MiB) from VS match frame %u; every %u frames go back %u", mu_rollback::tracked_pages(),
+        mu_rollback::tracked_pages() / 256.0, frame, o.rollback_every, o.rollback_depth);
+  }
+  // Exactness: this frame's state against the reference state of the same match frame.
+  const char* comma = static_cast<const char*>(std::memchr(row, ',', size_t(length)));
+  const auto expected = r.reference_by_frame.find(frame);
+  if (comma && expected != r.reference_by_frame.end()) {
+    ++r.rb_compared;
+    const size_t mine = size_t(row + length - 1 - (comma + 1));      // without the newline
+    if (mine != expected->second.second || std::memcmp(comma + 1, r.reference.text.data() + expected->second.first, mine)) {
+      if (!r.rb_different++) {
+        r.rb_first_different = frame;
+        say("rollback: DIVERGED at VS match frame %u (%s), %u rollbacks so far, %s", frame,
+            first_difference("0," + std::string(comma + 1, mine), "0," + r.reference.text.substr(expected->second.first, expected->second.second)).c_str(),
+            r.rb_count, r.rb_pending ? "in a repeated frame" : "not in a repeated frame");
+      }
+    }
+  }
+  const uint64_t faults = dirtytrack_faults();
+  r.faults_per_frame.push_back(uint32_t(faults - r.rb_last_faults));
+  r.rb_last_faults = faults;
+
+  auto t = Clock::now();
+  mu_rollback::save(int32_t(frame));
+  const double save = ms_since(t);
+  r.save_ms.push_back(float(save));
+  if (r.rb_pending) {
+    r.rb_total += frame_ms + save;
+    if (--r.rb_pending == 0) r.rollback_ms.push_back(float(r.rb_total));
+    return frame;
+  }
+  // Not across a disc read: this host lets the game stream its music from the disc, the stream's
+  // position is audio state (outside the snapshot, as designed) but its pending read requests are
+  // not, so restoring over one leaves the two out of step. melee-unlocked's full host plays the
+  // music itself and has no such reads during a match.
+  if (frame < r.rb_next || frame <= o.rollback_depth || !disc_quiet || !mu_rollback::has(int32_t(frame - o.rollback_depth))) return frame;
+  if (o.rollback_verify) { r.rb_missed += mu_rollback::missed_writes(); ++r.rb_checks; }
+  t = Clock::now();
+  mu_rollback::restore(int32_t(frame - o.rollback_depth));
+  const double restore = ms_since(t);
+  if (!o.rollback_keep_clock) linux_host::rewind_frames(o.rollback_depth);
+  r.restore_ms.push_back(float(restore));
+  r.rb_total = restore;
+  r.rb_pending = o.rollback_depth + 1;     // the repeated frames and the next new one make up one real rollback frame
+  r.rb_next = frame + o.rollback_every;
+  ++r.rb_count;
+  return frame - o.rollback_depth;
+}
+
+void report_series(const char* label, std::vector<float> values) {
+  if (values.empty()) { say("%s: none", label); return; }
+  double sum = 0; for (float v : values) sum += v;
+  std::sort(values.begin(), values.end());
+  say("%s: %zu, avg %.3f ms, median %.3f, p99 %.3f, worst %.3f", label, values.size(), sum / values.size(), values[values.size() / 2],
+      values[size_t(values.size() * 0.99)], values.back());
+}
+
 // Called by the host once per retrace, after the game has simulated the frame.
 void observe(const MuStatePod& state, const linux_host::Counters& counters, void*) {
   auto& r = run_state;
@@ -204,8 +345,15 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
   if (r.options.print_digest) { std::fwrite(row, 1, size_t(n), stdout); }
   note_scene(&r.scenes, counters.retraces, state.scene_major, state.scene);
 
+  const double frame_ms = r.have_last ? std::chrono::duration<double, std::milli>(now - r.last).count() : 0;
+  uint32_t game_frame = state.match_frame;        // differs from state.match_frame right after a rollback
+  if (r.options.rollback_every) {
+    if (counters.disc_reads != r.last_disc_reads) r.rb_last_disc_retrace = counters.retraces;
+    if (vs_match) game_frame = rollback_step(state.match_frame, frame_ms, row, n, counters.retraces - r.rb_last_disc_retrace > r.options.rollback_depth + 2);
+    else if (mu_rollback::active() && !(state.scene_major == 2 && state.scene == 2)) mu_rollback::end();   // the match is over
+  }
   const size_t index = counters.retraces - 1;
-  if (r.reference.loaded() && index < r.reference.rows()) {
+  if (!r.options.rollback_every && r.reference.loaded() && index < r.reference.rows()) {
     ++r.compared;
     const uint32_t begin = r.reference.row[index], length = r.reference.row[index + 1] - begin;
     if (length != uint32_t(n) || std::memcmp(r.reference.text.data() + begin, row, size_t(n)) != 0) {
@@ -219,6 +367,7 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
     }
   }
 
+  if (vs_match && dirty.out) dirty_frame(state.match_frame);
   if (vs_match) {
     if (!r.match_first) r.match_first = counters.retraces;
     r.match_last = counters.retraces;
@@ -228,11 +377,11 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
     }
   }
   if (r.have_last)
-    r.frames.push_back({float(std::chrono::duration<double, std::milli>(now - r.last).count()), vs_match, fighting,
+    r.frames.push_back({float(frame_ms), vs_match, fighting,
                         counters.disc_reads != r.last_disc_reads, false});
   if (counters.retraces % 600 == 0)
     say("retrace %u: scene %u/%u, match frame %u", counters.retraces, state.scene_major, state.scene, state.match_frame);
-  r.last_match_frame = state.match_frame;
+  r.last_match_frame = game_frame;
   r.last_disc_reads = counters.disc_reads;
   r.last = Clock::now();   // the digest text, the comparison, the snapshot timing and the progress line are not part of the next frame
   r.have_last = true;
@@ -334,6 +483,24 @@ int simulate(const Options& options) {
   const auto t0 = Clock::now();
   if (!linux_host::initialize(config, &error)) { say("cannot start: %s", error.c_str()); linux_host::shutdown(); return 1; }
   say("started in %.0f ms; image at 0x82800000 (%u bytes)", ms_since(t0), linux_host::game_image_size());
+  if (options.rollback_every) {
+    // The reference state of each VS match frame, for comparing frames that are simulated again.
+    uint32_t previous = 0;
+    for (size_t i = 0; i < r.reference.rows(); ++i) {
+      unsigned retrace = 0, major = 0, minor = 0, frame = 0;
+      const char* text = r.reference.text.c_str() + r.reference.row[i];
+      std::sscanf(text, "%u,%u,%u,%u", &retrace, &major, &minor, &frame);
+      if (major == 2 && minor == 2 && frame && frame != previous) {
+        const char* comma = std::strchr(text, ',');
+        const uint32_t begin = uint32_t(comma + 1 - r.reference.text.c_str());
+        r.reference_by_frame[frame] = {begin, r.reference.row[i + 1] - 1 - begin};
+      }
+      previous = frame;
+    }
+    say("rollback test: every %u VS match frames go back %u frames%s; %zu reference frames", options.rollback_every, options.rollback_depth,
+        options.rollback_verify ? ", verifying the write tracking" : "", r.reference_by_frame.size());
+  }
+  if (!options.dirty_dump.empty()) dirty.out = std::fopen(options.dirty_dump.c_str(), "wb");
   linux_host::set_frame_observer(observe, nullptr);
   const auto t1 = Clock::now();
   const int result = linux_host::run();
@@ -342,6 +509,10 @@ int simulate(const Options& options) {
   say("stopped with code %d after %u retraces in %.1f s: %llu disc reads, %llu FIFO bytes, %llu audio blocks", result, stats.retraces,
       total / 1000, (unsigned long long)stats.disc_reads, (unsigned long long)stats.fifo_bytes, (unsigned long long)stats.audio_blocks);
   linux_host::set_frame_observer(nullptr, nullptr);
+  if (dirty.out) { std::fclose(dirty.out); dirty.out = nullptr; }
+  const size_t hot_at_end = mu_rollback::hot_pages();
+  const bool overflowed = mu_rollback::overflowed();
+  mu_rollback::end();          // pages writable again before they are unmapped
   linux_host::shutdown();      // unloads the image and unmaps the three fixed ranges
 
   // Where the run went: retrace ranges per scene (major/minor). 2/2 is the VS match.
@@ -367,11 +538,33 @@ int simulate(const Options& options) {
   say("each frame is the whole retrace on one core: simulation, the GX command stream (discarded), audio mixing (discarded)");
   if (options.snapshot_at && !r.snapshot_done) say("snapshot: NOT TIMED, the VS match never reached frame %u", options.snapshot_at);
 
+  if (options.rollback_every) {
+    say("rollback: %u rollbacks of %u frames; hot pages at the end %zu (%.2f MiB) of %zu tracked; write faults %llu%s", r.rb_count,
+        options.rollback_depth, hot_at_end, hot_at_end / 256.0, mu_rollback::tracked_pages(), (unsigned long long)dirtytrack_faults(),
+        overflowed ? "; HOT STORE OVERFLOWED (results invalid)" : "");
+    if (!r.faults_per_frame.empty()) {
+      std::vector<uint32_t> faults(r.faults_per_frame.begin() + 1, r.faults_per_frame.end());
+      std::sort(faults.begin(), faults.end());
+      uint64_t sum = 0; for (uint32_t f : faults) sum += f;
+      if (!faults.empty())
+        say("rollback: write faults per frame after the first: avg %.2f, p99 %u, worst %u (they are inside the frame times below)",
+            double(sum) / faults.size(), faults[size_t(faults.size() * 0.99)], faults.back());
+    }
+    report_series("rollback: save, per frame", r.save_ms);
+    report_series("rollback: restore", r.restore_ms);
+    char label[96];
+    std::snprintf(label, sizeof label, "rollback: whole rollback frame (restore + %u repeated frames + 1 new, with saves)", options.rollback_depth);
+    report_series(label, r.rollback_ms);
+    if (options.rollback_verify) say("rollback: tracking checked %zu times, writes that escaped it: %zu%s", r.rb_checks, r.rb_missed, r.rb_missed ? " (NOT EXACT)" : "");
+    if (r.rb_different) say("rollback exactness: DIFFERENT in %u of %u VS match frame states, first at match frame %u", r.rb_different, r.rb_compared, r.rb_first_different);
+    else say("rollback exactness: IDENTICAL, %u VS match frame states (first pass and repeated) equal the x86-64 reference", r.rb_compared);
+  }
   const uint64_t hash = fnv1a64(r.digest);
   const std::string csv = options.out_dir + "/digest-" + (options.script.find('/') == std::string::npos ? options.script : std::string("custom")) + ".csv";
   say("digest: %u rows, fnv1a64 %016llx, %s %s", stats.retraces, (unsigned long long)hash,
       write_file(csv, r.digest.data(), r.digest.size()) ? "written to" : "COULD NOT WRITE", csv.c_str());
-  if (r.reference.loaded()) {
+  if (options.rollback_every) say("digest: rows after the first rollback are shifted by the repeated frames; exactness is the rollback line above");
+  else if (r.reference.loaded()) {
     if (!r.first_diff)
       say("digest vs x86-64 AVX2 reference: IDENTICAL for all %u rows compared%s", r.compared,
           r.compared < stats.retraces ? " (the reference is shorter than this run)" : "");
@@ -395,7 +588,7 @@ void* simulate_thread(void* user) {
 
 void usage() {
   say("mu-native [--iso PATH] [--script NAME|PATH] [--frames N] [--out DIR] [--game melee_game.so]");
-  say("          [--snapshot-at VS_MATCH_FRAME] [--print-digest]");
+  say("          [--snapshot-at VS_MATCH_FRAME] [--print-digest] [--rollback-test EVERY[:DEPTH]] [--rollback-verify] [--track-remap]");
   std::string names;
   for (size_t i = 0; i < mu_embedded_script_count; ++i) names += std::string(" ") + mu_embedded_scripts[i].name;
   say("embedded scripts:%s", names.c_str());
@@ -420,6 +613,17 @@ int main(int argc, char** argv) {
     else if (arg == "--game") options.game = next();
     else if (arg == "--snapshot-at") options.snapshot_at = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
     else if (arg == "--print-digest") options.print_digest = true;
+    else if (arg == "--dirty-dump") options.dirty_dump = next();
+    else if (arg == "--rollback-test") {            // EVERY[:DEPTH], for example 30:7
+      const std::string value = next();
+      options.rollback_every = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
+      const size_t colon = value.find(':');
+      if (colon != std::string::npos) options.rollback_depth = uint32_t(std::strtoul(value.c_str() + colon + 1, nullptr, 0));
+      if (!options.rollback_depth || options.rollback_depth > 30 || options.rollback_every <= options.rollback_depth + 1) help = true;
+    }
+    else if (arg == "--rollback-verify") options.rollback_verify = true;
+    else if (arg == "--rollback-keep-clock") options.rollback_keep_clock = true;
+    else if (arg == "--track-remap") dirtytrack_set_method(DIRTYTRACK_REMAP);   // Horizon: the other way to make pages read-only (dirtytrack.h)
     else help = true;
   }
   mkdir(options.out_dir.c_str(), 0777);

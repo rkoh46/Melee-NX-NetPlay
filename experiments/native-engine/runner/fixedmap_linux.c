@@ -43,6 +43,8 @@ int fixedmap_protect(uintptr_t addr, size_t size, int prot) {
   return 0;
 }
 
+void* fixedmap_backing(uintptr_t addr) { (void)addr; return NULL; }
+
 void fixedmap_release(uintptr_t addr) {
   for (int i = 0; i < MAX_RANGES; ++i) if (g_ranges[i].size && g_ranges[i].addr == addr) {
     munmap((void*)g_ranges[i].addr, g_ranges[i].size);

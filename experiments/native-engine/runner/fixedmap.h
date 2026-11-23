@@ -25,6 +25,10 @@ int fixedmap_protect(uintptr_t addr, size_t size, int prot);
 // Unmaps one committed range (by its start address) or all of them. Safe to call twice.
 void fixedmap_release(uintptr_t addr);
 void fixedmap_release_all(void);
+// The staging pages behind a committed address (Horizon: the heap pages that are mapped there; they
+// are needed to unmap or remap part of a range). NULL when the address is not in a committed range
+// or the back end has no such thing.
+void* fixedmap_backing(uintptr_t addr);
 // Text of the last failure, for the log.
 const char* fixedmap_error(void);
 

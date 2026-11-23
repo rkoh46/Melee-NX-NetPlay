@@ -59,7 +59,7 @@ nxlink -s -a <console ip> build/native-engine/out/mu-native.nro --args "--script
 
 Arguments (all optional): `--iso PATH`, `--script NAME|PATH`, `--frames N`, `--out DIR`,
 `--snapshot-at VS_MATCH_FRAME` (times a full save and restore at that frame; off by default; it does not change the digest), `--print-digest` (also stream the CSV rows),
-`--game PATH` (load another image instead of the embedded one). Embedded scripts: `parity_vs_onett`
+`--game PATH` (load another image instead of the embedded one). Rollback: `--rollback-test EVERY:DEPTH`, `--rollback-verify` (see below). Embedded scripts: `parity_vs_onett`
 (2 players, Onett, items, 7200-frame match), `vs4_busy` (4 players, random inputs), `parity_vs_items_off`,
 `parity_lcancel`, the other `parity_*` scripts, and `native_vs_ko` (never reaches a match on v1.0.5).
 
@@ -109,8 +109,67 @@ digest equalled a Linux run with the save forced to fail. The save is written wi
 - Other stages, characters and modes; anything online; a picture, sound output or real controllers.
 - A rollback snapshot that fits a frame: the full copy above does not.
 
+## Rollback snapshot (hot pages)
+
+The state a rollback saves is 44.8 MiB (all of main memory plus the image's writable data); one full copy takes
+14 ms on the console. Measured on Linux (`--dirty-dump`, `tools/dirty_stats.py`): a VS match frame changes 128
+(2 players) to 209 (4 players) of its 11,499 pages in the median, 171 to 263 at most, and a whole match touches
+250 to 445 pages (1.0 to 1.7 MiB). After the first second 82 to 93% of frames write no page that the previous 60
+frames did not, but new pages keep appearing (114 to 220 over a match), so a fixed list would not be exact.
+
+Design (`runner/rollback.*`, `runner/dirtytrack*`): every page of the state starts read-only. The first write to a
+page faults; the handler keeps the page's bytes as they were and puts the page on the hot list, and the page stays
+writable from then on. A save copies the hot pages; a restore copies them back (from the slot, or from the kept
+bytes for pages that became hot after that save). Before a disc read the host makes the destination writable,
+because the kernel fills that buffer and nothing would fault.
+
+`--rollback-test EVERY:DEPTH` saves every VS match frame and, every EVERY frames, restores the state of DEPTH
+frames earlier (and the console clock with it) and lets the game simulate those frames again. Every state, first
+pass or repeated, is compared with the x86-64 reference state of the same match frame. `--rollback-verify`
+also proves that no write escaped the tracking (it compares the whole state: slow, use for exactness only).
+On Linux: IDENTICAL for `parity_vs_onett`, `vs4_busy`, `parity_vs_items_off` and `parity_lcancel`, with 234 to 574
+rollbacks each and no escaped writes.
+
+Caveats found on the way:
+- The simulation depends on the console clock: restoring the state without the clock diverges (items on).
+- This host lets the game stream its music from the disc; the test does not roll back across such a read. The
+  full melee-unlocked host plays music itself and has no disc reads in a match.
+- The test restores from outside, at the end of a retrace. The real engine's rollback is driven by the game
+  inside one frame (`resim` in the host interface); wiring that up is not part of this experiment.
+
+Horizon specifics, from the kernel source (Atmosphere's mesosphere) and the first probe run:
+- `svcSetProcessMemoryPermission` cannot make these pages read-only once they have been writable (it only
+  accepts pages in a code state; rc 0xd401 on the console). `svcSetMemoryPermission` accepts any reprotectable
+  state, which they are in, both ways: that is what `dirtytrack_horizon.c` uses. `--track-remap` selects the
+  alternative (unmap, map again, then the process-permission call).
+- Retrying the faulting instruction takes two trips through the kernel, because `svcReturnFromException` does
+  not preserve x12-x17 if an interrupt arrives while the handler runs (`runner/dirtytrack_horizon.S` explains).
+  The runner's exception entry replaces libnx's.
+
+`faultprobe/` checks all of this on the console in one run: which protection method works and what it costs,
+how the kernel's memory blocks split and merge, the fault round trip, that every register survives 200,000
+retries, and what a file read into a read-only page does.
+
 ## Licensing
 
 Our files are GPL-3.0-or-later. melee-unlocked's host code is GPL-2.0-or-later and is compiled in from the
 fetched tree, never copied here; the patches are diffs against it. The built NRO contains the compiled game
 and must not be distributed.
+
+## Rollback on the console (2026-11-22)
+
+Write tracking by remapping (`--track-remap`): the plain `svcSetMemoryPermission` path partly failed in the
+probe, `svcSetProcessMemoryPermission` is one-way (writable pages cannot be made read-only again), and
+unmapping and mapping the range again puts it back in a state that can be protected. A write fault costs
+3.2 to 3.9 µs including the retry, and all registers survive it (204,800 faulting stores checked).
+
+| `--rollback-test 30:7 --track-remap` | `parity_vs_onett` (2 players) | `vs4_busy` (4 players) |
+|---|---|---|
+| Every state, first pass and repeated, against the x86-64 reference | identical (8838) | identical (8838) |
+| Hot pages at the end | 596 (2.33 MiB) | 898 (3.51 MiB) |
+| Save, every frame | 0.34 ms avg, 0.53 worst | 0.47 ms avg, 1.27 worst |
+| Restore | 0.25 ms avg | 0.42 ms avg |
+| Whole rollback frame (restore + 7 repeated + 1 new) | 19.9 ms avg, 22.0 worst | 34.4 ms avg, 40.4 worst |
+
+The whole rollback frame is still over 16.67 ms. Two things are not yet in this number: the runner does not
+raise the CPU clock the way the app does, and repeated frames still build the GX stream and mix audio.

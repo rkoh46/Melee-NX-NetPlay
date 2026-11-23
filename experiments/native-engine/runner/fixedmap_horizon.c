@@ -98,6 +98,13 @@ static void release(struct Range* r) {
   memset(r, 0, sizeof *r);
 }
 
+void* fixedmap_backing(uintptr_t addr) {
+  for (int i = 0; i < MAX_RANGES; ++i)
+    if (g_ranges[i].size && addr >= g_ranges[i].addr && addr - g_ranges[i].addr < g_ranges[i].size)
+      return (u8*)g_ranges[i].backing + (addr - g_ranges[i].addr);
+  return NULL;
+}
+
 void fixedmap_release(uintptr_t addr) {
   for (int i = 0; i < MAX_RANGES; ++i) if (g_ranges[i].size && g_ranges[i].addr == addr) release(&g_ranges[i]);
 }

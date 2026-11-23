@@ -21,6 +21,12 @@ extern "C" ssize_t pread(int fd, void* buffer, size_t bytes, off_t offset);
 extern "C" time_t timegm(struct tm* tm);
 #endif
 
+// Called by the host before it lets the kernel write into game memory (disc reads): pages that
+// the rollback snapshot is write-tracking are made writable first (rollback.cpp).
+extern "C" void mu_host_prewrite(void* address, size_t bytes);
+
+namespace linux_host { void rewind_frames(uint32_t frames); }   // added to the host by patches/0002 (rollback test)
+
 namespace mac_elf {
 bool reserve_window(std::string* error);
 bool activate_mem1(std::string* error);          // maps the 40 MiB main memory at 0x80000000
