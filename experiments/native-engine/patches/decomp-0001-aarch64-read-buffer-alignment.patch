@@ -1,0 +1,22 @@
+diff --git a/src/sysdolphin/baselib/synth.static.h b/src/sysdolphin/baselib/synth.static.h
+index 6b75167..6f556ac 100644
+--- a/src/sysdolphin/baselib/synth.static.h
++++ b/src/sysdolphin/baselib/synth.static.h
+@@ -83,7 +83,7 @@ static struct {
+     /* 08 */ void (*x8)(int, int);
+     /* 0C */ int xC;
+ } HSD_Synth_804C2A60[6];
+-static be_u32 hsd_SynthSFXLoadBuf[0x20 / 4];
++static be_u32 hsd_SynthSFXLoadBuf[0x20 / 4] __attribute__((aligned(32))); /* aarch64: x86-64 GCC aligned this DVD read buffer to 32 implicitly */
+ #ifdef MU_NATIVE
+ static struct SfxBankNode* HSD_Synth_804C2AE0[0x80 / 4];
+ #else
+@@ -110,7 +110,7 @@ static struct {
+     /* 04 */ s32 x4;
+     /* 08 */ s32 x8;
+     /* 0C */ char pad[0x14];
+-} pstHakoHeader[3];
++} pstHakoHeader[3] __attribute__((aligned(32))); /* aarch64: x86-64 GCC aligned this DVD read buffer to 32 implicitly */
+ 
+ /* 4D7720 */ static int HSD_Synth_804D7720;
+ /* 4D7724 */ static int hsd_SynthSFXBankNum;

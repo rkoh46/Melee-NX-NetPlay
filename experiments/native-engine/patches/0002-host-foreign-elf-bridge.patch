@@ -1,0 +1,204 @@
+diff --git a/port/linux/host_services.cpp b/port/linux/host_services.cpp
+index f87e083..25bd235 100644
+--- a/port/linux/host_services.cpp
++++ b/port/linux/host_services.cpp
+@@ -27,7 +27,10 @@
+ #include <cstring>
+ #include <ctime>
+ #include <deque>
+-#ifdef __APPLE__
++#if defined(MU_FOREIGN_ELF)
++#include "mu_elf_bridge.h"
++#include <csetjmp>
++#elif defined(__APPLE__)
+ #include "../mac/elf_loader.h"
+ #include <csetjmp>
+ #else
+@@ -37,12 +40,14 @@
+ #include <fcntl.h>
+ #include <filesystem>
+ #include <limits>
+-#ifndef __APPLE__
++#if !defined(__APPLE__) && !defined(MU_FOREIGN_ELF)
+ #include <link.h>
+ #endif
+ #include <memory>
+ #include <stdexcept>
++#ifndef MU_FOREIGN_ELF
+ #include <sys/mman.h>
++#endif
+ #include <sys/stat.h>
+ #include <thread>
+ #include <unistd.h>
+@@ -66,7 +71,7 @@ FILE* log_file = nullptr;
+ int disc_fd = -1;
+ uint64_t disc_size = 0;
+ std::array<uint8_t, 0x440> disc_header{};
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+ mac_elf::Image mac_image;
+ // SPIKE: Darwin cannot unwind exceptions across an unregistered ELF image.
+ // The C game has no C++ destructors. Stop only at host callback boundaries.
+@@ -247,7 +252,7 @@ bool load_disc(std::string* error) {
+   return true;
+ }
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+ [[noreturn]] void stop_now(int code) {
+   stop_code=code;
+   if (mac_running) std::longjmp(mac_stop_boundary,1);
+@@ -351,7 +356,7 @@ void h_log(const char* text) {
+ }
+ void h_panic(const char* file, int32_t line, const char* message) {
+   log("game panic: %s:%d: %s", file ? file : "?", line, message ? message : "");
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+   stop_now(1);
+ #else
+   throw Stop{1};
+@@ -434,7 +439,7 @@ void h_pad_read(MuPadStatus out[4]) {
+       pad.trigger_r=uint8_t(std::max(0, int(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT))) * 255 / 32767);
+       if (pad.trigger_l >= 240) pad.button |= 0x0040;
+       if (pad.trigger_r >= 240) pad.button |= 0x0020;
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+     }
+     if (port == 0 && !cfg.headless) {
+ #else
+@@ -450,7 +455,7 @@ void h_pad_read(MuPadStatus out[4]) {
+       if (key[SDL_SCANCODE_Q]) { pad.button |= 0x0040; pad.trigger_l = 255; }
+       if (key[SDL_SCANCODE_E]) { pad.button |= 0x0020; pad.trigger_r = 255; }
+       if (key[SDL_SCANCODE_RETURN]) pad.button |= 0x1000;
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+       if (key[SDL_SCANCODE_RIGHT] || key[SDL_SCANCODE_LEFT])
+         pad.stick_x=int8_t(80 * (int(key[SDL_SCANCODE_RIGHT]) - int(key[SDL_SCANCODE_LEFT])));
+       if (key[SDL_SCANCODE_UP] || key[SDL_SCANCODE_DOWN])
+@@ -570,6 +575,34 @@ std::string filename(const SavedFile& file) {
+ }
+ bool persist(SavedFile& file) {
+   const auto target=file.path.empty() ? directory/filename(file) : file.path;
++#if defined(__SWITCH__) || defined(MU_CARD_SIMPLE_COMMIT)
++  // Horizon's SD card through newlib: mkstemp/fsync/rename-over-existing cannot be relied on.
++  // Write a sibling file with stdio, remove the old save, rename; if that fails, write in place.
++  {
++    const std::string final_path=target.string(), sibling=final_path+".tmp";
++    auto write_to=[&](const std::string& where) {
++      FILE* out=std::fopen(where.c_str(), "wb");
++      if (!out) return false;
++      bool ok=std::fwrite(file.header.data(), 1, file.header.size(), out)==file.header.size() &&
++              std::fwrite(file.data.data(), 1, file.data.size(), out)==file.data.size();
++      if (std::fclose(out)!=0) ok=false;
++      return ok;
++    };
++    bool ok=write_to(sibling);
++    if (ok) { std::remove(final_path.c_str()); ok=std::rename(sibling.c_str(), final_path.c_str())==0; }
++    if (!ok) {
++      const int first_error=errno;
++      std::remove(sibling.c_str());
++      if (!write_to(final_path)) {
++        log("card: cannot commit save %s: %s (write-then-rename: %s)", final_path.c_str(), std::strerror(errno), std::strerror(first_error));
++        return false;
++      }
++      log("card: saved in place (write-then-rename: %s)", std::strerror(first_error));
++    }
++    file.path=target;
++    return true;
++  }
++#endif
+   std::string temporary=(target.string()+".tmp-XXXXXX");
+   std::vector<char> path(temporary.begin(), temporary.end()); path.push_back(0);
+   const int fd=mkstemp(path.data());
+@@ -813,7 +846,7 @@ int32_t h_sound() { return sound; }
+ void h_set_sound(int32_t value) { sound = value != 0; }
+ int32_t h_progressive() { return progressive; }
+ void h_set_progressive(int32_t value) { progressive = value != 0; }
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+ void h_stop(int32_t reason, int32_t code) { log("game stopped: reason=%d code=%d", reason, code); stop_now(reason == MU_STOP_PANIC ? 1 : code); }
+ #else
+ void h_stop(int32_t reason, int32_t code) { log("game stopped: reason=%d code=%d", reason, code); throw Stop{reason == MU_STOP_PANIC ? 1 : code}; }
+@@ -909,7 +942,7 @@ void ax_output(const int16_t* rl, uint32_t frames) {
+ }
+ 
+ bool inspect_image(std::string* error) {
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+   (void)error;
+   image_mappings=mac_image.mappings();
+   image_regions=mac_image.writable();
+@@ -956,6 +989,9 @@ void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink
+ void set_frame_observer(FrameObserver observer, void* user) { frame_observer=observer; observer_user=user; }
+ bool reserve_memory(std::string* error) {
+   if (memory_reserved) return true;
++#ifdef MU_FOREIGN_ELF
++  auto reserve = [](uintptr_t address, size_t bytes) -> void* { return mac_elf::map_fixed(address, bytes); };
++#else
+   auto reserve = [](uintptr_t address, size_t bytes) -> void* {
+ #ifdef MAP_FIXED_NOREPLACE
+     void* p = mmap(reinterpret_cast<void*>(address), bytes, PROT_READ | PROT_WRITE,
+@@ -973,7 +1009,8 @@ bool reserve_memory(std::string* error) {
+     if (p != MAP_FAILED && uintptr_t(p) != address) { munmap(p, bytes); errno=EEXIST; return MAP_FAILED; }
+     return p;
+   };
+-#ifdef __APPLE__
++#endif
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+   if (!mac_elf::activate_mem1(error)) return false;
+   void* mem=reinterpret_cast<void*>(mem1_base);
+ #else
+@@ -983,7 +1020,7 @@ bool reserve_memory(std::string* error) {
+   void* cache = reserve(locked_cache_base, locked_cache_bytes);
+   if (cache == MAP_FAILED) {
+     const std::string message = "cannot reserve locked cache at 0xE0000000: " + std::string(std::strerror(errno));
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+     mac_elf::deactivate_mem1();
+ #else
+     munmap(mem, mem1_bytes);
+@@ -1022,7 +1059,7 @@ bool initialize(const Config& config, std::string* error) {
+   }
+   aram.assign(aram_bytes, 0);
+   api=make_api();
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+   if (!mac_image.load(cfg.game_path,error)) return startup_failed();
+   module=&mac_image;
+   if (!inspect_image(error)) return startup_failed();
+@@ -1067,7 +1104,7 @@ bool initialize(const Config& config, std::string* error) {
+ int run() {
+   if (!initialized) { log("native Linux host is not initialized"); return 1; }
+   wall_start=Clock::now();
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+   mac_running=true;
+   int result;
+   if (setjmp(mac_stop_boundary)==0) result=game.run();
+@@ -1095,7 +1132,7 @@ void shutdown() {
+   for (auto& controller : controllers) { if (controller) SDL_GameControllerClose(controller); controller=nullptr; }
+   if (sdl_owned) { SDL_QuitSubSystem(sdl_owned); sdl_owned=0; }
+ #endif
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+   if (module) { mac_image.unload(); module=nullptr; }
+ #else
+   if (module) { dlclose(module); module=nullptr; }
+@@ -1104,12 +1141,16 @@ void shutdown() {
+   if (disc_fd >= 0) { close(disc_fd); disc_fd=-1; }
+   files.clear(); paths.clear(); completions.clear(); aram.clear();
+   if (memory_reserved) {
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
+     mac_elf::deactivate_mem1();
+ #else
+     munmap(reinterpret_cast<void*>(mem1_base), mem1_bytes);
+ #endif
++#ifdef MU_FOREIGN_ELF
++    mac_elf::unmap_fixed(locked_cache_base, locked_cache_bytes);
++#else
+     munmap(reinterpret_cast<void*>(locked_cache_base), locked_cache_bytes);
++#endif
+     memory_reserved=false;
+   }
+   if (log_file) { std::fclose(log_file); log_file=nullptr; }

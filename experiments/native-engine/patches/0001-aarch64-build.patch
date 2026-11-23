@@ -1,0 +1,125 @@
+diff --git a/port/linux/main.cpp b/port/linux/main.cpp
+index ccca855..33f0985 100644
+--- a/port/linux/main.cpp
++++ b/port/linux/main.cpp
+@@ -92,10 +92,12 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
+ }
+ // The Windows build's check (port/app/main.cpp): same wording, same exit code.
+ bool cpu_has_baseline() {
++#if defined(__x86_64__) || defined(__i386__)
+   __builtin_cpu_init();
+   const std::string baseline = MELEE_LINUX_CPU_BASELINE;
+   if (baseline == "AVX2") return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+   if (baseline == "AVX") return __builtin_cpu_supports("avx");
++#endif
+   return true;
+ }
+ }
+diff --git a/sourceport/game/CMakeLists.txt b/sourceport/game/CMakeLists.txt
+index 9e8935c..222dd4d 100644
+--- a/sourceport/game/CMakeLists.txt
++++ b/sourceport/game/CMakeLists.txt
+@@ -12,13 +12,17 @@ enable_testing()
+ if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_VERSION VERSION_LESS 14)
+   message(FATAL_ERROR "melee_game needs GCC 14 or newer: scalar_storage_order, and -ffp-contract=on meaning what the standard says")
+ endif()
+-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+-  message(FATAL_ERROR "melee_game requires an x86-64 target")
++if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|aarch64|arm64)$")
++  message(FATAL_ERROR "melee_game requires an x86-64 or AArch64 target")
+ endif()
+ if(NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   message(FATAL_ERROR "melee_game supports Windows x64 and native Linux x86-64")
+ endif()
+ 
++set(MU_AARCH64 OFF)
++if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++  set(MU_AARCH64 ON)
++endif()
+ get_filename_component(REPO "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+ # Assertions and the debug file name their source file. Without this they carry the full path of
+ # the folder the game was built in, which then shows up in every player's crash report.
+@@ -92,7 +96,6 @@ endif()
+ target_compile_options(game_flags INTERFACE
+   -O2 -g
+   -include "${CMAKE_CURRENT_SOURCE_DIR}/include/mu_native.h"   # only C targets link game_flags
+-  -mno-ms-bitfields          # the console compiler packs a u8 and a u16 bitfield into one run; the MS layout does not
+   -fno-strict-aliasing       # the sources read floats through integer pointers throughout
+   -fwrapv
+   -fno-aggressive-loop-optimizations   # the sources read one entry past a table on a loop's last pass; GCC took that as proof the pass never runs and dropped it (Peach's third down special item)
+@@ -105,8 +108,16 @@ option(MU_MATH_AUDIT "Count non-finite inputs to audited maths routines" OFF)
+ if(MU_MATH_AUDIT)
+   target_compile_definitions(game_flags INTERFACE MU_MATH_AUDIT)
+ endif()
++if(MU_AARCH64)
++  # AArch64: -mno-ms-bitfields does not exist (and the MS layout is never used); plain char is
++  # unsigned by default where x86-64's is signed; FMA is always present, so no -mfma is needed.
++  target_compile_options(game_flags INTERFACE -fsigned-char)
++else()
++  target_compile_options(game_flags INTERFACE -mno-ms-bitfields)   # the console compiler packs a u8 and a u16 bitfield into one run; the MS layout does not
++endif()
+ set(MELEE_CPU_BASELINE "AVX2" CACHE STRING "Instruction set baseline, matching the host: AVX2, AVX or SSE2")
+-if(MELEE_CPU_BASELINE STREQUAL "AVX2")
++if(MU_AARCH64)
++elseif(MELEE_CPU_BASELINE STREQUAL "AVX2")
+   target_compile_options(game_flags INTERFACE -mavx2 -mfma)
+ elseif(MELEE_CPU_BASELINE STREQUAL "AVX")
+   target_compile_options(game_flags INTERFACE -mavx)
+@@ -457,12 +468,16 @@ set(TMCE "${CMAKE_CURRENT_SOURCE_DIR}/tmce")
+ get_filename_component(TMCE_TOOLCHAIN_BIN "${CMAKE_C_COMPILER}" DIRECTORY)
+ # No debug info: TM-CE declares types with the decomp's names (ColorOverlay, CollData...), and the
+ # layout tools (tools/tmce/gdb_decomp_info.py) must find only the decomp's in melee_game.dbg.
+-set(TMCE_FLAGS -O2 -g0 -funsigned-char -fno-strict-aliasing -fwrapv -mno-ms-bitfields -mcmodel=small
++set(TMCE_FLAGS -O2 -g0 -funsigned-char -fno-strict-aliasing -fwrapv -mcmodel=small
+   -fno-builtin -ffp-contract=on -w)
++if(NOT MU_AARCH64)
++  list(APPEND TMCE_FLAGS -mno-ms-bitfields)
++endif()
+ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   list(APPEND TMCE_FLAGS -fPIC -fvisibility=hidden -fno-tree-sra)
+ endif()
+-if(MELEE_CPU_BASELINE STREQUAL "AVX2")
++if(MU_AARCH64)
++elseif(MELEE_CPU_BASELINE STREQUAL "AVX2")
+   list(APPEND TMCE_FLAGS -mavx2 -mfma)
+ elseif(MELEE_CPU_BASELINE STREQUAL "AVX")
+   list(APPEND TMCE_FLAGS -mavx)
+diff --git a/sourceport/game/shim/mu_console_boot.c b/sourceport/game/shim/mu_console_boot.c
+index 74a7bfb..d134597 100644
+--- a/sourceport/game/shim/mu_console_boot.c
++++ b/sourceport/game/shim/mu_console_boot.c
+@@ -1,5 +1,5 @@
+ /* Load the agreed session card without entering the memory-card scene. */
+-#if !defined(__x86_64__) && !defined(_M_X64)
++#if !defined(__x86_64__) && !defined(_M_X64) && !defined(__aarch64__)
+ #error "CSS origin scene continuation requires x86-64 GCC/Clang builtin setjmp/longjmp; port both ends together"
+ #endif
+ #include <mu_native.h>
+diff --git a/sourceport/tools/check_game_image.py b/sourceport/tools/check_game_image.py
+index 432db5d..893fb3c 100644
+--- a/sourceport/tools/check_game_image.py
++++ b/sourceport/tools/check_game_image.py
+@@ -10,8 +10,8 @@ def image_range(data: bytes) -> tuple[int, int]:
+         if data[4:6] != b'\x02\x01':
+             raise ValueError('the native game must be a little-endian ELF64 library')
+         header = struct.unpack_from('<16sHHIQQQIHHHHHH', data)
+-        if header[1:3] != (3, 62):
+-            raise ValueError('the native game must be an x86-64 ELF shared object')
++        if header[1] != 3 or header[2] not in (62, 183):
++            raise ValueError('the native game must be an x86-64 or AArch64 ELF shared object')
+         phoff, phentsize, phnum = header[5], header[9], header[10]
+         if phentsize < 56:
+             raise ValueError('invalid ELF program header size')
+diff --git a/sourceport/tools/test_check_game_image.py b/sourceport/tools/test_check_game_image.py
+index 92a464a..1aecbc4 100644
+--- a/sourceport/tools/test_check_game_image.py
++++ b/sourceport/tools/test_check_game_image.py
+@@ -29,7 +29,7 @@ class GameImageCheckTest(unittest.TestCase):
+ 
+     def test_rejects_wrong_architecture(self):
+         data = bytearray(elf())
+-        struct.pack_into('<H', data, 18, 183)
++        struct.pack_into('<H', data, 18, 243)
+         with self.assertRaisesRegex(ValueError, 'x86-64'):
+             image_check.check(data, 0x82800000)
+ 
