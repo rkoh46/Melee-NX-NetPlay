@@ -178,7 +178,8 @@ struct State {
   bool have_deadline = false;
   uint32_t last_match_frame = 0;
   uint64_t last_decode = 0, last_snapshot = 0, last_record = 0, last_handoff = 0;
-  Series work_match, work_all, feed_match, wait_match, wait_all, decode_match, snapshot_match, record_match, handoff_match;
+  uint64_t prev_pad_ns = 0;      // the controller read that the frame now being simulated uses
+  Series work_match, work_all, feed_match, wait_match, wait_all, decode_match, snapshot_match, record_match, handoff_match, pad_match;
 #ifdef __SWITCH__
   s32 sim_priority_before = 0x2C;
   bool clocks_changed = false;
@@ -246,15 +247,22 @@ void retrace_sink(void*) {
       st.work_match.add(work); st.feed_match.add(ms(st.feed_ns_frame)); st.wait_match.add(ms(waited));
       st.decode_match.add(ms(decode - st.last_decode)); st.snapshot_match.add(ms(snapshot - st.last_snapshot));
       st.record_match.add(ms(record - st.last_record)); st.handoff_match.add(ms(handoff - st.last_handoff));
+      // The game samples the controllers in its retrace handler, just before this function runs; the frame
+      // simulated from that sample is the one decoded by the next retrace.
+      if (st.prev_pad_ns) st.pad_match.add(ms(entered + waited - st.prev_pad_ns));
     }
   }
+  st.prev_pad_ns = io_last_pad_ns();
   st.last_decode = decode; st.last_snapshot = snapshot; st.last_record = record; st.last_handoff = handoff;
   st.feed_ns_frame = 0;
   if (options.pace) {
+    // The app's retrace timing (port/runtime/host/host.cpp): a 16.667 ms grid on the steady clock; after a
+    // stall of more than two frames the grid starts again from now instead of sprinting to catch up.
     const auto now = std::chrono::steady_clock::now();
-    if (!st.have_deadline || now > st.next_deadline + std::chrono::milliseconds(100)) { st.next_deadline = now; st.have_deadline = true; }   // far behind (loading): start a new grid
-    st.next_deadline += std::chrono::nanoseconds(16666667);
-    std::this_thread::sleep_until(st.next_deadline);
+    if (!st.have_deadline) { st.next_deadline = now; st.have_deadline = true; }
+    st.next_deadline += std::chrono::microseconds(16667);
+    if (st.next_deadline > now) std::this_thread::sleep_until(st.next_deadline);
+    else if (now - st.next_deadline > std::chrono::milliseconds(34)) st.next_deadline = now;
   }
   st.resumed = now_ns();
   st.have_resumed = true;
@@ -343,7 +351,7 @@ void* render_main(void*) {
   try {
 #if MU_FE_AURORA
     if (!options.null_backend) {
-      const std::string dir = options.out_dir + "/aurora";
+      const std::string dir = options.cache_dir.empty() ? options.out_dir + "/aurora" : options.cache_dir;
       mkdir(dir.c_str(), 0777);
       AuroraConfig config{};
       config.appName = "mu-native-gfx";
@@ -438,11 +446,17 @@ void attach() {
   // The app also raises the GPU and memory clocks (the runner raises the CPU clock only).
   if (options.overclock) {
     st.clocks_before = switch_clocks_read();
-    SwitchClockRequest request; request.gpu_mhz = kSwitchClocksErista.gpu_mhz; request.mem_mhz = kSwitchClocksErista.mem_mhz;
-    const SwitchClockResult now = switch_clocks_apply(request);
-    st.clocks_changed = true;
-    say("picture: clocks: gpu %u -> %u MHz (%s), memory %u -> %u MHz (%s), cpu reported %u MHz", st.clocks_before.gpu_hz / 1000000u, now.gpu_hz / 1000000u,
-        now.gpu_ok ? "accepted" : "REFUSED", st.clocks_before.mem_hz / 1000000u, now.mem_hz / 1000000u, now.mem_ok ? "accepted" : "REFUSED", now.cpu_hz / 1000000u);
+    // Only ever upwards: a console that already runs a clock higher than the app's request keeps it.
+    SwitchClockRequest request;
+    if (st.clocks_before.gpu_hz / 1000000u < kSwitchClocksErista.gpu_mhz) request.gpu_mhz = kSwitchClocksErista.gpu_mhz;
+    if (st.clocks_before.mem_hz / 1000000u < kSwitchClocksErista.mem_mhz) request.mem_mhz = kSwitchClocksErista.mem_mhz;
+    if (request.gpu_mhz || request.mem_mhz) {
+      switch_clocks_apply(request);
+      st.clocks_changed = true;
+    }
+    const SwitchClockResult now = switch_clocks_read();
+    say("picture: clocks: gpu %u -> %u MHz, memory %u -> %u MHz, cpu %u MHz reported", st.clocks_before.gpu_hz / 1000000u, now.gpu_hz / 1000000u,
+        st.clocks_before.mem_hz / 1000000u, now.mem_hz / 1000000u, now.cpu_hz / 1000000u);
   }
 #endif
   st.queue = std::make_unique<QueueBackend>();
@@ -479,7 +493,8 @@ void detach() {
   svcSetThreadPriority(CUR_THREAD_HANDLE, st.sim_priority_before);
   if (st.clocks_changed) {
     SwitchClockRequest back; back.gpu_mhz = st.clocks_before.gpu_hz / 1000000u; back.mem_mhz = st.clocks_before.mem_hz / 1000000u;
-    const SwitchClockResult restored = switch_clocks_apply(back);
+    switch_clocks_apply(back);
+    const SwitchClockResult restored = switch_clocks_read();
     say("picture: clocks: gpu put back to %u MHz, memory to %u MHz", restored.gpu_hz / 1000000u, restored.mem_hz / 1000000u);
     st.clocks_changed = false;
   }
@@ -505,6 +520,11 @@ void detach() {
   r.total_match.report("picture: render thread: all work on a frame");
   r.convert_match.report("picture: render thread:   of that, converting the frame and feeding Aurora");
   r.end_frame_match.report("picture: render thread:   of that, aurora_end_frame (waits for Aurora's FIFO and render workers; they present)");
+  if (!st.pad_match.values.empty()) {
+    st.pad_match.report("picture: controllers read -> the frame simulated from them decoded (one 60 Hz period when paced, plus the decoder wait)");
+    say("picture: input to picture is the three lines \"controllers read -> decoded\", \"waited in the queue\" and \"render thread: all work\" added up, "
+        "plus Aurora's render worker and the display's own wait for its next refresh, which are not measured here");
+  }
   say("picture: all frames (menus, loading, match):");
   st.work_all.report("picture: simulation thread: work", true);
   if (st.threaded) st.wait_all.report("picture: simulation thread: waiting for the decoder");
@@ -516,10 +536,11 @@ void detach() {
 }  // namespace
 }  // namespace fe
 
-// Weak hook called by the host services (patches/0101-host-frontend-attach.patch): 1 after the host is
+// Weak hook called by the host services (patches/0101-host-frontend-hooks.patch): 1 after the host is
 // initialized and before the game runs, 0 after the run and before the game is unmapped. Simulation thread.
 extern "C" void mu_frontend_attach(int on) {
-  if (on) fe::attach(); else fe::detach();
+  if (on) { fe::attach(); fe::io_start(fe::st.attached); }
+  else { fe::io_stop(); fe::detach(); }
 }
 
 #if MU_FE_AURORA

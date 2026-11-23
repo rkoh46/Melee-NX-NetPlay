@@ -3,7 +3,7 @@
 # (Xvfb), drawing with Mesa's software Vulkan driver, and saves a screenshot of the window every few seconds.
 #   ./test-linux.sh /path/to/disc-folder [script] [retraces] [seconds between screenshots] [extra runner arguments]
 # The folder must hold GALE01.iso; it is mounted read-only. Output: build/native-engine-gfx/run-linux/
-# (console.log, picture.log, shots/*.png). No network in the container. MU_TEST_LIMIT is the time limit in seconds.
+# (console.log, picture.log, shots/*.png). No network in the container. Sound goes to SDL's dummy device. MU_TEST_LIMIT is the time limit in seconds.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -12,7 +12,7 @@ disc="${1:?folder with GALE01.iso}"; script="${2:-parity_vs_onett}"; frames="${3
 work="$repo/build/native-engine-gfx"; run="$work/run-linux"
 rm -rf "$run/shots" "$run"/*.log; mkdir -p "$run/shots"     # run-linux/aurora (the pipeline cache) is kept, so a second run tests the warm-up
 timeout "${MU_TEST_LIMIT:-1500}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" \
-  -e SCRIPT="$script" -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$*" -e MU_GFX_DRAW_DUMP="${MU_GFX_DRAW_DUMP:-}" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+  -e SCRIPT="$script" -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$*" -e MU_GFX_DRAW_DUMP="${MU_GFX_DRAW_DUMP:-}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
     for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done

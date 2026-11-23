@@ -34,7 +34,7 @@ sync_tree() {
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
     rm -rf "$work/mu-pristine"; mkdir -p "$work/mu-pristine"
-    git -C "$src/mu" archive HEAD port native sourceport/game/CMakeLists.txt sourceport/game/shim/mu_console_boot.c sourceport/tools | tar -x -C "$work/mu-pristine"
+    git -C "$src/mu" archive HEAD port native | tar -x -C "$work/mu-pristine"
   fi
   # The runner and its patches as committed (MU_SYNC_REF=worktree takes the files on disk instead, which
   # may be in the middle of someone's change).
@@ -47,7 +47,12 @@ sync_tree() {
     cp "$stage"/experiments/native-engine/patches/0*.patch "$stage/patches/"
   fi
   cp -R "$work/mu-pristine" "$stage/mu"
-  for p in "$stage"/patches/0*.patch "$here/patches/0101-host-frontend-attach.patch"; do patch -s -p1 -d "$stage/mu" < "$p"; done
+  # The other files those patches touch (game sources: patched here only so that the patches apply whole).
+  sed -n 's|^+++ b/||p' "$stage"/patches/0*.patch | grep -v -e '^port/' -e '^native/' | sort -u > "$stage/extra-paths" || true
+  [ -s "$stage/extra-paths" ] && git -C "$src/mu" archive HEAD $(cat "$stage/extra-paths") | tar -x -C "$stage/mu"
+  for p in "$stage"/patches/0*.patch; do patch -s -p1 -d "$stage/mu" < "$p"; done
+  cp "$stage/mu/port/linux/host_services.cpp" "$gen/host_services.base.cpp"     # what patches/0101 is a diff against
+  patch -s -p1 -d "$stage/mu" < "$here/patches/0101-host-frontend-hooks.patch"
   # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
   rsync -rlpc --delete "$stage/mu/" "$work/mu/"
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"
@@ -59,6 +64,12 @@ sync_tree() {
   cp "$repo/port/runtime/gx/gx_core.cpp" "$gen/gxsrc/port/runtime/gx/gx_core.cpp"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0102-gx-core-native-memory.patch"
   cp "$gen/gxsrc/port/runtime/gx/gx_core.cpp" "$gen/gx_core.cpp"
+  # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
+  # the app's own host.h beside it before the shim's.
+  mkdir -p "$gen/app"
+  for f in input_sdl.cpp input_script.cpp audio_sdl.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp; do
+    cmp -s "$repo/port/runtime/host/$f" "$gen/app/$f" || cp "$repo/port/runtime/host/$f" "$gen/app/$f"
+  done
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"
@@ -92,6 +103,7 @@ sync_tree() {
     echo '};'
     echo 'extern const size_t mu_embedded_reference_count = sizeof mu_embedded_references / sizeof mu_embedded_references[0];'
   } > "$gen/embedded_tables.cpp"
+  python3 -I "$here/../tools/gen_api_names.py" "$work/mu/port/runtime/abi/mu_host.h" "$gen/api_names.cpp"   # the runner's host profiler
   echo "synced $work"
 }
 

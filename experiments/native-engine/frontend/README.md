@@ -2,7 +2,8 @@
 
 `mu-native-gfx` is the native-engine runner (see `../README.md`) with its GX command stream connected to the
 renderer the app already uses. It runs the same scripted matches, shows them on screen, and still prints the
-digest comparison and the timing lines. No sound output, no controllers, no network.
+digest comparison and the timing lines. With `--play` it is the game for a person: no script, the app's controller
+input, sound, until the player quits. No network.
 
 ## How it works
 
@@ -39,10 +40,12 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | Path | What it is |
 |---|---|
 | `src/frontend.cpp`, `frontend.h` | FIFO sink, the wait for the decoder, 60 Hz pacing, frame queue and render thread, Aurora start-up, thread placement, per-part timing. |
-| `src/frontend_main.cpp` | `main`: takes the frontend's arguments out of the command line, then calls the runner. |
-| `src/shim/` | The few host functions the decoder needs, on melee-unlocked's host services. |
+| `src/frontend_main.cpp` | `main`: takes the frontend's arguments out of the command line, then calls the runner or play mode. |
+| `src/play_main.cpp` | `--play`: starts the host without a script, a reference or a frame limit. |
+| `src/play_io.cpp` | Controllers and sound: connects the app's own `input_sdl.cpp`, `gc_adapter_usbhs.cpp` and `audio_sdl.cpp` (compiled unchanged) to the host's pad and mixer hooks; the way out (L + R + Start); keeps log lines in memory while the game runs. |
+| `src/shim/` | The few host functions the decoder and the app's input and sound sources need, on melee-unlocked's host services. |
 | `src/switch_glue.cpp` | Two symbols the app's Switch layer expects. |
-| `patches/0101-host-frontend-attach.patch` | Against the fetched tree: `set_frame_observer` tells the frontend when a run starts and ends. |
+| `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, five weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines. |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
 | `CMakeLists.txt`, `build.sh` | Three variants: `null` (Linux, no graphics device), `linux` (Aurora on Vulkan, test build), `switch` (NRO). |
 | `linux-gfx.Dockerfile`, `DawnLinux.cmake`, `test-linux.sh` | The off-console picture test: Xvfb and Mesa's software Vulkan driver. |
@@ -86,7 +89,40 @@ All arguments of the headless runner work. Added:
 | `--gfx-null` | Decode and check every frame, draw nothing. |
 | `--headless` | No frontend at all. |
 
-**Measuring with a warm pipeline cache.** With a picture the program closes the whole application at the end (as the app does) instead of returning to the
+**Pipeline cache.** A first run compiles every shader pipeline when it is first drawn: the picture stops for
+moments and frames are skipped. The cache is kept in `sdmc:/switch/mu-native/aurora/`, and by default the pipelines
+this device has drawn with before are compiled at launch (the app's default). `--warm-all` compiles everything in
+the cache at launch, the app's `shader_warmup_all=1`: a one-time session that took six minutes on the console. For
+timing, read a run that prints `pipeline warm-up took N s` with N above zero and few frames `skipped as stale`.
+
+By default the simulation is paced like the app's (a 16.667 ms retrace grid), so the match plays at its real speed
+and the runner's `VS match frames` lines include that wait. The frontend prints the split itself, per thread, after
+the run:
+
+```
+picture: simulation thread: work (game, handing the stream over, audio mixing): ...
+picture: simulation thread:   of that, handing the stream to the decoder: ...
+picture: simulation thread: then waiting for the decoder at the retrace (inside the 60 Hz wait when paced): ...
+picture: decoder thread: all work: ...
+picture: decoder:   of that, texture copies out of game memory: ...
+picture: decoder:   of that, draw records (state, vertex and array copies): ...
+picture: decoder:   of that, handing the frame to the render queue: ...
+picture: render thread: frame waited in the queue: ...
+picture: render thread: all work on a frame: ...
+picture: render thread:   of that, converting the frame and feeding Aurora: ...
+picture: render thread:   of that, aurora_end_frame (waits for Aurora's FIFO and render workers; they present): ...
+picture: controllers read -> the frame simulated from them decoded ...      (play mode)
+```
+
+Presenting happens on Aurora's own render worker, so it has no line of its own; a slow present shows as time in
+`aurora_end_frame`. Input to picture is the last line plus the queue wait plus the render thread's work, plus
+Aurora's worker and the display's wait for its next refresh, which are not measured.
+
+Diagnosis aids (environment variables; on the console they would have to be set in code): `MU_GFX_DRAW_DUMP=MAJOR:MINOR:N`
+writes the draw state of the N-th frame drawn in that scene to `<out>/draws.txt`, `MU_GFX_TEX_DUMP=ADDRESS` the bytes
+of one texture as the game presented them.
+
+With a picture the program closes the whole application at the end (as the app does) instead of returning to the
 Homebrew Menu.
 
 Off the console:
@@ -94,6 +130,53 @@ Off the console:
 ```sh
 ./test-linux.sh /path/to/disc-folder parity_vs_onett 9000 10     # screenshots every 10 s in build/native-engine-gfx/run-linux/shots/
 ```
+
+## Play mode
+
+```sh
+nxlink -s -a <console ip> build/native-engine-gfx/out/mu-native-gfx.nro --args "--play"
+nxlink -s -a <console ip> build/native-engine-gfx/out/mu-native-gfx.nro --args "--play --auto-vs"
+```
+
+The game boots to its own menus and runs until the player holds **L + R + Start** (without A) for a second and a
+half; the program then shuts the renderer and the sound down, prints its timing lines and closes the application
+(HOME menu). `--frames N` stops by itself after N retraces.
+
+- **Controllers** come through the app's input code: Pro Controller and Joy-Con as SDL gamepads through Aurora's
+  GameCube mapping, the GameCube adapter read directly over USB, port 1 always present. The game samples them in its
+  retrace handler, as on the console.
+- **Sound**: the host's mixer runs on the simulation thread, as it must (it reads and writes the game's voice blocks
+  and effect buffers, and the game reads them back). Each finished 5 ms block goes into the app's audio ring; SDL's
+  audio thread resamples it against the device clock and plays it. `--volume 0..100` (70 in play mode).
+- **Pacing** is the app's retrace timing: a 16.667 ms grid on the steady clock, restarted after a stall of more
+  than two frames. The display's vsync belongs to the render thread.
+- **Memory card**: `<out>/card-play/`, kept between sessions (`--fresh-card` empties it). The scripted runs keep
+  using their own folder.
+- `--auto-vs` plays a built-in controller script from boot into a VS match (Ness against a computer player, Onett),
+  about 22 seconds; real controllers add to it on the console, so the player takes over when the match starts.
+  `--play-script FILE` takes a script in the app's format instead.
+- `--wav FILE` records what is played; `--audio-raw FILE` the mixer's blocks as it hands them over (any mode, also
+  `--headless`). `--cache-dir DIR` uses another folder for Aurora's pipeline cache.
+
+By hand or by a controller bot, with one controller, counted from the game's first retrace (60 a second; the
+picture appears within the first of them):
+
+| At | Press | What it does |
+|---|---|---|
+| 2.2 s | A | the memory card message (harmless when there is none) |
+| 6.7 s | Start | title screen |
+| 8.4 s | stick down, 0.1 s | main menu: VS Mode |
+| 8.7 s | Start | into VS Mode |
+| 9.4 s | A | Melee: the character select screen opens |
+| 13.4 s | stick up and a little right (x 61, y 127 of 127), 0.5 s | the hand moves onto Ness |
+| 14.0 s | A | Ness |
+| 15.0 s | stick full down, 0.17 s (10 retraces) | the hand moves onto the second player's N/A tag |
+| 15.5 s | A | a level 1 computer player with a random character; READY TO FIGHT |
+| 16.7 s | Start | stage select |
+| 20.0 s | stick up (y 100), 0.67 s | onto Onett |
+| 21.0 s | A | the match starts at about 21.7 s |
+
+The two hand movements need their length to within a retrace or two; `--auto-vs` does exactly this.
 
 ## Verified
 
@@ -114,12 +197,27 @@ Per-part times of a VS match frame on that machine (`parity_vs_onett`, no graphi
 which works 0.48 ms (0.06 texture copies, 0.28 draw records); with `--gfx-sync` the simulation thread works
 0.78 ms. The console is about ten times slower per thread at 1020 MHz.
 
-On the console, by the session that ran it (the first build: decoder inside the flush, no thread placement beyond
-the game's core, no reserved core for the shader compilers, CPU at its stock clock, cold pipeline cache):
-`parity_vs_onett` was drawn correctly at 4:3 for the whole match, the digest was identical for all 9000 rows and
-the program left to HOME. It was too slow: the simulation thread's median was 10.3 ms per VS match frame (3.65 ms
-of it the decoder) with 1365 frames over 16.67 ms, and the render thread's median 6.2 ms. This build's changes
-answer that run and have not been on the console.
+Play mode on Linux (commit `ae1612e` runner and patches, game image `6be32fe9...`):
+
+| Check | Result |
+|---|---|
+| `--play` with a controller script through the app's input code (`input_poll`), empty and existing memory card | boots, walks the menus, reaches the VS match at retrace 1301 both times; screenshots show the menus, the match and the fighter moving; L + R + Start ends the run cleanly |
+| Sound: `--wav` of a scripted picture run against `--audio-raw` of a `--headless` run, `parity_vs_onett`, 149.9 s | the recording made by the app's audio output code equals the headless mixer output sample for sample; not silent |
+| Sound device path | SDL's dummy device only: ring, resampler and callback run; blocks were dropped because that device consumes slower than real time, which says nothing about the console |
+| Scripted mode after these changes | digest identical, with and without a picture |
+
+On the console, by the session that ran it:
+
+- First build (decoder inside the flush, no thread placement, cold cache): picture correct, digest identical, too
+  slow (simulation thread median 10.3 ms per VS match frame, 1365 frames over 16.67 ms).
+- Decoder-thread build, second run with `--warm-all`, CPU at about 2091 MHz: simulation thread 3.65 ms average per
+  VS match frame, none over 16.67 ms; waiting for the decoder 0.22 ms; decoder thread 2.96 ms; render thread 4.28 ms
+  (2.22 converting and feeding Aurora, 1.92 in `aurora_end_frame`); 8987 of 8998 frames drawn; digest identical.
+  `--warm-all` took 357 s there. Without it the first run had 9 match frames over budget.
+- Controllers, sound and play mode have not been on the console.
+
+Aurora's `tcg[N] source 21 (type 1) is not handled; the coordinate is zero` lines are not new with this engine: the
+app's own console logs have the same line with the same numbers.
 
 Seen in the screenshots and not explained: on the results screen the winner's small portrait (yellow Kirby) is
 noise, with either decoding mode. Dumped from game memory and decoded without the renderer (`MU_GFX_TEX_DUMP`),
@@ -128,15 +226,16 @@ why is not known. The same costume's portrait on the character select screen is 
 
 ## Not verified
 
-- This build on the console: thread priorities and cores, the GPU and memory clock request, the decoder thread,
-  the frame times it gives, `--warm-all`.
+- On the console: controllers of any kind through this program (Pro Controller, Joy-Con, GameCube adapter, rumble),
+  sound output (device, underruns, latency), the L + R + Start exit after real play, `--auto-vs`, a play session
+  longer than the tests, the memory card kept between sessions.
+- A real gamepad on Linux: the test drove the app's input code with a script, below its SDL and Aurora PAD part.
+- Input to picture: the program measures up to the render thread's hand-off; Aurora's render worker, the swap
+  chain and the display are after that.
 - That the decoder thread never shows a wrong picture. It reads game memory while the game is still drawing the
   same frame; the game waits for it only at the retrace. The app runs the same decoder the same way, and no wrong
-  frame was seen in the Linux screenshots, but a screenshot every few seconds cannot rule out single frames.
-  `--gfx-sync` is the exact mode.
-- The host services and the runner are compiled by Clang in the NRO (GCC in the headless NRO and in every Linux
-  build). The first console run's digest was identical.
-- The picture on NVK beyond what was looked at in that one run.
+  frame was seen, but screenshots cannot rule out single frames. `--gfx-sync` is the exact mode.
+- The picture on NVK beyond what was looked at in the console runs.
 
 ## Known gaps
 
@@ -149,11 +248,15 @@ why is not known. The same costume's portrait on the character select screen is 
   `gx: unknown opcode`.
 - A decoder or renderer error stops the picture, not the run: `picture: DECODER STOPPED` or `RENDERER STOPPED`
   with the reason, and the simulation finishes as the headless runner would.
-- Still written while a match runs, by code outside this folder: the runner's progress line every 600 retraces (to
-  nxlink and `run.log` on the SD card, from the simulation thread), the game's own messages (`host.log`), and the
-  SQLite statistics lines of the app's Switch layer (to nxlink, from Aurora's threads).
+- Still written while a match runs, by code outside this folder: in scripted mode the runner's progress line every
+  600 retraces (to nxlink and `run.log` on the SD card, from the simulation thread); in both modes the game's own
+  messages (`host.log`) and the SQLite statistics lines of the app's Switch layer (to nxlink, from Aurora's threads).
 - Nobody services the applet message loop while the game runs (as in the headless runner).
-- No sound output, no controllers, no in-game menu or HUD overlay.
+- A first session compiles pipelines as they are first drawn and stutters; they are cached per device. The app is
+  in the same position: this repository ships no pipeline seed, and the app's cache lives in its own folder
+  (`--cache-dir sdmc:/switch/melee-nx-netplay/Cache` would share it; not tried).
+- Without a GameCube adapter the app's adapter code looks for one every two seconds from the simulation thread.
+- No in-game menu or HUD overlay, no controller remapping, no volume control while running, no Slippi music player.
 
 ## Licensing
 

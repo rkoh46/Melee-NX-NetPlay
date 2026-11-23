@@ -39,16 +39,29 @@ int main(int argc, char** argv) {
     else if (arg == "--gfx-log") fe::options.verbose = true;
     else if (arg == "--stretch") fe::options.stretch = true;
     else if (arg == "--gfx-sync") fe::options.sync_decode = true;
+    else if (arg == "--play") fe::options.play = true;
+    else if (arg == "--fresh-card") fe::options.fresh_card = true;
+    else if (arg == "--auto-vs") fe::options.auto_vs = true;
+    else if (arg == "--cache-dir" && i + 1 < argc) fe::options.cache_dir = argv[++i];
+    else if (arg == "--volume" && i + 1 < argc) fe::options.volume = std::atoi(argv[++i]);
+    else if (arg == "--wav" && i + 1 < argc) fe::options.wav = argv[++i];
+    else if (arg == "--audio-raw" && i + 1 < argc) fe::options.audio_raw = argv[++i];
+    else if (arg == "--play-script" && i + 1 < argc) fe::options.play_script = argv[++i];
     else if (arg == "--warm-all") fe::options.warm_all = true;
     else if (arg == "--window" && i + 1 < argc) { std::sscanf(argv[++i], "%dx%d", &fe::options.width, &fe::options.height); }
     else {
       if (arg == "--out" && i + 1 < argc) fe::options.out_dir = argv[i + 1];
       if (arg == "--no-overclock") fe::options.overclock = false;
+      if (arg == "--iso" && i + 1 < argc) fe::options.iso = argv[i + 1];
+      if (arg == "--frames" && i + 1 < argc) fe::options.frames = unsigned(std::strtoul(argv[i + 1], nullptr, 0));
       rest.push_back(argv[i]);
     }
   }
   rest.push_back(nullptr);
-  const int result = mu_runner_main(int(rest.size()) - 1, rest.data());
+#ifdef __SWITCH__
+  if (fe::options.play && fe::options.iso.empty()) fe::options.iso = "sdmc:/switch/melee-nx-netplay/GALE01.iso";   // the runner's default
+#endif
+  const int result = fe::options.play ? fe::play_main() : mu_runner_main(int(rest.size()) - 1, rest.data());
 #ifdef __SWITCH__
   // As the app does (switch/src/switch_threads.c): leave by asking the system to close the application.
   // Returning to the Homebrew Menu after a graphics session left helper threads behind in the same process.

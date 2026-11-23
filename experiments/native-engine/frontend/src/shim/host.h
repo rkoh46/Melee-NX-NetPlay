@@ -1,6 +1,6 @@
 // Stand-in for port/runtime/host/host.h when this repository's GX decoder (port/runtime/gx) is built on
-// melee-unlocked's native host services instead of the recompiled runtime. Only what the decoder and
-// the frame queue use. Implemented in shim.cpp, except host::log (melee-unlocked's host_services.cpp).
+// melee-unlocked's native host services instead of the recompiled runtime. Only what the decoder, the
+// frame queue and the app's input and audio sources use. Implemented in shim.cpp, except host::log (melee-unlocked's host_services.cpp).
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <cstdint>
@@ -28,4 +28,17 @@ enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, S
 void sim_cost_add(int slot, double seconds);
 uint64_t sim_cost_ns(int slot);            // total so far; any thread
 struct SimCostScope { int slot; uint64_t t0; explicit SimCostScope(int s) : slot(s), t0(now_ns()) {} ~SimCostScope(); };
+
+// ---- what the app's input and audio sources use (input_sdl.cpp, gc_adapter_*.cpp, audio_sdl.cpp) ----
+struct PadState { uint16_t button; int8_t stick_x, stick_y, sub_x, sub_y; uint8_t trig_l, trig_r, analog_a, analog_b; int8_t err; };
+void input_poll(PadState out[4]);                // input_sdl.cpp: adapter, SDL gamepads through Aurora's PAD, keyboard, script
+uint32_t gcadapter_poll(PadState out[4]);
+struct GcAdapterStatus { uint32_t ports = 0; int interval_ms = 0; double report_hz = 0.0; };
+bool gcadapter_status(GcAdapterStatus& out);
+void gcadapter_rumble(int port, bool on);
+void gcadapter_recalibrate(int port);
+void gcadapter_shutdown();
+void gamepad_rumble(int port, bool on);
+uint32_t retrace_count();
+void audio_session_report();
 }  // namespace host

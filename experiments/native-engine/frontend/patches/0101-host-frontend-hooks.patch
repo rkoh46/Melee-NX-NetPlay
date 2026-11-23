@@ -1,0 +1,69 @@
+--- a/port/linux/host_services.cpp
++++ b/port/linux/host_services.cpp
+@@ -312,6 +312,22 @@
+   check_stop();
+ }
+ 
++} // namespace
++} // namespace linux_host
++// Picture frontend (experiments/native-engine/frontend). All of these are absent in the headless runner.
++extern "C" {
++// 1 after initialize and before run, 0 after run and before shutdown unmaps the game.
++__attribute__((weak)) void mu_frontend_attach(int on);
++// Live controllers when no script drives the pads: fills the four pads and returns nonzero.
++__attribute__((weak)) int mu_frontend_pad_read(MuPadStatus out[4]);
++__attribute__((weak)) void mu_frontend_pad_rumble(int32_t port, int32_t on);
++// Every block the mixer finishes: 16-bit right/left pairs at 32 kHz.
++__attribute__((weak)) void mu_frontend_audio(const int16_t* rl, uint32_t frames);
++// host::log lines (decoder, mixer): nonzero when the frontend kept the line, to be written after the run.
++__attribute__((weak)) int mu_frontend_log(const char* line);
++}
++namespace linux_host {
++namespace {
+ void audio_tick() {
+   if (!audio.running || !audio.buffer || !audio.bytes || audio.awaiting || count.ticks < audio.next) return;
+   const uint64_t period = uint64_t(audio.bytes) * MU_TB_HZ / (uint64_t(audio.rate) * 4);
+@@ -414,6 +430,7 @@
+     }
+     log("script: released, controllers live");
+   }
++  if (mu_frontend_pad_read && mu_frontend_pad_read(out)) return;
+   std::memset(out, 0, sizeof(MuPadStatus) * 4);
+ #ifdef MELEE_LINUX_USB
+   MuPadStatus usb_pads[4]{};
+@@ -485,6 +502,7 @@
+   }
+ }
+ void h_pad_rumble(int32_t port, int32_t on) {
++  if (mu_frontend_pad_rumble) mu_frontend_pad_rumble(port, on);
+ #ifdef MELEE_LINUX_USB
+   linux_gc::rumble(port,on!=0);
+ #endif
+@@ -944,6 +962,7 @@
+ }
+ void ax_output(const int16_t* rl, uint32_t frames) {
+   ++count.audio_blocks;
++  if (mu_frontend_audio && rl && frames) mu_frontend_audio(rl, frames);
+ #ifdef MELEE_LINUX_SDL
+   if (!audio_device || !rl || !frames) return;
+   std::vector<int16_t> lr(size_t(frames) * 2);
+@@ -1002,7 +1021,10 @@
+ 
+ void log(const char* format, ...) { va_list args; va_start(args, format); write_log(format, args); va_end(args); }
+ void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink=fifo; retrace_sink=retrace; video_user=user; }
+-void set_frame_observer(FrameObserver observer, void* user) { frame_observer=observer; observer_user=user; }
++void set_frame_observer(FrameObserver observer, void* user) {
++  frame_observer=observer; observer_user=user;
++  if (mu_frontend_attach) mu_frontend_attach(observer != nullptr);
++}
+ bool reserve_memory(std::string* error) {
+   if (memory_reserved) return true;
+ #ifdef MU_FOREIGN_ELF
+@@ -1314,6 +1336,7 @@
+ void log(const char* format, ...) {
+   char line[4096];
+   va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
++  if (mu_frontend_log && mu_frontend_log(line)) return;
+   linux_host::log("%s", line);
+ }
+ } // namespace host

@@ -70,8 +70,8 @@ endif()
 set(MU_HOST_SOURCES
   "${MU}/port/linux/host_services.cpp" "${MU}/port/linux/input_script.cpp"
   "${MU}/port/runtime/hle/ax_ucode.cpp" "${MU}/port/runtime/hle/native_savestate.cpp"
-  "${RUN}/runner_main.cpp" "${RUN}/mu_elf.cpp" "${RUN}/rollback.cpp" "${RUN}/mu_imports.c"
-  "${GEN}/embedded_tables.cpp" "${GEN}/embedded.S")
+  "${RUN}/runner_main.cpp" "${RUN}/mu_elf.cpp" "${RUN}/rollback.cpp" "${RUN}/hostprof.cpp" "${RUN}/mu_imports.c"
+  "${GEN}/embedded_tables.cpp" "${GEN}/api_names.cpp" "${GEN}/embedded.S" "${FE}/play_main.cpp")
 if(MU_FE_VARIANT STREQUAL "switch")
   list(APPEND MU_HOST_SOURCES "${RUN}/fixedmap_horizon.c" "${RUN}/dirtytrack_horizon.c")
   # Its own target: the toolchain names objects without the source extension, and dirtytrack_horizon.c sits beside it.
@@ -80,10 +80,13 @@ if(MU_FE_VARIANT STREQUAL "switch")
 else()
   list(APPEND MU_HOST_SOURCES "${RUN}/fixedmap_linux.c" "${RUN}/dirtytrack_linux.c")
 endif()
-add_library(mu_host STATIC ${MU_HOST_SOURCES})
+# Its own target: the Switch toolchain names objects without the source extension, and hostprof.cpp sits beside it.
+add_library(mu_host_prof OBJECT "${RUN}/hostprof.S")
+add_library(mu_host STATIC ${MU_HOST_SOURCES} $<TARGET_OBJECTS:mu_host_prof>)
 set_target_properties(mu_host PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
 target_include_directories(mu_host PRIVATE "${RUN}" "${MU}/port/linux" "${MU}/port/runtime/abi" "${MU}/port/runtime/hle"
   "${MU}/port/runtime/host" "${MU}/port/runtime/ppc" "${MU}/port/runtime/gx" "${MU}/native")
+target_include_directories(mu_host PRIVATE "${FE}")
 target_compile_definitions(mu_host PRIVATE MU_FOREIGN_ELF MU_SQUAD=1 MELEE_NO_SLIPPI MELEE_PORT_VERSION="mu-native" MELEE_LINUX_CPU_BASELINE="AArch64")
 target_compile_options(mu_host PRIVATE -O2 -g -Wall -fno-strict-aliasing $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>)
 # The runner's main becomes mu_runner_main (frontend_main.cpp calls it).
@@ -97,7 +100,7 @@ endif()
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
   "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GXSRC}/gx_aurora_bridge.cpp"
-  "${FE}/shim/shim.cpp" "${FE}/frontend.cpp")
+  "${FE}/shim/shim.cpp" "${FE}/frontend.cpp" "${FE}/play_io.cpp")
 # The shim's host.h and ppc.h come first; the real render_observer.h and fatal_boundary.h are found after them.
 target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${REPO}/port/runtime/ppc" "${REPO}/port/runtime/host"
   "${MU}/port/linux" "${MU}/port/runtime/abi")
@@ -105,7 +108,16 @@ target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 if(MU_FE_VARIANT STREQUAL "null")
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=0)
 else()
-  target_sources(mu_gx PRIVATE "${GXSRC}/gx_aurora.cpp")
+  # The renderer, and the app's controller input and sound output: unchanged sources of port/runtime/host,
+  # compiled from the verbatim copies build.sh sync makes in ${GEN}/app (see there).
+  target_sources(mu_gx PRIVATE "${GXSRC}/gx_aurora.cpp"
+    "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_sources(mu_gx PRIVATE "${GEN}/app/gc_adapter_usbhs.cpp")   # the GameCube adapter over usb:hs
+  else()
+    target_sources(mu_gx PRIVATE "${GEN}/app/gc_adapter_none.cpp")
+  endif()
+  target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle")   # jukebox.h (audio_sdl.cpp)
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=1)
   target_include_directories(mu_gx PRIVATE "${MELEE_AURORA_SOURCE}/lib")   # gx_aurora.cpp writes Aurora's FIFO directly
   target_link_libraries(mu_gx PUBLIC aurora::core aurora::gx aurora::vi aurora::os aurora::mtx aurora::pad

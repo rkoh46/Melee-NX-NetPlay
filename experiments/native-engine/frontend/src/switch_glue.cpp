@@ -13,3 +13,8 @@ extern "C" void pc_log_line(const char* fmt, ...) {
 
 // The app's sampling profiler (switch/src/switch_profile.cpp) is not part of this program.
 extern "C" void switch_profile_second_thread_here(void) {}
+
+// The app's log writer thread (switch/src/log_switch.cpp) is not part of this program. Its two calls in
+// audio_sdl.cpp only serve the --wav recording, which is a test aid: written directly.
+extern "C" void melee_nx_log_flush(void) {}
+extern "C" void melee_nx_file_write(void* file, const void* bytes, size_t size) { std::fwrite(bytes, 1, size, static_cast<FILE*>(file)); }
