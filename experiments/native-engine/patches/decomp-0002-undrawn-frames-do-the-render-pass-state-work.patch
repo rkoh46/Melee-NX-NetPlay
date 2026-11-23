@@ -1,0 +1,18 @@
+diff --git a/src/melee/gm/gmscene.c b/src/melee/gm/gmscene.c
+index edc59ef..e503579 100644
+--- a/src/melee/gm/gmscene.c
++++ b/src/melee/gm/gmscene.c
+@@ -477,7 +477,12 @@ void gm_801A4D34(void (*on_frame)(void), UNUSED GameSceneInfo* info)
+     mu_online_rollback_done:
+ #endif
+ #ifdef MU_NATIVE
+-        if (mu_css_origin_skip_draw()) continue;
++        if (mu_css_origin_skip_draw()) {
++            /* An undrawn frame still needs what gameplay reads from the render pass (mu_online.c). */
++            void mu_online_camera_tasks(void);
++            mu_online_camera_tasks();
++            continue;
++        }
+ #endif
+         if (temp_r25->unk_C == 2) {
+             break;

@@ -4,7 +4,11 @@
 #include "render_observer.h"
 #include "host_services.h"
 
+#include <atomic>
 #include <chrono>
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
 #include <cstdarg>
 #include <cstdio>
 #include <stdexcept>
@@ -32,8 +36,17 @@ void native_scene(uint8_t* major, uint8_t* minor) {
   if (!linux_host::state_snapshot(&state)) { *major = 0; *minor = 0; return; }
   *major = uint8_t(state.scene_major); *minor = uint8_t(state.scene);
 }
-double now_seconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
-void sim_cost_add(int, double) {}
+uint64_t now_ns() {
+#ifdef __SWITCH__
+  return armTicksToNs(armGetSystemTick());
+#else
+  return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+#endif
+}
+namespace { std::atomic<uint64_t> cost_ns[SIM_COST_COUNT]; }
+void sim_cost_add(int slot, double seconds) { cost_ns[slot].fetch_add(uint64_t(seconds * 1e9), std::memory_order_relaxed); }
+uint64_t sim_cost_ns(int slot) { return cost_ns[slot].load(std::memory_order_relaxed); }
+SimCostScope::~SimCostScope() { cost_ns[slot].fetch_add(now_ns() - t0, std::memory_order_relaxed); }
 }  // namespace host
 
 // Draw identities, authored poses and owner tints belong to the recompiled runtime's other renderers.

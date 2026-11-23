@@ -96,7 +96,7 @@ endif()
 
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
-  "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GXSRC}/gx_aurora_bridge.cpp" "${GXSRC}/async_backend.cpp"
+  "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GXSRC}/gx_aurora_bridge.cpp"
   "${FE}/shim/shim.cpp" "${FE}/frontend.cpp")
 # The shim's host.h and ppc.h come first; the real render_observer.h and fatal_boundary.h are found after them.
 target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${REPO}/port/runtime/ppc" "${REPO}/port/runtime/host"
@@ -115,13 +115,20 @@ endif()
 add_executable(mu_native_gfx "${FE}/frontend_main.cpp")
 target_include_directories(mu_native_gfx PRIVATE "${FE}")
 target_link_libraries(mu_native_gfx PRIVATE mu_gx mu_host mu_gx)
+if(NOT MU_FE_VARIANT STREQUAL "null")
+  # The render thread's time inside Aurora's two frame calls is measured through these (frontend.cpp).
+  target_link_options(mu_native_gfx PRIVATE -Wl,--wrap=aurora_begin_frame -Wl,--wrap=aurora_end_frame)
+endif()
 
 if(MU_FE_VARIANT STREQUAL "switch")
   target_include_directories(mu_gx SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   target_include_directories(mu_host SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   # What Aurora's patched objects and the Clang/libnx runtime need from the app's Switch layer.
   target_sources(mu_native_gfx PRIVATE "${REPO}/switch/src/switch_threads.c" "${REPO}/switch/src/perf_switch.cpp"
-    "${REPO}/switch/src/libc_switch.c" "${FE}/switch_glue.cpp")
+    "${REPO}/switch/src/libc_switch.c" "${REPO}/switch/src/switch_clocks.cpp" "${FE}/switch_glue.cpp")
+  # The runner and the frontend use the app's clock module (switch_clocks.h).
+  target_include_directories(mu_host PRIVATE "${REPO}/switch/src")
+  target_include_directories(mu_gx PRIVATE "${REPO}/switch/src")
   target_include_directories(mu_native_gfx PRIVATE "${REPO}/switch/src")
   if(MELEE_NVK_STUBS_SOURCE)
     target_sources(mu_native_gfx PRIVATE "${MELEE_NVK_STUBS_SOURCE}")   # Rust/newlib ABI bridge for the NVK archives

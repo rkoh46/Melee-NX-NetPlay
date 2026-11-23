@@ -27,6 +27,15 @@
      const uint32_t need = hi * stride + ia.elem_bytes;
      auto& ref = g_raw_pending.arrays[ia.attr];
      if (base >= ppc::RAM_SIZE || need > ppc::RAM_SIZE - base) { ref.stride = stride ? stride : 1; continue; }   // outside RAM: unbound, the bridge skips the draw
+@@ -497,7 +497,7 @@
+   host::SimCostScope record_cost(host::SIM_RECORD);
+   {
+     static uint64_t merged = 0, seen = 0;
+-    if ((++seen % 200000) == 0) host::log("gx: %llu draws so far, %llu joined to the draw before them", (unsigned long long)seen, (unsigned long long)merged);
++    ++seen;   // no progress line here: it went to a log file on the SD card every two seconds of a match
+     if (merge_into_previous(primitive, count)) { ++merged; ++g_draws; g_vertices += count; return; }
+     g_merge_cp_version = g_cp_version;
+   }
 @@ -631,7 +631,7 @@
      case BP_LOADTLUT1: {
        uint32_t tmem_addr = (masked & 0x3FF) << 9;
@@ -55,3 +64,11 @@
    const uint8_t* p = host::ptr(addr, size);
    uint32_t saved_addr = g_dl_addr, saved_draw = g_dl_draw_ordinal, saved_call = g_dl_call_ordinal;
    g_dl_addr = addr; g_dl_draw_ordinal = 0; g_dl_call_ordinal = g_state_deltas ? 0 : g_dl_calls[addr]++;
+@@ -904,6 +903,7 @@
+ std::thread g_gpu_thread;
+ 
+ void gpu_consume(const uint8_t* data, size_t len) {
++  host::SimCostScope cost(host::SIM_DECODE);   // the frontend's per-part timing: all of the decoder thread's work
+   while (g_fifo_len + len + 8 > g_fifo_cap) fifo_grow();
+   std::memcpy(g_fifo_data + g_fifo_len, data, len);
+   g_fifo_len += len;

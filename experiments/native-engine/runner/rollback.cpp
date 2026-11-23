@@ -139,6 +139,36 @@ bool restore(int32_t frame) {
   return true;
 }
 
+namespace { std::vector<uint8_t> remembered; std::vector<uintptr_t> remembered_pages; }
+void remember() {
+  const size_t count = hot_count;
+  remembered.resize(count * kPage);
+  remembered_pages.assign(hot_page, hot_page + count);
+  for (size_t i = 0; i < count; ++i) std::memcpy(&remembered[i * kPage], reinterpret_cast<void*>(hot_page[i]), kPage);
+}
+std::vector<std::pair<uintptr_t, uint32_t>> differences_from_remembered(size_t limit) {
+  std::vector<std::pair<uintptr_t, uint32_t>> out;
+  // Pages that became hot after remember() were unchanged then, so their base bytes are what they held.
+  const size_t count = hot_count;
+  for (size_t i = 0; i < count && out.size() < limit; ++i) {
+    const uint8_t* then = i < remembered_pages.size() ? &remembered[i * kPage] : base_bytes + i * kPage;
+    const uint8_t* live = reinterpret_cast<const uint8_t*>(hot_page[i]);
+    const PageInfo& info = page_info[index_of(hot_page[i])];
+    for (uint16_t k = 0; k < info.segments && out.size() < limit; ++k) {
+      const Segment seg = segment_list[info.first_segment + k];
+      for (uint32_t at = seg.offset; at < uint32_t(seg.offset) + seg.size;) {
+        if (live[at] == then[at]) { ++at; continue; }
+        uint32_t end = at + 1, gap = 0;
+        while (end < uint32_t(seg.offset) + seg.size && gap < 8) { if (live[end] != then[end]) gap = 0; else ++gap; ++end; }
+        out.push_back({hot_page[i] + at, end - gap - at});
+        at = end;
+        if (out.size() >= limit) break;
+      }
+    }
+  }
+  return out;
+}
+
 size_t missed_writes() {
   if (reference.empty()) return 0;
   std::vector<bool> hot(kWindowPages, false);

@@ -27,6 +27,11 @@ void save(int32_t frame);
 bool restore(int32_t frame);
 bool has(int32_t frame);
 
+// Diagnosis: remember the whole tracked state as it is now; later list where the state differs
+// from it, as [address, length) runs of bytes (inside the snapshot spans only).
+void remember();
+std::vector<std::pair<uintptr_t, uint32_t>> differences_from_remembered(size_t limit);
+
 size_t tracked_pages();
 size_t hot_pages();
 bool overflowed();              // more pages became hot than there is room for: the saves are not valid

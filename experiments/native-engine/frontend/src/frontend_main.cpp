@@ -38,9 +38,12 @@ int main(int argc, char** argv) {
     else if (arg == "--gfx-null") fe::options.null_backend = true;
     else if (arg == "--gfx-log") fe::options.verbose = true;
     else if (arg == "--stretch") fe::options.stretch = true;
+    else if (arg == "--gfx-sync") fe::options.sync_decode = true;
+    else if (arg == "--warm-all") fe::options.warm_all = true;
     else if (arg == "--window" && i + 1 < argc) { std::sscanf(argv[++i], "%dx%d", &fe::options.width, &fe::options.height); }
     else {
       if (arg == "--out" && i + 1 < argc) fe::options.out_dir = argv[i + 1];
+      if (arg == "--no-overclock") fe::options.overclock = false;
       rest.push_back(argv[i]);
     }
   }

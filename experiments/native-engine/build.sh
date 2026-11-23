@@ -61,12 +61,13 @@ generate() {
     echo '};'
     echo 'extern const size_t mu_embedded_reference_count = sizeof mu_embedded_references / sizeof mu_embedded_references[0];'
   } > "$gen/embedded_tables.cpp"
+  python3 -I "$here/tools/gen_api_names.py" "$tree/port/runtime/abi/mu_host.h" "$gen/api_names.cpp"
 }
 
 # Host services from melee-unlocked (headless: no SDL, no USB adapter, no renderer) plus our files.
 SOURCES='build/native-engine/mu/port/linux/host_services.cpp build/native-engine/mu/port/linux/input_script.cpp
   build/native-engine/mu/port/runtime/hle/ax_ucode.cpp build/native-engine/mu/port/runtime/hle/native_savestate.cpp
-  experiments/native-engine/runner/runner_main.cpp experiments/native-engine/runner/mu_elf.cpp experiments/native-engine/runner/rollback.cpp
+  experiments/native-engine/runner/runner_main.cpp experiments/native-engine/runner/mu_elf.cpp experiments/native-engine/runner/rollback.cpp experiments/native-engine/runner/hostprof.cpp build/native-engine/gen/api_names.cpp
   build/native-engine/gen/embedded_tables.cpp'
 INCLUDES='-Iexperiments/native-engine/runner -Ibuild/native-engine/mu/port/linux -Ibuild/native-engine/mu/port/runtime/abi
   -Ibuild/native-engine/mu/port/runtime/hle -Ibuild/native-engine/mu/port/runtime/host -Ibuild/native-engine/mu/port/runtime/ppc
@@ -83,7 +84,8 @@ build_linux() {
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/mu_imports.c -o \$o/mu_imports.o
     gcc -c build/native-engine/gen/embedded.S -o \$o/embedded.o
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/dirtytrack_linux.c -o \$o/dirtytrack.o
-    g++ $CXXFLAGS $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o -DMU_CARD_SIMPLE_COMMIT -pie -fPIE -lpthread -lz -lm -o build/native-engine/out/mu-native-linux"
+    gcc -fPIE -c experiments/native-engine/runner/hostprof.S -o \$o/hostprof.o
+    g++ $CXXFLAGS $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/hostprof.o -DMU_CARD_SIMPLE_COMMIT -pie -fPIE -lpthread -lz -lm -o build/native-engine/out/mu-native-linux"
   echo "built $out/mu-native-linux"
 }
 
@@ -98,7 +100,8 @@ build_nro() {
     aarch64-none-elf-gcc \$ARCH -c build/native-engine/gen/embedded.S -o \$o/embedded.o
     aarch64-none-elf-gcc -O2 -g -Wall \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.c -o \$o/dirtytrack.o
     aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.S -o \$o/dirtytrack_entry.o
-    aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES -Iswitch/src $SOURCES switch/src/switch_clocks.cpp \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \
+    aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/hostprof.S -o \$o/hostprof.o
+    aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES -Iswitch/src $SOURCES switch/src/switch_clocks.cpp \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \$o/hostprof.o \
       -I/opt/devkitpro/portlibs/switch/include -specs=/opt/devkitpro/libnx/switch.specs -L/opt/devkitpro/portlibs/switch/lib -L/opt/devkitpro/libnx/lib -lz -lnx -lm -o build/native-engine/out/mu-native.elf
     nacptool --create 'mu-native' 'Melee-NX-NetPlay' '0.1' build/native-engine/out/mu-native.nacp
     elf2nro build/native-engine/out/mu-native.elf build/native-engine/out/mu-native.nro --nacp=build/native-engine/out/mu-native.nacp

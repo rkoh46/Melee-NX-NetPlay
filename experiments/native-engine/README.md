@@ -59,7 +59,7 @@ nxlink -s -a <console ip> build/native-engine/out/mu-native.nro --args "--script
 
 Arguments (all optional): `--iso PATH`, `--script NAME|PATH`, `--frames N`, `--out DIR`,
 `--snapshot-at VS_MATCH_FRAME` (times a full save and restore at that frame; off by default; it does not change the digest), `--print-digest` (also stream the CSV rows),
-`--game PATH` (load another image instead of the embedded one). Rollback: `--rollback-test EVERY:DEPTH`, `--rollback-verify`, `--rollback-draw`, `--track-remap` (see below). Clock: `--no-overclock`, `--cpu-mhz N`. Embedded scripts: `parity_vs_onett`
+`--game PATH` (load another image instead of the embedded one). Rollback: `--rollback-test EVERY:DEPTH`, `--rollback-verify`, `--rollback-draw`, `--track-remap` (see below). Clock and profile: `--no-overclock`, `--cpu-mhz N`, `--core N`, `--profile`. Diagnosis: `--rollback-diff`, `--reference FILE.csv`, `--poll-ticks N` (changes the digest). Embedded scripts: `parity_vs_onett`
 (2 players, Onett, items, 7200-frame match), `vs4_busy` (4 players, random inputs), `parity_vs_items_off`,
 `parity_lcancel`, the other `parity_*` scripts, and `native_vs_ko` (never reaches a match on v1.0.5).
 
@@ -143,6 +143,21 @@ On the console the runner raises the CPU clock to 1785 MHz while it runs (`--no-
 the app's `switch/src/switch_clocks.cpp`, prints the reported and measured MHz at the start and the end, and puts
 the CPU clock back.
 
+Where a frame goes (`--profile`): every entry of the two interface tables between the game and the host gets a
+timing wrapper (`runner/hostprof.*`), and the run ends with a table per kind of frame: time inside the game
+image, and calls and time per host service. On Linux a first-pass frame is about half game image and 35 to 46%
+`dsp_mail` (the host's audio mixer); the game waits for the next frame with about 330 host polls, which cost 2 to
+3%. Each run also times fixed integer, floating-point and memory work at the start and the end (`calibration`
+lines), pins the simulation thread to one core on the console (`--core N`) and prints the measured MHz every 600
+retraces, because the reported clock is not what the core necessarily runs at (sys-clk overrides requests).
+
+Undrawn repeated frames, continued: the cause is not host polls (the same 329.6 per frame drawn or undrawn). The
+render pass leaves state that gameplay reads on the next frame; the engine's own rollback makes up for it with
+`camera_tasks()` (camera values and fighter bone matrices). Patches `0003` and `decomp-0002` make an undrawn
+frame call it. With that, `parity_vs_items_off` and `parity_lcancel` are IDENTICAL undrawn; the runs with items
+(`parity_vs_onett`, `vs4_busy`, four players on the other stage) still diverge, which points at item state the
+render pass also refreshes and the engine's rollback does not. `--rollback-diff` lists the differing state bytes.
+
 Caveats found on the way:
 - The simulation depends on the console clock: restoring the state without the clock diverges (items on).
 - This host lets the game stream its music from the disc; the test does not roll back across such a read. The
@@ -186,3 +201,14 @@ unmapping and mapping the range again puts it back in a state that can be protec
 
 The whole rollback frame is still over 16.67 ms. Two things are not yet in this number: the runner does not
 raise the CPU clock the way the app does, and repeated frames still build the GX stream and mix audio.
+
+## Clock and picture on the console (2026-11-22, later)
+
+- sys-clk is installed on the test console and sets the CPU to about 2091 MHz a moment after any program
+  starts, whatever is requested. Every console number in this file was therefore measured at about
+  2091 MHz, not at the stock 1020 MHz. The runner now prints the measured rate.
+- A 2-player frame without a picture (3.31 ms): 1.82 ms inside the game image, 1.18 ms in the host's audio
+  mixer, 0.22 ms in the game's wait-for-next-frame polling (330 polls).
+- With a picture (`frontend/`, second run, pipeline cache warm), 2-player Onett, 7200 match frames:
+  simulation thread 3.65 ms (p99 5.7, none over 16.67 ms), decoder thread 2.96 ms, render thread 4.28 ms;
+  8987 of 8998 frames drawn. `--warm-all` took 357 s before the match, which is not usable as a default.

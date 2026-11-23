@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds mu-native-gfx, the native-engine runner with a picture. Everything lands in build/native-engine-gfx/
 # (gitignored); build/native-engine/ is only read.
-#   ./build.sh sync     copy the fetched tree (build/native-engine/mu), the runner sources and the game image, apply
-#                       patches/0101 to the copy, write the patched decoder (patches/0102) and the embedded files
+#   ./build.sh sync     own copy of melee-unlocked (exported from the fetched clone, with ../patches and patches/0101), of
+#                       the runner as committed (MU_SYNC_REF=worktree: as on disk) and of the game image; writes the
+#                       patched decoder (patches/0102) and the embedded files
 #   ./build.sh image    the Linux test image (mu-arm-gfx): Xvfb, Mesa's software Vulkan driver, X11 headers
 #   ./build.sh deps     Dawn and SDL3 for aarch64 Linux (test build only), from ref/dawn and ref/SDL-dusklight
 #   ./build.sh null     Linux, no graphics device: decoder and frame check   -> out/mu-native-gfx-null
@@ -25,15 +26,34 @@ W=build/native-engine-gfx
 dock() { local limit=$1 image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
 
 sync_tree() {
-  [ -d "$src/mu/port/linux" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
+  [ -d "$src/mu/.git" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
   [ -f "$src/out/melee_game.so" ] || { echo "run ../build.sh game first" >&2; exit 1; }
-  mkdir -p "$work" "$out" "$gen"
-  # By content and without the source's time stamps: a changed file gets the time of the copy, so the next build sees it.
-  rsync -rlpc --delete --exclude .git "$src/mu/" "$work/mu/"
-  rsync -rlpc --delete "$here/../runner/" "$work/runner/"
-  cp "$src/out/melee_game.so" "$out/melee_game.so"
-  patch -s -p1 -d "$work/mu" < "$here/patches/0101-host-frontend-attach.patch"
-  touch "$work/runner"/*   # the runner is small: always rebuilt after a sync
+  mkdir -p "$work" "$out" "$gen" "$work/mu" "$work/runner"
+  local ref="${MU_SYNC_REF:-HEAD}" stage="$work/sync-stage"
+  # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
+  # files are in), exported once. Only what the host build reads and the patches touch.
+  if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
+    rm -rf "$work/mu-pristine"; mkdir -p "$work/mu-pristine"
+    git -C "$src/mu" archive HEAD port native sourceport/game/CMakeLists.txt sourceport/game/shim/mu_console_boot.c sourceport/tools | tar -x -C "$work/mu-pristine"
+  fi
+  # The runner and its patches as committed (MU_SYNC_REF=worktree takes the files on disk instead, which
+  # may be in the middle of someone's change).
+  rm -rf "$stage"; mkdir -p "$stage/patches"
+  if [ "$ref" = worktree ]; then
+    mkdir -p "$stage/experiments/native-engine"; cp -R "$here/../runner" "$stage/experiments/native-engine/runner"
+    cp "$here"/../patches/0*.patch "$stage/patches/"
+  else
+    git -C "$repo" archive "$ref" experiments/native-engine/runner experiments/native-engine/patches | tar -x -C "$stage"
+    cp "$stage"/experiments/native-engine/patches/0*.patch "$stage/patches/"
+  fi
+  cp -R "$work/mu-pristine" "$stage/mu"
+  for p in "$stage"/patches/0*.patch "$here/patches/0101-host-frontend-attach.patch"; do patch -s -p1 -d "$stage/mu" < "$p"; done
+  # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
+  rsync -rlpc --delete "$stage/mu/" "$work/mu/"
+  rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"
+  rm -rf "$stage"
+  cmp -s "$src/out/melee_game.so" "$out/melee_game.so" || cp "$src/out/melee_game.so" "$out/melee_game.so"
+  echo "runner and patches: $ref ($([ "$ref" = worktree ] && echo files on disk || git -C "$repo" rev-parse --short "$ref")); game image sha256 $(shasum -a 256 "$out/melee_game.so" | cut -c1-16)" | tee "$work/sync-state.txt"
   # This repository's GX decoder, with the address handling the native memory layout needs.
   mkdir -p "$gen/gxsrc/port/runtime/gx"
   cp "$repo/port/runtime/gx/gx_core.cpp" "$gen/gxsrc/port/runtime/gx/gx_core.cpp"

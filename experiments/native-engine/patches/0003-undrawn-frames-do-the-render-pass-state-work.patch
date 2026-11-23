@@ -1,0 +1,20 @@
+diff --git a/sourceport/game/shim/mu_online.c b/sourceport/game/shim/mu_online.c
+index 8852ac1..6d5022c 100644
+--- a/sourceport/game/shim/mu_online.c
++++ b/sourceport/game/shim/mu_online.c
+@@ -1563,6 +1563,15 @@ static void camera_tasks(void)
+     }
+ }
+ 
++/* Rollback test from outside the game (the runner's --rollback-test): the engine loop skips the draw
++ * of a repeated frame when the host says so, and then has to do what a real rollback does here. */
++void mu_online_camera_tasks(void)
++{
++    if (gm_GetFrameCount() != 0 && Camera_80030A50() != NULL) {   /* only inside a match */
++        camera_tasks();
++    }
++}
++
+ #include "mu_console_rollback.inc"
+ 
+ #if MU_SQUAD

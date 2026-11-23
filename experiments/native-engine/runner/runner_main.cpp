@@ -16,6 +16,7 @@
 #include "fixedmap.h"
 #include "rollback.h"
 #include "dirtytrack.h"
+#include "hostprof.h"
 
 #include <algorithm>
 #include <chrono>
@@ -63,6 +64,11 @@ struct Options {
   bool print_digest = false;
   uint32_t rollback_every = 0;      // rollback test: every this many VS match frames...
   uint32_t rollback_depth = 7;      // ...go back this many frames and simulate them again
+  uint32_t poll_ticks = 0;          // experiment: console clock ticks per host poll (0: melee-unlocked's 2048)
+  bool profile = false;             // per-service time table (--profile)
+  int core = -1;                    // Horizon: the core the simulation thread is pinned to (-1: the one it starts on)
+  std::string reference;            // a digest CSV to compare with instead of the embedded one
+  bool rollback_diff = false;       // list the state bytes that differ after the repeated frames (diagnosis)
   bool rollback_draw = false;       // draw the repeated frames too (a real rollback does not)
   bool overclock = true;            // Horizon: ask for the CPU clock below while running, as the app does
   uint32_t cpu_mhz = 1785;
@@ -96,6 +102,16 @@ struct Reference {
   size_t rows() const { return row.empty() ? 0 : row.size() - 1; }
   std::string at(size_t i) const { return text.substr(row[i], row[i + 1] - row[i] - 1); }   // without the newline
 };
+bool load_reference_file(const std::string& path, Reference* out) {      // a plain digest CSV, e.g. from an earlier run
+  FILE* in = std::fopen(path.c_str(), "rb");
+  if (!in) return false;
+  char block[65536]; size_t n;
+  while ((n = std::fread(block, 1, sizeof block, in)) > 0) out->text.append(block, n);
+  std::fclose(in);
+  out->row.push_back(0);
+  for (size_t at = 0; at < out->text.size(); ++at) if (out->text[at] == '\n') out->row.push_back(uint32_t(at + 1));
+  return out->loaded();
+}
 bool load_reference(const std::string& script, Reference* out) {
   for (size_t i = 0; i < mu_embedded_reference_count; ++i) {
     const auto& file = mu_embedded_references[i];
@@ -175,10 +191,16 @@ struct Run {
   uint32_t rb_next = 0, rb_pending = 0, rb_count = 0, rb_compared = 0, rb_different = 0, rb_first_different = 0;
   double rb_total = 0;
   uint64_t rb_last_faults = 0;
+  uint32_t rb_remembered_frame = 0, rb_diff_reports = 0, rb_diff_rollbacks = 0;
   uint32_t rb_last_disc_retrace = 0, rb_expected_frame = 0, rb_frame_jumps = 0, rb_first_jump = 0;
   size_t rb_missed = 0, rb_checks = 0;
   std::vector<float> save_ms, restore_ms, rollback_ms, repeated_ms, new_ms, first_pass_ms;
   std::vector<uint32_t> faults_per_frame;
+  // Per-service time (--profile), summed per kind of frame: 0 VS first pass, 1 repeated in a rollback, 2 everything else.
+  hostprof::Sample prof_last{};
+  uint64_t prof_calls[3][hostprof::kSlots]{}, prof_ticks[3][hostprof::kSlots]{};
+  double prof_frame_ms[3]{};
+  uint64_t prof_frames[3]{};
 } run_state;
 
 // Measurement only (--dirty-dump FILE): exact per-frame dirty pages, found by comparing every page
@@ -307,6 +329,19 @@ uint32_t rollback_step(uint32_t frame, double frame_ms, const char* row, int len
   mu_rollback::save(int32_t(frame));
   const double save = ms_since(t);
   r.save_ms.push_back(float(save));
+  // Diagnosis (--rollback-diff): once the repeated frames are back at the frame the rollback started
+  // from, the state should be what it was then. List where it is not.
+  if (o.rollback_diff && r.rb_pending == 2 && frame == r.rb_remembered_frame) {
+    const auto diffs = mu_rollback::differences_from_remembered(64);
+    if (!diffs.empty() && r.rb_diff_reports < 6) {
+      ++r.rb_diff_reports;
+      std::string text;
+      char part[48];
+      for (size_t i = 0; i < diffs.size() && i < 24; ++i) { std::snprintf(part, sizeof part, " %lx+%u", (unsigned long)diffs[i].first, diffs[i].second); text += part; }
+      say("rollback diff: after repeating up to match frame %u, %zu%s byte runs differ from the first pass:%s", frame, diffs.size(), diffs.size() >= 64 ? "+" : "", text.c_str());
+    }
+    if (!diffs.empty()) ++r.rb_diff_rollbacks;
+  }
   if (r.rb_pending) {
     (r.rb_pending > 1 ? r.repeated_ms : r.new_ms).push_back(float(frame_ms));
     r.rb_total += frame_ms + save;
@@ -320,6 +355,7 @@ uint32_t rollback_step(uint32_t frame, double frame_ms, const char* row, int len
   r.first_pass_ms.push_back(float(frame_ms));
   if (frame < r.rb_next || frame <= o.rollback_depth || !disc_quiet || !mu_rollback::has(int32_t(frame - o.rollback_depth))) return frame;
   if (o.rollback_verify) { r.rb_missed += mu_rollback::missed_writes(); ++r.rb_checks; }
+  if (o.rollback_diff) { mu_rollback::remember(); r.rb_remembered_frame = frame; }
   t = Clock::now();
   mu_rollback::restore(int32_t(frame - o.rollback_depth));
   const double restore = ms_since(t);
@@ -361,6 +397,19 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
   note_scene(&r.scenes, counters.retraces, state.scene_major, state.scene);
 
   const double frame_ms = r.have_last ? std::chrono::duration<double, std::milli>(now - r.last).count() : 0;
+  const uint64_t observer_in = r.options.profile ? hostprof::now() : 0;
+  if (r.options.profile) {
+    hostprof::Sample sample; hostprof::read(&sample);
+    const int kind = !vs_match ? 2 : (r.options.rollback_every && r.rb_pending > 1) ? 1 : 0;
+    if (r.have_last) {
+      for (int i = 0; i < hostprof::kSlots; ++i) {
+        r.prof_calls[kind][i] += sample.calls[i] - r.prof_last.calls[i];
+        r.prof_ticks[kind][i] += sample.ticks[i] - r.prof_last.ticks[i];
+      }
+      r.prof_frame_ms[kind] += frame_ms; ++r.prof_frames[kind];
+    }
+    r.prof_last = sample;
+  }
   uint32_t game_frame = state.match_frame;        // differs from state.match_frame right after a rollback
   if (r.options.rollback_every) {
     if (counters.disc_reads != r.last_disc_reads) r.rb_last_disc_retrace = counters.retraces;
@@ -394,13 +443,77 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
   if (r.have_last)
     r.frames.push_back({float(frame_ms), vs_match, fighting,
                         counters.disc_reads != r.last_disc_reads, false});
-  if (counters.retraces % 600 == 0)
+  if (counters.retraces % 600 == 0) {
+#ifdef __SWITCH__
+    say("retrace %u: scene %u/%u, match frame %u, core %d measures %u MHz", counters.retraces, state.scene_major, state.scene, state.match_frame,
+        (int)svcGetCurrentProcessorNumber(), switch_measure_cpu_mhz());
+#else
     say("retrace %u: scene %u/%u, match frame %u", counters.retraces, state.scene_major, state.scene, state.match_frame);
+#endif
+  }
   r.last_match_frame = game_frame;
   r.last_disc_reads = counters.disc_reads;
   r.last = Clock::now();   // the digest text, the comparison, the snapshot timing and the progress line are not part of the next frame
   r.have_last = true;
   (void)excluded;
+  if (r.options.profile) hostprof::discount(hostprof::now() - observer_in);   // this function is not part of whichever service called it
+}
+
+// Fixed pure-CPU and memory work, so a run says how fast the machine really is at that moment.
+double timed_ms(void (*work)()) { const auto t = Clock::now(); work(); return ms_since(t); }
+volatile uint64_t calibration_sink;
+void work_integer() { uint64_t x = 1; for (int i = 0; i < 12000000; ++i) { x = x * 6364136223846793005ull + 1442695040888963407ull; x ^= x >> 29; } calibration_sink = x; }
+void work_float() { double d = 1.0; for (int i = 0; i < 6000000; ++i) d = d * 1.0000001 + 0.5; calibration_sink = uint64_t(d); }
+std::vector<uint32_t> calibration_table;
+void work_memory() {      // a random walk through 64 MiB: almost every step misses every cache
+  uint32_t at = 0; for (int i = 0; i < 400000; ++i) at = calibration_table[at]; calibration_sink = at;
+}
+void work_copy() { static std::vector<uint8_t> a(16u << 20, 1), b(16u << 20); std::memcpy(b.data(), a.data(), a.size()); calibration_sink = b[4097]; }
+void calibrate(const char* when) {
+  if (calibration_table.empty()) {
+    const uint32_t n = (64u << 20) / 4;
+    calibration_table.resize(n);
+    // One cycle through all entries (a full-period generator), so the walk never gets stuck in a short loop.
+    uint32_t at = 0;
+    for (uint32_t i = 0; i < n; ++i) { const uint32_t next = uint32_t((uint64_t(at) * 5 + 12345) % n); calibration_table[at] = next; at = next; }
+    work_copy();
+  }
+  double best[4] = {1e9, 1e9, 1e9, 1e9};
+  void (*const works[4])() = {work_integer, work_float, work_memory, work_copy};
+  for (int round = 0; round < 3; ++round) for (int i = 0; i < 4; ++i) best[i] = std::min(best[i], timed_ms(works[i]));
+  say("calibration %s: integer %.2f ms, floating point %.2f ms, memory walk %.2f ms, 16 MiB copy %.2f ms (fixed work, best of 3)", when,
+      best[0], best[1], best[2], best[3]);
+}
+#ifdef __SWITCH__
+void measure_clock(const char* when) {
+  uint32_t mhz[5];
+  for (auto& m : mhz) m = switch_measure_cpu_mhz();
+  std::sort(mhz, mhz + 5);
+  say("clocks %s: the core measures %u MHz (5 runs: min %u, median %u, max %u) on core %d", when, mhz[2], mhz[0], mhz[2], mhz[4], (int)svcGetCurrentProcessorNumber());
+}
+#endif
+
+void report_profile() {
+  static const char* const kinds[3] = {"VS first-pass frames", "repeated frames in a rollback", "all other retraces (menus, loading)"};
+  auto& r = run_state;
+  const double tick_ms = 1000.0 / double(hostprof::frequency());
+  for (int kind = 0; kind < 3; ++kind) {
+    if (!r.prof_frames[kind]) continue;
+    const double frames = double(r.prof_frames[kind]), frame_ms = r.prof_frame_ms[kind] / frames;
+    std::vector<int> order;
+    double services = 0; uint64_t calls = 0;
+    for (int i = 0; i < hostprof::kSlots; ++i) if (r.prof_calls[kind][i]) { order.push_back(i); services += r.prof_ticks[kind][i] * tick_ms / frames; calls += r.prof_calls[kind][i]; }
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return r.prof_ticks[kind][a] > r.prof_ticks[kind][b]; });
+    say("profile, %s: %llu frames, %.3f ms per frame, %.1f service calls per frame", kinds[kind], (unsigned long long)r.prof_frames[kind], frame_ms, calls / frames);
+    say("  %-34s %10s %12s %7s", "where", "calls/frame", "ms/frame", "share");
+    say("  %-34s %10s %12.4f %6.1f%%", "inside the game image", "", frame_ms - services, 100 * (frame_ms - services) / frame_ms);
+    for (int i : order) {
+      const double ms = r.prof_ticks[kind][i] * tick_ms / frames;
+      if (ms < 0.0005 && r.prof_calls[kind][i] / frames < 0.5) continue;
+      say("  %-34s %10.2f %12.4f %6.1f%%", hostprof::name(i) ? hostprof::name(i) : "?", r.prof_calls[kind][i] / frames, ms, 100 * ms / frame_ms);
+    }
+  }
+  say("profile: 'host X' is time in that host service itself, 'game X' is time in a game function the host called back; each wrapped call adds about 20 instructions");
 }
 
 enum class Which { VsMatch, Fighting, All };
@@ -476,7 +589,26 @@ int simulate(const Options& options) {
   r.digest.reserve(size_t(options.frames) * 330);
   r.frames.reserve(options.frames);
   report_thread();
-  if (load_reference(options.script, &r.reference)) say("reference digest for %s: %zu rows (x86-64 AVX2+FMA build)", options.script.c_str(), r.reference.rows());
+#ifdef __SWITCH__
+  {
+    // Keep the simulation on one known core for the whole run.
+    s32 preferred = -1; u64 allowed = 0;
+    svcGetThreadCoreMask(&preferred, &allowed, CUR_THREAD_HANDLE);
+    const int core = options.core >= 0 ? options.core : (int)svcGetCurrentProcessorNumber();
+    const Result rc = svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1u << core);
+    svcSleepThread(0);
+    say("simulation thread: allowed cores mask %llx, preferred %d; pinned to core %d (rc %x), now on core %d", (unsigned long long)allowed, (int)preferred,
+        core, rc, (int)svcGetCurrentProcessorNumber());
+    measure_clock("on the simulation thread");
+  }
+#endif
+  calibrate("on the simulation thread, before the run");
+  if (options.profile) hostprof::install();
+  if (options.poll_ticks) { linux_host::set_poll_ticks(options.poll_ticks); say("EXPERIMENT: %u console clock ticks per host poll instead of 2048", options.poll_ticks); }
+  if (!options.reference.empty()) {
+    if (load_reference_file(options.reference, &r.reference)) say("reference digest from %s: %zu rows", options.reference.c_str(), r.reference.rows());
+    else say("cannot read the reference digest %s", options.reference.c_str());
+  } else if (load_reference(options.script, &r.reference)) say("reference digest for %s: %zu rows (x86-64 AVX2+FMA build)", options.script.c_str(), r.reference.rows());
   else say("no embedded reference digest for %s: exactness cannot be judged by this run", options.script.c_str());
 
   linux_host::Config config;
@@ -544,6 +676,11 @@ int simulate(const Options& options) {
     else say("scenes: same sequence and timing as the reference");
   }
 
+#ifdef __SWITCH__
+  measure_clock("after the run");
+#endif
+  calibrate("on the simulation thread, after the run");
+  if (options.profile) report_profile();
   if (r.match_first) say("VS match: retraces %u..%u", r.match_first, r.match_last);
   else say("VS match: NOT REACHED (the menu flow did not get to scene 2/2; see the scene lines and the host log for card errors)");
   report_timing("VS match frames, all", Which::VsMatch, true);
@@ -573,6 +710,7 @@ int simulate(const Options& options) {
     char label[96];
     std::snprintf(label, sizeof label, "rollback: whole rollback frame (restore + %u repeated frames + 1 new, with saves)", options.rollback_depth);
     report_series(label, r.rollback_ms);
+    if (options.rollback_diff) say("rollback diff: %u of %u rollbacks ended with state bytes different from the first pass", r.rb_diff_rollbacks, r.rb_count);
     if (r.rb_frame_jumps)
       say("rollback: %u retraces did not advance the match by exactly one frame (first at match frame %u): the scripted inputs slipped there, "
           "so a difference after that point says nothing about rollback", r.rb_frame_jumps, r.rb_first_jump);
@@ -610,7 +748,7 @@ void* simulate_thread(void* user) {
 void usage() {
   say("mu-native [--iso PATH] [--script NAME|PATH] [--frames N] [--out DIR] [--game melee_game.so]");
   say("          [--snapshot-at VS_MATCH_FRAME] [--print-digest] [--rollback-test EVERY[:DEPTH]] [--rollback-verify] [--rollback-draw]");
-  say("          [--track-remap] [--no-overclock] [--cpu-mhz N]");
+  say("          [--track-remap] [--no-overclock] [--cpu-mhz N] [--core N] [--profile]");
   std::string names;
   for (size_t i = 0; i < mu_embedded_script_count; ++i) names += std::string(" ") + mu_embedded_scripts[i].name;
   say("embedded scripts:%s", names.c_str());
@@ -646,6 +784,11 @@ int main(int argc, char** argv) {
     else if (arg == "--rollback-verify") options.rollback_verify = true;
     else if (arg == "--rollback-keep-clock") options.rollback_keep_clock = true;
     else if (arg == "--rollback-draw") options.rollback_draw = true;
+    else if (arg == "--rollback-diff") options.rollback_diff = true;
+    else if (arg == "--reference") options.reference = next();
+    else if (arg == "--profile") options.profile = true;
+    else if (arg == "--poll-ticks") options.poll_ticks = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
+    else if (arg == "--core") options.core = int(std::strtol(next().c_str(), nullptr, 0));
     else if (arg == "--no-overclock") options.overclock = false;
     else if (arg == "--cpu-mhz") options.cpu_mhz = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
     else if (arg == "--track-remap") dirtytrack_set_method(DIRTYTRACK_REMAP);   // Horizon: the other way to make pages read-only (dirtytrack.h)
@@ -663,10 +806,11 @@ int main(int argc, char** argv) {
   say("clocks: at start cpu %u gpu %u mem %u MHz reported%s; the CPU core measures %u MHz", clocks_before.cpu_hz / 1000000u,
       clocks_before.gpu_hz / 1000000u, clocks_before.mem_hz / 1000000u, clock_service ? "" : " (clock service not reachable)", switch_measure_cpu_mhz());
   if (options.overclock && clock_service) {
-    SwitchClockRequest request; request.cpu_mhz = options.cpu_mhz;      // CPU only: nothing is drawn, memory stays as it is
+    SwitchClockRequest request; request.cpu_mhz = options.cpu_mhz; request.mem_mhz = kSwitchClocksErista.mem_mhz;   // as the app, minus the GPU
     const SwitchClockResult now = switch_clocks_apply(request);
-    say("clocks: requested cpu %u MHz (%s), now reported %u MHz; the CPU core measures %u MHz", options.cpu_mhz, now.cpu_ok ? "accepted" : "REFUSED",
-        now.cpu_hz / 1000000u, switch_measure_cpu_mhz());
+    say("clocks: requested cpu %u MHz (%s) and memory %u MHz (%s); now reported cpu %u, memory %u MHz", options.cpu_mhz, now.cpu_ok ? "accepted" : "REFUSED",
+        request.mem_mhz, now.mem_ok ? "accepted" : "REFUSED", now.cpu_hz / 1000000u, now.mem_hz / 1000000u);
+    say("clocks: sys-clk, when installed, applies its own profile a moment later and overrides this: trust the measured values below, not the request");
   } else say("clocks: left as they are (%s)", options.overclock ? "no clock service" : "--no-overclock");
 #endif
   int result = 2;
@@ -694,7 +838,7 @@ int main(int argc, char** argv) {
   say("clocks: the CPU core measures %u MHz at the end of the run", switch_measure_cpu_mhz());
   if (clock_service) {
     if (options.overclock && clocks_before.cpu_hz) {
-      SwitchClockRequest back; back.cpu_mhz = clocks_before.cpu_hz / 1000000u;
+      SwitchClockRequest back; back.cpu_mhz = clocks_before.cpu_hz / 1000000u; back.mem_mhz = clocks_before.mem_hz / 1000000u;
       const SwitchClockResult restored = switch_clocks_apply(back);
       say("clocks: cpu put back to %u MHz (%s)", restored.cpu_hz / 1000000u, restored.cpu_ok ? "ok" : "REFUSED");
     }
