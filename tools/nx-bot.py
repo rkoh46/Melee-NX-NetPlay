@@ -84,6 +84,22 @@ def classify(path):
     return "unknown"
 
 
+def home_cursor(path):
+    """Where the HOME menu's cursor is, from its cyan highlight: "tile1" (the first game tile), "profile"
+    (the user icon, where A opens the user's page), "bottom" (the row of round buttons), or "other"."""
+    from PIL import Image
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    px = lambda x, y: im.getpixel((int(x * w / 1280), int(y * h / 720)))
+    cyan = lambda c: c[1] > 110 and c[2] > 140 and c[2] - c[0] > 70   # the highlight pulses between a dark and a bright cyan
+    hit = lambda pts: any(cyan(px(x, y)) for x, y in pts)
+    if hit([(x, y) for x in range(97, 106) for y in (260, 320, 380)]): return "tile1"
+    if hit([(x, 65) for x in range(50, 60)] + [(x, 65) for x in range(120, 130)]): return "profile"
+    for cx in range(280, 1001, 90):
+        if hit([(x, 545) for x in range(cx - 49, cx - 39)]): return "bottom"
+    return "other"
+
+
 def quit_app(bot, shots_dir):
     """Close whatever application is running or suspended (HOME, X on its tile, A to confirm)."""
     import os
@@ -120,10 +136,19 @@ def launch_hbmenu(bot, shots_dir):
         if state == "hbmenu":
             if held_r: bot.release("R"); held_r = False
             time.sleep(0.5); bot.click("Y"); return True
+        cursor = home_cursor(path) if state in ("home", "unknown") else ""
+        if cursor in ("profile", "bottom") or (state == "home" and cursor == "other"):
+            # Never press A here: on the user icon it opens the user's page, on a round button the eShop,
+            # settings or power menu. Walk the cursor to the first game tile instead and look again.
+            if held_r: bot.release("R"); held_r = False; time.sleep(0.3)
+            print(f"[launch] the cursor is on {cursor}; moving it to the first tile", flush=True)
+            if cursor == "profile": bot.click("DDOWN")
+            elif cursor == "bottom": bot.click("DUP")
+            else:
+                for _ in range(12): bot.click("DLEFT"); time.sleep(0.25)
+            time.sleep(1.0); continue
         if state == "home":
-            # HOME on the HOME menu puts the cursor back on the first tile (the player may have left it
-            # on the eShop button, and A then opened the eShop).
-            if not held_r: bot.click("HOME"); time.sleep(1.0); bot.press("R"); held_r = True; time.sleep(0.4)
+            if not held_r: bot.press("R"); held_r = True; time.sleep(0.4)
             bot.click("A"); time.sleep(1.5); continue
         if state == "home-playing":
             if held_r: bot.release("R"); held_r = False
