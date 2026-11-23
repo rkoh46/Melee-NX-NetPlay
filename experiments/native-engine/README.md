@@ -235,11 +235,45 @@ This repository vendors the five `.diff` pairs and whole `GameSetup_gui.dat`, `S
 under `port/slippi_sys`; the headless Linux host has no way to add or replace disc files yet. Until then a match is
 entered without menus (`--online`, `--net`), which upstream also forces the menus off for.
 
+### Using the netplay host from another main (hand-over for the frontend)
+
+The host side of online play is `runner/net_host.h` / `net_host.cpp`; `runner_main.cpp` only calls it.
+
+Compile or link:
+- `runner/net_host.cpp` (against melee-unlocked's headers, like the other runner files; it needs `rollback.cpp`,
+  `dirtytrack_*.c/.S`, `mu_elf_bridge.h` and patch `0002`).
+- The netplay object: `build/native-engine/obj-nx/netplay.o` (services variant: `obj-nx-services/netplay.o`), made
+  by `../build.sh nro`. It is the bridge, this repository's netplay sources and ENet in one object with every
+  other symbol local, because the app and melee-unlocked share names. To build it elsewhere, repeat `net_build`
+  from `build.sh` (same flags, then `ld -r --force-group-allocation` and `objcopy --localize-hidden`).
+- Embedded symbols, next to the game image in the generated assembly file: `mu_embedded_snapexcl` and
+  `mu_embedded_snapexcl_end` (the build's `melee_game.snapexcl`).
+- Libraries: zlib; for the services variant also curl, mbedTLS, mbedx509 and mbedcrypto. Put libnx before libc so
+  ENet and curl get the socket-aware `fcntl`. Call `socketInitializeDefault()` before `net_host::start`.
+
+Calls, in order:
+1. `net_host::Options o;` and for each argument `net_host::parse_option(arg, next, &o)` (true when it was one of
+   `--net`, `--online`, `--user-dir`, `--net-delay`, `--net-character`, `--net-inputs`, `--selftest`,
+   `--net-store`, `--net-no-check`, `--track-remap`, `--fake-user`).
+2. If `net_host::wanted(o)`: set `o.out_dir`, `o.iso_path`, `o.embedded_image`, then `net_host::start(o, log)`
+   before `linux_host::initialize` (non-zero is an exit code). Run the host paced and without an input script.
+3. In the host's tables hook, when it is given the host table: `net_host::install(host)`.
+4. Every retrace after the frame: `net_host::on_retrace(row, length, fighting, frame_ms)` (the digest row, whether
+   fighters were simulated, the wall time since the previous call; pass -1 for no timing).
+5. After the game stops and before `linux_host::shutdown`: `net_host::stop_tracking()`.
+6. `net_host::report()` (the end-of-run lines and `digest-net-confirmed.csv`), then `net_host::shutdown()`.
+
+Pads: without `--net-inputs` the game reads the host's `pad_read`, whatever that is; `--online` never sets the
+generated inputs by itself. `--net` (the two-instance test) does, with a seed per player.
+
 ### Open items
 
 - The self-test's differences inside fighter data (fighter+0x6D4, +0x2968, +0x28C0, +0x2AC3 in this build's
   64-bit layout): not yet identified as fields. Everything else it lists is drawing-related.
-- Input suggestions (message 0x87): the app's netplay ignores them on receipt and never sends them.
+- Input suggestions (message 0x87): the app's netplay ignores them on receipt and never sends them. Using a
+  received suggestion is a small change in `port/` (keep the newest per player in `slippi_net.cpp`, use it for
+  the predicted inputs in `slippi_online.cpp`), but it cannot be tested here: both test instances are this app,
+  which sends none, and the test's inputs are generated at frame time, so there is nothing newer to suggest.
 - Four players and items in a netplay test (the local-peer match is two players, items off).
 
 ## Licensing

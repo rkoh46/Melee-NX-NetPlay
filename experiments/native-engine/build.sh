@@ -70,7 +70,7 @@ generate() {
 # Host services from melee-unlocked (headless: no SDL, no USB adapter, no renderer) plus our files.
 SOURCES='build/native-engine/mu/port/linux/host_services.cpp build/native-engine/mu/port/linux/input_script.cpp
   build/native-engine/mu/port/runtime/hle/ax_ucode.cpp build/native-engine/mu/port/runtime/hle/native_savestate.cpp
-  experiments/native-engine/runner/runner_main.cpp experiments/native-engine/runner/mu_elf.cpp experiments/native-engine/runner/rollback.cpp experiments/native-engine/runner/hostprof.cpp build/native-engine/gen/api_names.cpp
+  experiments/native-engine/runner/runner_main.cpp experiments/native-engine/runner/mu_elf.cpp experiments/native-engine/runner/rollback.cpp experiments/native-engine/runner/net_host.cpp experiments/native-engine/runner/hostprof.cpp build/native-engine/gen/api_names.cpp
   build/native-engine/gen/embedded_tables.cpp'
 INCLUDES='-Iexperiments/native-engine/runner -Ibuild/native-engine/mu/port/linux -Ibuild/native-engine/mu/port/runtime/abi
   -Ibuild/native-engine/mu/port/runtime/hle -Ibuild/native-engine/mu/port/runtime/host -Ibuild/native-engine/mu/port/runtime/ppc

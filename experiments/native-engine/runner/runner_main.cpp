@@ -17,7 +17,7 @@
 #include "rollback.h"
 #include "dirtytrack.h"
 #include "hostprof.h"
-#include "netplay_bridge.h"
+#include "net_host.h"
 
 #include <algorithm>
 #include <chrono>
@@ -69,17 +69,7 @@ struct Options {
   uint32_t rollback_depth = 7;      // ...go back this many frames and simulate them again
   // Netplay test (--net): this instance is one of two that play each other through the engine's own
   // online code and the app's Slippi netplay, over loopback.
-  // Real services (a build with MU_NET_SERVICES=1 only): MODE[:CODE], modes unranked, direct:CODE, teams, party.
-  std::string online;
-  std::string user_dir;             // where user.json is (default: the app's own folder on the console)
-  bool fake_user = false;           // tests against a local mock service: write a made-up user.json there
-  std::string net;                  // LOCAL_INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT
-  int net_delay = 2;                // Slippi input delay, frames
-  int net_character = -1;           // external character id (-1: 2 for player 0, 9 for player 1)
-  uint32_t net_inputs = 0;          // seed of the game's generated test inputs (0: this instance's index + 1)
-  bool net_no_check = false;        // do not collect the game's per-frame state checksums (a little less work per frame)
-  bool net_engine_store = false;    // serve savestates with melee-unlocked's own snapshot engine (comparison)
-  std::string selftest;             // EVERY:DEPTH for the engine's own rollback self-test
+  net_host::Options net;            // the engine's own online path: --net, --online and their options (net_host.h)
   uint32_t poll_ticks = 0;          // experiment: console clock ticks per host poll (0: melee-unlocked's 2048)
   bool profile = false;             // per-service time table (--profile)
   int core = -1;                    // Horizon: the core the simulation thread is pinned to (-1: the one it starts on)
@@ -185,36 +175,6 @@ void note_scene(std::vector<Scene>* scenes, uint32_t retrace, uint32_t major, ui
   if (scenes->empty() || scenes->back().major != major || scenes->back().minor != minor) scenes->push_back({retrace, major, minor});
 }
 
-bool write_file(const std::string& path, const void* data, size_t size);
-// State of a netplay run (--net); the functions are further down.
-struct NetRun {
-  bool on = false, asked = false;
-  int index = 0;
-  uint8_t character = 2;
-  int32_t latest_saved = INT32_MIN;
-  uint64_t saves = 0, loads = 0, missing = 0, selftests = 0, selftest_failures = 0, selftest_bytes = 0;
-  uint64_t depth_count[16]{};
-  std::vector<float> save_ms, restore_ms;
-  bool failed = false;
-  int mode = 2;                     // Slippi mode of the requested match
-  std::string code = "PEER#001";    // the opponent's connect code (Direct)
-  bool ranked_refused = false;
-  // Rows of the digest (offset, length) and whether the state they show was later replaced by a
-  // rollback: a frame simulated on a predicted input is shown once and corrected without being shown again.
-  std::vector<std::pair<uint32_t, uint32_t>> rows;
-  std::vector<uint8_t> superseded;
-  // Timing of online frames (work only: the host's pacing sleep is taken out).
-  bool in_resim = false;
-  Clock::time_point last_command;
-  uint64_t loads_at_last_frame = 0, slept_at_last_frame = 0;
-  std::vector<float> first_pass_ms, rollback_frame_ms, repeated_ms;
-  // The game's own per-frame state checksum (what Slippi's desync detection compares), last value
-  // per online frame: after a rollback the frame is simulated again and the value is replaced, so
-  // these are final states and two machines can be compared by them.
-  bool check = true;
-  std::map<int32_t, std::pair<uint32_t, uint32_t>> state_sum;     // frame -> checksum, RNG seed
-  uint32_t desync_lines = 0;
-} net;
 
 struct Frame { float ms; bool vs_match; bool fighting; bool disc; bool excluded; };
 struct Run {
@@ -259,27 +219,7 @@ struct DirtyDump {
   std::vector<std::vector<uint8_t>> shadow;
   std::vector<uint32_t> pages;
 } dirty;
-std::vector<native_savestate::Span> snapshot_spans() {
-  const auto& game = linux_host::game_api();
-  std::vector<MuStateRegion> ranges(game.snapshot_ranges(nullptr, 0));
-  ranges.resize(game.snapshot_ranges(ranges.data(), uint32_t(ranges.size())));
-  std::vector<MuStateRegion> exclusions(game.state_exclusions(nullptr, 0));
-  exclusions.resize(game.state_exclusions(exclusions.data(), uint32_t(exclusions.size())));
-  // The sound driver's own state, listed by the game's build next to the image (melee_game.snapexcl:
-  // "offset size ..." lines, offsets from the image base). The engine's host leaves it out of every
-  // rollback snapshot, as a console savestate does.
-  if (run_state.options.game.empty()) {
-    const std::string text(reinterpret_cast<const char*>(mu_embedded_snapexcl), size_t(mu_embedded_snapexcl_end - mu_embedded_snapexcl));
-    for (size_t at = 0; at < text.size();) {
-      const size_t end = std::min(text.find('\n', at), text.size());
-      unsigned long long offset = 0, size = 0;
-      if (text[at] != '#' && std::sscanf(text.substr(at, end - at).c_str(), "%llx %llx", &offset, &size) == 2 && size)
-        exclusions.push_back(MuStateRegion{reinterpret_cast<void*>(uintptr_t(linux_host::game_image_base + offset)), uint32_t(size)});
-      at = end + 1;
-    }
-  }
-  return native_savestate::subtract(ranges, exclusions);
-}
+std::vector<native_savestate::Span> snapshot_spans() { return net_host::snapshot_spans(run_state.options.game.empty()); }
 void dirty_frame(uint32_t match_frame) {
   auto& d = dirty;
   if (d.spans.empty()) {
@@ -452,15 +392,7 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
     n += std::snprintf(row + n, sizeof row - n, ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u", f.present, f.stocks, f.action, f.anim_frame,
                        f.pos_x, f.pos_y, f.pos_z, f.vel_x, f.vel_y, f.vel_z, f.percent, f.facing);
   row[n++] = '\n';
-  if (net.on) {
-    net.rows.push_back({uint32_t(r.digest.size()), uint32_t(n)}); net.superseded.push_back(0);
-    const uint64_t slept = linux_host::slept_nanoseconds();
-    if (r.have_last && fighting) {
-      const double work = std::chrono::duration<double, std::milli>(now - r.last).count() - double(slept - net.slept_at_last_frame) / 1e6;
-      (net.loads != net.loads_at_last_frame ? net.rollback_frame_ms : net.first_pass_ms).push_back(float(work));
-    }
-    net.loads_at_last_frame = net.loads; net.slept_at_last_frame = slept;
-  }
+  net_host::on_retrace(row, size_t(n), fighting, r.have_last ? std::chrono::duration<double, std::milli>(now - r.last).count() : -1.0);
   r.digest.append(row, size_t(n));
   if (r.options.print_digest) { std::fwrite(row, 1, size_t(n), stdout); }
   note_scene(&r.scenes, counters.retraces, state.scene_major, state.scene);
@@ -528,171 +460,11 @@ void observe(const MuStatePod& state, const linux_host::Counters& counters, void
   if (r.options.profile) hostprof::discount(hostprof::now() - observer_in);   // this function is not part of whichever service called it
 }
 
-// ---- the engine's own online path (--net) ---------------------------------------------------------
-uint32_t net_be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
-void net_put32(std::vector<uint8_t>* out, uint32_t v) { out->push_back(uint8_t(v >> 24)); out->push_back(uint8_t(v >> 16)); out->push_back(uint8_t(v >> 8)); out->push_back(uint8_t(v)); }
-// --net-store engine: melee-unlocked's own snapshot engine instead of the hot-page store, to tell
-// what is a property of the engine's rollback from what is a property of our store.
-native_savestate::Engine net_engine;
-bool net_tracking() {
-  if (run_state.options.net_engine_store) {
-    if (!net_engine.active()) { net_engine.begin(snapshot_spans(), 12); say("net: melee-unlocked's snapshot engine covers %zu bytes in %zu spans", net_engine.bytes(), net_engine.spans().size()); }
-    return true;
-  }
-  if (mu_rollback::active()) return true;
-  if (net.failed) return false;
-  std::string error;
-  if (!mu_rollback::begin(snapshot_spans(), 12, false, &error)) { net.failed = true; say("net: cannot start the snapshot store: %s", error.c_str()); return false; }
-  say("net: snapshot store tracking %zu pages (%.1f MiB)", mu_rollback::tracked_pages(), mu_rollback::tracked_pages() / 256.0);
-  return true;
-}
-// The game's slippi_command. Savestates (0xB1 capture, 0xB2 load, both keyed by frame) and the
-// self-test (0xF0 keep a reference, 0xF1 compare with it) are served by the hot-page store; every
-// other command goes to the app's Slippi device.
-int32_t net_slippi_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {
-  if (response_size) *response_size = 0;
-  std::vector<uint8_t> reply;
-  if ((command == 0xB1 || command == 0xB2) && payload && size >= 4) {
-    const int32_t frame = int32_t(net_be32(payload));
-    if (!net_tracking()) return -1;
-    const auto t = Clock::now();
-    const bool engine = run_state.options.net_engine_store;
-    // While the game simulates frames again, each one saves its state first: the time from the
-    // previous save (or the load) to this one is one repeated frame.
-    if (command == 0xB1 && net.in_resim) net.repeated_ms.push_back(float(std::chrono::duration<double, std::milli>(t - net.last_command).count()));
-    if (command == 0xB1) {
-      if (engine) net_engine.capture(frame); else mu_rollback::save(frame);
-      net.save_ms.push_back(float(ms_since(t))); ++net.saves;
-      net.latest_saved = std::max(net.latest_saved, frame);
-    } else if (engine ? net_engine.load_keep(frame) : mu_rollback::restore(frame)) {
-      net.restore_ms.push_back(float(ms_since(t))); ++net.loads;
-      const int depth = net.latest_saved - frame + 1;        // frames simulated again, including the newest
-      ++net.depth_count[std::min(std::max(depth, 0), 15)];
-      for (int i = 0; i <= depth && size_t(i) < net.superseded.size(); ++i) net.superseded[net.superseded.size() - 1 - size_t(i)] = 1;
-      net.latest_saved = frame;
-    } else { ++net.missing; say("net: no snapshot kept for frame %d", frame); }
-    net.last_command = Clock::now();
-    return 0;
-  }
-  // Ranked is refused exactly where melee-unlocked refuses it: the search does not start, and the
-  // match state the game polls next says so. (Its host has no Ranked backend either.)
-  if (command == 0xB4 && payload && size >= 1) net.ranked_refused = payload[0] == 0;
-  if (command == 0xB4 && net.ranked_refused) { say("net: %s", netplay_bridge::ranked_refusal()); return 0; }
-  if (command == 0xBA) net.ranked_refused = false;            // CMD_CLEANUP_CONNECTION
-  if (command == 0xF0 && payload && size == 4) {
-    if (net_tracking()) { if (run_state.options.net_engine_store) net_engine.keep_reference(int32_t(net_be32(payload))); else mu_rollback::remember(); }
-    return 0;
-  }
-  if (command == 0xF1 && payload && size == 4) {
-    ++net.selftests;
-    const auto diffs = run_state.options.net_engine_store ? net_engine.compare_reference() : mu_rollback::differences_from_remembered(100000);
-    reply.assign(4, 0);
-    if (!diffs.empty()) {
-      ++net.selftest_failures;
-      const size_t listed = std::min<size_t>(diffs.size(), 480);
-      reply.clear(); net_put32(&reply, uint32_t(listed));
-      size_t bytes = 0;
-      for (size_t i = 0; i < diffs.size(); ++i) { if (i < listed) { net_put32(&reply, uint32_t(diffs[i].first)); net_put32(&reply, diffs[i].second); } bytes += diffs[i].second; }
-      net.selftest_bytes += bytes;
-      if (net.selftest_failures <= 5) say("net selftest: frame %d differs after re-simulation: %zu ranges, %zu bytes", int32_t(net_be32(payload)), diffs.size(), bytes);
-    }
-  } else if (!netplay_bridge::handle(command, payload, size, &reply)) return -1;
-  if (command == 0xB3 && net.ranked_refused && reply.size() > 357 + 64) {
-    reply[0] = 5;                                             // MM_ERROR_ENCOUNTERED
-    std::memset(reply.data() + 357, 0, 241);                  // the error text field of the match state reply
-    std::snprintf(reinterpret_cast<char*>(reply.data()) + 357, 241, "%s", netplay_bridge::ranked_refusal());
-  }
-  if (reply.size() > capacity || (!reply.empty() && !response)) return -2;
-  if (!reply.empty()) std::memcpy(response, reply.data(), reply.size());
-  if (response_size) *response_size = uint32_t(reply.size());
-  return 0;
-}
-// The game asks at boot whether to enter an online match without menus; the first time, the match is requested.
-int32_t net_online_test_match(MuOnlineMatch* out) {
-  if (!net.asked) {
-    net.asked = true;
-    const bool asked = netplay_bridge::request_match(net.mode, net.code, net.character, 0);
-    net.ranked_refused = !asked;
-    say("net: %s (mode %d, character %u)", asked ? "asked for a match" : netplay_bridge::ranked_refusal(), net.mode, net.character);
-  }
-  if (out) { std::memset(out, 0, sizeof *out); out->mode = uint8_t(net.mode); out->local_port = 0; }
-  return 1;      // 1 = the diagnostic harness (generated inputs and the self-test are allowed)
-}
-uint32_t net_retrace_count() { return linux_host::counters().retraces; }
-void (*net_resim_original)(int32_t) = nullptr;
-void net_resim_phase(int32_t entering) {
-  net.in_resim = entering != 0;
-  if (net_resim_original) net_resim_original(entering);
-}
-// The game's log lines pass through here. With MELEE_TRACE_P2P_PADS the game writes one "state f"
-// line per simulated frame (and one "pads f" line): those are collected, not printed.
-void (*net_log_original)(const char*) = nullptr;
-void net_log(const char* text) {
-  if (text && !std::strncmp(text, "state f ", 8)) {
-    int frame = 0; unsigned sum = 0, seed = 0;
-    if (std::sscanf(text, "state f %d sum %x seed %x", &frame, &sum, &seed) == 3) net.state_sum[frame] = {sum, seed};
-    return;
-  }
-  if (text && !std::strncmp(text, "pads f ", 7)) return;
-  if (text && (std::strstr(text, "DESYNC") || std::strstr(text, "desync risk"))) ++net.desync_lines;
-  if (net_log_original) net_log_original(text);
-}
+// The engine's own online path (--net, --online) is in net_host.cpp.
 void runner_tables_hook(MuHostApi* host, MuGameApi* game) {
-  if (host && net.on) {
-    host->slippi_command = net_slippi_command; host->online_test_match = net_online_test_match;
-    // An online match is recorded as a replay; this host keeps none, and the game does not check for that.
-    if (!host->replay_event) host->replay_event = [](uint8_t, const uint8_t*, uint32_t) {};
-    if (!host->replay_finished) host->replay_finished = []() {};
-    net_resim_original = host->resim_phase; host->resim_phase = net_resim_phase;
-    net_log_original = host->log; host->log = net_log;
-  }
+  net_host::install(host);
   if (run_state.options.profile) hostprof::wrap_tables(host, game);
 }
-void report_net() {
-  say("net: %llu state saves, %llu rollbacks (loads), %llu loads with no snapshot; app device counted %llu rollbacks", (unsigned long long)net.saves,
-      (unsigned long long)net.loads, (unsigned long long)net.missing, (unsigned long long)netplay_bridge::rollbacks_seen_by_device());
-  std::string depths; char part[32];
-  for (int d = 0; d < 16; ++d) if (net.depth_count[d]) { std::snprintf(part, sizeof part, " %d%s:%llu", d, d == 15 ? "+" : "", (unsigned long long)net.depth_count[d]); depths += part; }
-  say("net: rollback depth (frames simulated again : how often):%s", depths.empty() ? " none" : depths.c_str());
-  report_series("net: save", net.save_ms);
-  report_series("net: restore", net.restore_ms);
-  report_series("net: online frame without a rollback (work only)", net.first_pass_ms);
-  report_series("net: online frame with a rollback (load, repeated frames, the new frame, saves)", net.rollback_frame_ms);
-  report_series("net: one repeated frame inside a rollback (with its save)", net.repeated_ms);
-  {
-    size_t late = 0; for (float v : net.rollback_frame_ms) if (v > 1000.0f / 60) ++late;
-    say("net: rollback frames over 16.67 ms: %zu of %zu", late, net.rollback_frame_ms.size());
-  }
-  // Final states, to compare two machines by eye: a running hash of (frame, state checksum, RNG seed)
-  // over all frames up to each checkpoint. The last frames of a run may still be predictions and are left out.
-  if (net.check && !net.state_sum.empty()) {
-    const int32_t first = net.state_sum.begin()->first, last = net.state_sum.rbegin()->first - 30;
-    uint64_t h = 0xcbf29ce484222325ull; size_t n = 0; std::string line;
-    auto mix = [&](uint32_t v) { for (int i = 0; i < 4; ++i) { h ^= (v >> (8 * i)) & 0xff; h *= 0x100000001b3ull; } };
-    for (const auto& entry : net.state_sum) {
-      if (entry.first > last) break;
-      mix(uint32_t(entry.first)); mix(entry.second.first); mix(entry.second.second); ++n;
-      if (entry.first > 0 && entry.first % 300 == 0) {
-        char part[64]; std::snprintf(part, sizeof part, " %d:%08x", entry.first, uint32_t(h ^ (h >> 32)));
-        line += part;
-        if (line.size() > 150) { say("net check (frame:hash of all final states so far):%s", line.c_str()); line.clear(); }
-      }
-    }
-    if (!line.empty()) say("net check (frame:hash of all final states so far):%s", line.c_str());
-    say("net check: %zu frames from %d; %u desync messages from the game%s", n, first, net.desync_lines,
-        net.desync_lines ? "" : " (the game's own checksum comparison with the other side found nothing)");
-  }
-  // The rows whose state was final when shown: these must be the same on both sides.
-  std::string confirmed; size_t kept = 0;
-  for (size_t i = 0; i < net.rows.size(); ++i) if (!net.superseded[i]) { confirmed.append(run_state.digest, net.rows[i].first, net.rows[i].second); ++kept; }
-  const std::string path = run_state.options.out_dir + "/digest-net-confirmed.csv";
-  say("net: %zu of %zu shown states were never replaced by a rollback; %s %s", kept, net.rows.size(),
-      write_file(path, confirmed.data(), confirmed.size()) ? "written to" : "COULD NOT WRITE", path.c_str());
-  if (!run_state.options.selftest.empty())
-    say("net selftest: %llu comparisons, %llu with differences (%llu bytes in all)%s", (unsigned long long)net.selftests, (unsigned long long)net.selftest_failures,
-        (unsigned long long)net.selftest_bytes, net.selftests && !net.selftest_failures ? ": the engine's rollback is byte-exact with this store" : "");
-}
-
 // Fixed pure-CPU and memory work, so a run says how fast the machine really is at that moment.
 double timed_ms(void (*work)()) { const auto t = Clock::now(); work(); return ms_since(t); }
 volatile uint64_t calibration_sink;
@@ -839,7 +611,7 @@ int simulate(const Options& options) {
   calibrate("on the simulation thread, before the run");
   linux_host::set_tables_hook(runner_tables_hook);
   if (options.poll_ticks) { linux_host::set_poll_ticks(options.poll_ticks); say("EXPERIMENT: %u console clock ticks per host poll instead of 2048", options.poll_ticks); }
-  if (!options.net.empty() || !options.online.empty()) say("netplay run: the script and its reference digest do not apply");
+  if (net_host::wanted(options.net)) say("netplay run: the script and its reference digest do not apply");
   else if (!options.reference.empty()) {
     if (load_reference_file(options.reference, &r.reference)) say("reference digest from %s: %zu rows", options.reference.c_str(), r.reference.rows());
     else say("cannot read the reference digest %s", options.reference.c_str());
@@ -853,57 +625,13 @@ int simulate(const Options& options) {
   config.card_dir = options.out_dir + "/card";
   config.input_script = script_path(options);
   config.max_frames = options.frames;
-  if (!options.online.empty()) {
-    // The app's real matchmaking, user file and reporting. Never started by a test on a development machine
-    // except against a local mock (SLIPPI_MM_URL, the app's own override).
-    netplay_bridge::Setup setup;
-    const size_t colon = options.online.find(':');
-    const std::string mode = options.online.substr(0, colon);
-    net.mode = mode == "unranked" ? 1 : mode == "direct" ? 2 : mode == "teams" ? 3 : mode == "party" ? 4 : mode == "ranked" ? 0 : -1;
-    net.code = colon == std::string::npos ? "" : options.online.substr(colon + 1);
-    if (net.mode < 0) { say("--online wants unranked, direct:CODE, teams or party"); return 2; }
-    setup.services = true; setup.fake_user = options.fake_user; setup.iso_path = options.iso;
-    setup.local_index = int(options.net_inputs);        // only names the made-up user of a mock test
-#ifdef __SWITCH__
-    setup.user_dir = options.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User" : options.user_dir;
-#else
-    setup.user_dir = options.user_dir.empty() ? options.out_dir + "/user" : options.user_dir;
-#endif
-    setup.delay_frames = options.net_delay; setup.retrace_count = net_retrace_count;
-    std::string net_error;
-    if (!netplay_bridge::start(setup, &net_error)) { say("online: %s", net_error.empty() ? "the online module did not start" : net_error.c_str()); return 1; }
-    net.on = true;
-    net.character = uint8_t(options.net_character >= 0 ? options.net_character : 2);
-    if (options.net_inputs) { char seed[16]; std::snprintf(seed, sizeof seed, "%u", options.net_inputs); setenv("MELEE_ONLINE_TEST_INPUTS", seed, 1); }
-    if (!options.selftest.empty()) setenv("MELEE_ONLINE_SELFTEST", options.selftest.c_str(), 1);
-    net.check = !options.net_no_check;
-    if (net.check) setenv("MELEE_TRACE_P2P_PADS", "1", 1);
-    config.input_script.clear();
-    say("online: services on, mode %s%s%s, user folder %s, input delay %d", mode.c_str(), net.code.empty() ? "" : " with ", net.code.c_str(),
-        setup.user_dir.c_str(), options.net_delay);
-  } else if (!options.net.empty()) {
-    netplay_bridge::Setup setup;
-    char ip[64] = {}; unsigned index = 0, local_port = 0, remote_port = 0;
-    if (std::sscanf(options.net.c_str(), "%u:%u:%63[^:]:%u", &index, &local_port, ip, &remote_port) != 4 || index > 1) { say("--net wants INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT"); return 2; }
-    setup.local_index = int(index); setup.local_port = uint16_t(local_port); setup.remote_ip = ip; setup.remote_port = uint16_t(remote_port);
-    setup.user_dir = options.out_dir + "/user"; setup.delay_frames = options.net_delay; setup.retrace_count = net_retrace_count;
-    std::string net_error;
-    if (!netplay_bridge::start(setup, &net_error)) { say("net: %s", net_error.c_str()); return 1; }
-    net.on = true; net.index = int(index);
-#ifndef __SWITCH__
-    dirtytrack_install(nullptr);        // on Linux this also reports the address of any crash
-#endif
-    net.character = uint8_t(options.net_character >= 0 ? options.net_character : index ? 9 : 2);
-    char seed[16]; std::snprintf(seed, sizeof seed, "%u", options.net_inputs ? options.net_inputs : index + 1);
-    setenv("MELEE_ONLINE_TEST_INPUTS", seed, 1);
-    if (!options.selftest.empty()) setenv("MELEE_ONLINE_SELFTEST", options.selftest.c_str(), 1);
-    net.check = !options.net_no_check;
-    if (net.check) setenv("MELEE_TRACE_P2P_PADS", "1", 1);     // the per-frame state checksums (collected by net_log)
-    config.input_script.clear();            // the game generates this player's inputs itself
-    say("net: player %u, listening on %u, peer at %s:%u, input delay %d, generated inputs seed %s%s%s", index, local_port, ip, remote_port,
-        options.net_delay, seed, options.selftest.empty() ? "" : ", self-test ", options.selftest.c_str());
+  if (net_host::wanted(options.net)) {
+    net_host::Options net_options = options.net;
+    net_options.out_dir = options.out_dir; net_options.iso_path = options.iso; net_options.embedded_image = options.game.empty();
+    if (const int code = net_host::start(net_options, say)) return code;
+    config.input_script.clear();            // the pads come from the host, or the game generates them (--net-inputs)
   }
-  config.pace = net.on;       // two instances have to run at the same real speed to stay together
+  config.pace = net_host::active();       // two instances have to run at the same real speed to stay together
   config.headless = true; config.no_gc_adapter = true; config.vanilla_game = true;
   config.has_rng_seed = true; config.rng_seed = 0x12345678;
   config.has_time_base = true; config.time_base = 0;
@@ -945,8 +673,8 @@ int simulate(const Options& options) {
   if (dirty.out) { std::fclose(dirty.out); dirty.out = nullptr; }
   const size_t hot_at_end = mu_rollback::hot_pages();
   const bool overflowed = mu_rollback::overflowed();
-  mu_rollback::end();          // pages writable again before they are unmapped
-  net_engine.end();
+  net_host::stop_tracking();   // pages writable again before they are unmapped (also ends the rollback test's store)
+  mu_rollback::end();
   linux_host::shutdown();      // unloads the image and unmaps the three fixed ranges
 
   // Where the run went: retrace ranges per scene (major/minor). 2/2 is the VS match.
@@ -977,7 +705,8 @@ int simulate(const Options& options) {
   say("each frame is the whole retrace on one core: simulation, the GX command stream (discarded), audio mixing (discarded)");
   if (options.snapshot_at && !r.snapshot_done) say("snapshot: NOT TIMED, the VS match never reached frame %u", options.snapshot_at);
 
-  if (net.on) { report_net(); netplay_bridge::shutdown(); }
+  const bool was_netplay = net_host::active();
+  if (was_netplay) { net_host::report(); net_host::shutdown(); }
   if (options.rollback_every) {
     say("rollback: %u rollbacks of %u frames; hot pages at the end %zu (%.2f MiB) of %zu tracked; write faults %llu%s", r.rb_count,
         options.rollback_depth, hot_at_end, hot_at_end / 256.0, mu_rollback::tracked_pages(), (unsigned long long)dirtytrack_faults(),
@@ -1007,7 +736,7 @@ int simulate(const Options& options) {
     else say("rollback exactness: IDENTICAL, %u VS match frame states (first pass and repeated) equal the x86-64 reference", r.rb_compared);
   }
   const uint64_t hash = fnv1a64(r.digest);
-  const std::string csv = options.out_dir + "/digest-" + (net.on ? std::string("net") : options.script.find('/') == std::string::npos ? options.script : std::string("custom")) + ".csv";
+  const std::string csv = options.out_dir + "/digest-" + (was_netplay ? std::string("net") : options.script.find('/') == std::string::npos ? options.script : std::string("custom")) + ".csv";
   say("digest: %u rows, fnv1a64 %016llx, %s %s", stats.retraces, (unsigned long long)hash,
       write_file(csv, r.digest.data(), r.digest.size()) ? "written to" : "COULD NOT WRITE", csv.c_str());
   if (options.rollback_every) say("digest: rows after the first rollback are shifted by the repeated frames; exactness is the rollback line above");
@@ -1037,8 +766,7 @@ void usage() {
   say("mu-native [--iso PATH] [--script NAME|PATH] [--frames N] [--out DIR] [--game melee_game.so]");
   say("          [--snapshot-at VS_MATCH_FRAME] [--print-digest] [--rollback-test EVERY[:DEPTH]] [--rollback-verify] [--rollback-draw]");
   say("          [--track-remap] [--no-overclock] [--cpu-mhz N] [--core N] [--profile]");
-  say("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-delay FRAMES] [--net-inputs SEED] [--selftest EVERY:DEPTH]");
-  say("          [--online unranked|direct:CODE|teams|party] [--user-dir DIR]   (builds with MU_NET_SERVICES=1 only)");
+  net_host::usage(say);
   std::string names;
   for (size_t i = 0; i < mu_embedded_script_count; ++i) names += std::string(" ") + mu_embedded_scripts[i].name;
   say("embedded scripts:%s", names.c_str());
@@ -1077,21 +805,11 @@ int main(int argc, char** argv) {
     else if (arg == "--rollback-diff") options.rollback_diff = true;
     else if (arg == "--reference") options.reference = next();
     else if (arg == "--profile") options.profile = true;
-    else if (arg == "--net") options.net = next();
-    else if (arg == "--online") options.online = next();
-    else if (arg == "--user-dir") options.user_dir = next();
-    else if (arg == "--fake-user") options.fake_user = true;
-    else if (arg == "--net-delay") options.net_delay = int(std::strtol(next().c_str(), nullptr, 0));
-    else if (arg == "--net-character") options.net_character = int(std::strtol(next().c_str(), nullptr, 0));
-    else if (arg == "--net-inputs") options.net_inputs = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
-    else if (arg == "--selftest") options.selftest = next();
-    else if (arg == "--net-store") options.net_engine_store = next() == "engine";
-    else if (arg == "--net-no-check") options.net_no_check = true;
     else if (arg == "--poll-ticks") options.poll_ticks = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
     else if (arg == "--core") options.core = int(std::strtol(next().c_str(), nullptr, 0));
     else if (arg == "--no-overclock") options.overclock = false;
     else if (arg == "--cpu-mhz") options.cpu_mhz = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
-    else if (arg == "--track-remap") dirtytrack_set_method(DIRTYTRACK_REMAP);   // Horizon: the other way to make pages read-only (dirtytrack.h)
+    else if (net_host::parse_option(arg, next, &options.net)) {}
     else help = true;
   }
   mkdir(options.out_dir.c_str(), 0777);
