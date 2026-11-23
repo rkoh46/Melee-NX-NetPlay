@@ -7,6 +7,8 @@
 #include "rollback.h"
 #include "dirtytrack.h"
 #include <algorithm>
+#include <atomic>
+#include <pthread.h>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +64,13 @@ struct NetRun {
   Clock::time_point last_command;
   uint64_t loads_at_last_frame = 0, slept_at_last_frame = 0;
   std::vector<float> first_pass_ms, rollback_frame_ms, repeated_ms;
+  // What happened inside each first-pass frame, to explain the slow ones.
+  struct FrameCost { float work_ms, log_ms, command_ms; uint32_t retrace, log_lines, faults, disc_reads, row; };
+  std::vector<FrameCost> first_pass_cost;
+  uint64_t log_ns = 0, log_lines = 0, command_ns = 0;            // running totals
+  pthread_t sim_thread{}; bool have_sim_thread = false;
+  std::atomic<uint64_t> other_log_ns{0}, other_log_lines{0};
+  uint64_t log_ns_last = 0, log_lines_last = 0, command_ns_last = 0, faults_last = 0, disc_last = 0;
   // The game's own per-frame state checksum (what Slippi's desync detection compares), last value
   // per online frame: after a rollback the frame is simulated again and the value is replaced, so
   // these are final states and two machines can be compared by them.
@@ -137,7 +146,12 @@ int32_t net_slippi_command(uint8_t command, const uint8_t* payload, uint32_t siz
       net.selftest_bytes += bytes;
       if (net.selftest_failures <= 5) say("net selftest: frame %d differs after re-simulation: %zu ranges, %zu bytes", int32_t(net_be32(payload)), diffs.size(), bytes);
     }
-  } else if (!netplay_bridge::handle(command, payload, size, &reply)) return -1;
+  } else {
+    const auto t = Clock::now();
+    const bool handled = netplay_bridge::handle(command, payload, size, &reply);
+    net.command_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t).count());
+    if (!handled) return -1;
+  }
   // --net-retry: a direct peer that is not there yet. One attempt of the netplay client lasts 8 s; when it
   // ends without a connection the match is asked for again, and the game keeps seeing "connecting"
   // instead of the error, until the peer answers or the time is up. Whichever side starts first
@@ -205,7 +219,39 @@ void net_log(const char* text) {
   }
   if (text && !std::strncmp(text, "pads f ", 7)) return;
   if (text && (std::strstr(text, "DESYNC") || std::strstr(text, "desync risk"))) ++net.desync_lines;
+  LogTime timed;
   if (net_log_original) net_log_original(text);
+}
+// The slowest first-pass frames and what was inside them.
+void report_slow_frames() {
+  auto& all = net.first_pass_cost;
+  if (all.empty()) return;
+  size_t over8 = 0, with_log = 0, with_disc = 0, with_faults = 0, with_command = 0, unexplained = 0;
+  for (const auto& f : all) {
+    if (f.work_ms < 8) continue;
+    ++over8;
+    const bool log = f.log_ms >= 1, disc = f.disc_reads != 0, faults = f.faults >= 50, command = f.command_ms >= 1;
+    with_log += log; with_disc += disc; with_faults += faults; with_command += command; unexplained += !(log || disc || faults || command);
+  }
+  say("net: first-pass frames of 8 ms or more: %zu of %zu; with 1 ms or more of log writing %zu, with a disc read %zu, with 50 or more write faults %zu, "
+      "with 1 ms or more inside the netplay device %zu, none of these %zu", over8, all.size(), with_log, with_disc, with_faults, with_command, unexplained);
+  std::vector<float> log_ms, command_ms;
+  for (const auto& f : all) { log_ms.push_back(f.log_ms); command_ms.push_back(f.command_ms); }
+  report_series("net: log writing inside a first-pass frame", log_ms);
+  report_series("net: netplay device (sockets, input exchange) inside a first-pass frame", command_ms);
+  say("net: log lines written by the netplay client's own threads (outside the frame): %llu, %.1f ms in all",
+      (unsigned long long)net.other_log_lines.load(), net.other_log_ns.load() / 1e6);
+  std::vector<size_t> order(all.size());
+  for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+  const size_t top = std::min<size_t>(12, order.size());
+  std::partial_sort(order.begin(), order.begin() + top, order.end(), [&](size_t a, size_t b) { return all[a].work_ms > all[b].work_ms; });
+  for (size_t i = 0; i < top; ++i) {
+    const auto& f = all[order[i]];
+    unsigned match_frame = 0;
+    if (f.row < net.rows.size()) std::sscanf(confirmed_rows_source.c_str() + net.rows[f.row].first, "%*u,%*u,%*u,%u", &match_frame);
+    say("net: slow frame %zu: %.3f ms at retrace %u (match frame %u, %zu frames into the match): log %.3f ms in %u lines, netplay device %.3f ms, "
+        "%u write faults, %u disc reads", i + 1, f.work_ms, f.retrace, match_frame, order[i], f.log_ms, f.log_lines, f.command_ms, f.faults, f.disc_reads);
+  }
 }
 } // namespace
 
@@ -219,6 +265,7 @@ void report() {
   report_series("net: save", net.save_ms);
   report_series("net: restore", net.restore_ms);
   report_series("net: online frame without a rollback (work only)", net.first_pass_ms);
+  report_slow_frames();
   report_series("net: online frame with a rollback (load, repeated frames, the new frame, saves)", net.rollback_frame_ms);
   report_series("net: one repeated frame inside a rollback (with its save)", net.repeated_ms);
   {
@@ -303,7 +350,10 @@ bool active() { return net.on; }
 int start(const Options& given, Log log) {
   options = given; say = log;
   netplay_bridge::Setup setup;
-  setup.delay_frames = options.delay; setup.retrace_count = net_retrace_count;
+  setup.delay_frames = options.delay; setup.retrace_count = net_retrace_count; setup.log_time = [](uint64_t ns) {
+    if (net.have_sim_thread && pthread_equal(pthread_self(), net.sim_thread)) add_log_time(ns, true);
+    else { net.other_log_ns += ns; ++net.other_log_lines; }       // the netplay client's own threads: not inside a frame
+  };
   std::string error;
   if (!options.online.empty()) {
     // The app's real matchmaking, user file and reporting. Never started by a test on a development machine
@@ -363,11 +413,26 @@ void on_retrace(const char* row, size_t length, bool fighting, double frame_ms) 
   net.rows.push_back({uint32_t(confirmed_rows_source.size()), uint32_t(length)}); net.superseded.push_back(0);
   confirmed_rows_source.append(row, length);
   const uint64_t slept = linux_host::slept_nanoseconds();
+  if (!net.have_sim_thread) { net.sim_thread = pthread_self(); net.have_sim_thread = true; }
+  const uint64_t faults = dirtytrack_faults(), disc = linux_host::counters().disc_reads;
   if (frame_ms >= 0 && fighting) {
     const double work = frame_ms - double(slept - net.slept_at_last_frame) / 1e6;
     (net.loads != net.loads_at_last_frame ? net.rollback_frame_ms : net.first_pass_ms).push_back(float(work));
+    if (net.loads == net.loads_at_last_frame)
+      net.first_pass_cost.push_back({float(work), float((net.log_ns - net.log_ns_last) / 1e6), float((net.command_ns - net.command_ns_last) / 1e6),
+                                     linux_host::counters().retraces, uint32_t(net.log_lines - net.log_lines_last), uint32_t(faults - net.faults_last),
+                                     uint32_t(disc - net.disc_last), uint32_t(net.rows.size() - 1)});
   }
   net.loads_at_last_frame = net.loads; net.slept_at_last_frame = slept;
+  net.log_ns_last = net.log_ns; net.log_lines_last = net.log_lines; net.command_ns_last = net.command_ns; net.faults_last = faults; net.disc_last = disc;
+}
+
+namespace { thread_local int log_depth = 0; }
+void add_log_time(uint64_t nanoseconds, bool outermost) { if (outermost) { net.log_ns += nanoseconds; ++net.log_lines; } }
+LogTime::LogTime() : start(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count())) { ++log_depth; }
+LogTime::~LogTime() {
+  const uint64_t now = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count());
+  add_log_time(now - start, --log_depth == 0);
 }
 
 void stop_tracking() {

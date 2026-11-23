@@ -17,7 +17,7 @@
 #include <cstring>
 #include <sys/stat.h>
 
-namespace { uint32_t (*g_retrace_count)() = nullptr; int g_ping_ms = 0; }
+namespace { uint32_t (*g_retrace_count)() = nullptr; int g_ping_ms = 0; void (*g_log_time)(uint64_t) = nullptr; }
 
 // ---- what the app's netplay code expects from the rest of the app -------------------------------
 namespace host {
@@ -25,7 +25,9 @@ Options options;
 void log(const char* format, ...) {
   char line[1024];
   va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
+  const auto t = std::chrono::steady_clock::now();
   std::fprintf(stderr, "[net] %s\n", line);
+  if (g_log_time) g_log_time(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t).count()));
 }
 // The app's device keeps Dolphin-style savestates of guest memory. The native engine's state is
 // saved by the runner's own store (commands 0xB1/0xB2 never reach the device), so these only have
@@ -110,7 +112,7 @@ static bool start_services(const Setup& setup, std::string* error) {
 }
 
 bool start(const Setup& setup, std::string* error) {
-  g_retrace_count = setup.retrace_count;
+  g_retrace_count = setup.retrace_count; g_log_time = setup.log_time;
   if (setup.services) return start_services(setup, error);
   mkdir(setup.user_dir.c_str(), 0777);
   // A made-up identity: the device wants a user.json before it will search. Nothing reads it but

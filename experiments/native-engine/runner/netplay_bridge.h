@@ -24,6 +24,7 @@ struct Setup {
   std::string user_dir;           // a folder for a made-up user.json (never a real account)
   int delay_frames = 2;           // Slippi input delay
   uint32_t (*retrace_count)() = nullptr;
+  void (*log_time)(uint64_t nanoseconds) = nullptr;   // told how long each "[net]" log line took to write
   // Real services (only in a build made with MU_NET_SERVICES=1; refused otherwise): the app's own
   // matchmaking, login file and reporting instead of a direct local peer. `user_dir` is then the
   // folder that already holds the player's user.json, and nothing is written to it.

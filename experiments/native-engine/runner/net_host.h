@@ -60,6 +60,13 @@ void install(MuHostApi* host);
 // fighters were simulated in it, and the frame's wall time in ms from the end of the previous call to
 // the start of this one (the host's pacing sleep is taken out here).
 void on_retrace(const char* row, size_t length, bool fighting, double frame_ms);
+// Time spent writing log lines (console, nxlink, SD card), so a slow frame can be told from a slow log.
+// A host that logs wraps each write in a LogTime; nested ones count once.
+void add_log_time(uint64_t nanoseconds, bool outermost);
+struct LogTime {
+  LogTime(); ~LogTime();
+  uint64_t start;
+};
 // Makes the tracked pages writable again; before linux_host::shutdown unmaps them.
 void stop_tracking();
 // The end-of-run lines, and digest-net-confirmed.csv in out_dir.

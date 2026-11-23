@@ -317,3 +317,55 @@ raise the CPU clock the way the app does, and repeated frames still build the GX
 - With a picture (`frontend/`, second run, pipeline cache warm), 2-player Onett, 7200 match frames:
   simulation thread 3.65 ms (p99 5.7, none over 16.67 ms), decoder thread 2.96 ms, render thread 4.28 ms;
   8987 of 8998 frames drawn. `--warm-all` took 357 s before the match, which is not usable as a default.
+
+## Process layout: when the fixed ranges are taken (2026-11-23)
+
+On some launches the runner could not start: the heap lay over 0x80000000 and 0xE0000000. This is
+the kernel's doing and it is decided once per process (Atmosphere, `KPageTableBase::InitializeForProcess`):
+
+- A 39-bit process has 0x8000000..0x8000000000 for everything. The loader puts the title's code at a
+  random 2 MiB step in it. Four regions (kernel map 64 GiB, alias 64 GiB, heap 8 GiB, stack 2 GiB)
+  are each given to the side of the code with more room left, largest first, and the regions of one
+  side are spread over it in random order with random gaps.
+- `svcMapProcessCodeMemory` refuses a destination that touches the heap region or the alias region
+  (`CanContain`), mapped or not. `svcSetHeapSize` changes how much of the heap region is mapped, not
+  where the region is, so shrinking the heap frees nothing we can use.
+- Memory that already lies in those regions cannot stand in for the game image: heap-state memory
+  takes read or read/write only (`svcSetMemoryPermission`), `svcSetProcessMemoryPermission` wants
+  code-state memory, and every executable state (code, alias code, generated code) is refused inside
+  the two regions. Using the heap pages in place would only rescue the launches where the heap covers
+  the locked cache but not the image (a fifth of the bad ones), and nothing in the alias region.
+- `tools/layout_odds.py` repeats the kernel's placement: the heap region covers a fixed range in
+  0.68 % of launches, the alias region in 0.72 %, together 1.4 % (one launch in 72). The stack and
+  kernel-map regions cover them as often (0.67 %, 0.69 %) but are allowed as destinations; they only
+  matter when something is already mapped on the ranges (well under 0.1 % in all).
+
+So a bad process stays bad and the cure is a new process. `fixedmap_startup` (fixedmap.h) checks
+the layout first thing in `main`, keeps libnx's own address choices off the ranges when they are
+free, and otherwise reports 1 (can start over) or -1. `fixedmap_relaunch` asks the system to start
+the title again (`appletRestartProgram`) and hands the arguments over in the restart message; the
+new process reads them back in `fixedmap_startup`. It gives up after four restarts.
+
+A restart starts the *title*, not this NRO. That comes back here only when the title always loads
+this program (a forwarder). Under the Homebrew Menu the restarted title is the overridden game, or
+the menu when the override key is held (Atmosphere reads the key again at every launch), so the
+restart is only done when the arguments contain `--relaunch`; without it the run ends with a plain
+message. `--simulate-bad-layout N` puts a page of ours on main memory's address in the first N
+launches, so the path can be tested without waiting for a bad launch.
+
+`layoutprobe/` builds `mu-layoutprobe.nro` from the same `fixedmap_horizon.c`: it prints the layout,
+maps the three ranges when it can, restarts as above, and says when it was started by a restart and
+which arguments came back (`--restart-anyway N` restarts N times with a good layout too, to collect
+layouts under a forwarder). Lines are added to `sdmc:/switch/mu-layoutprobe.txt`.
+
+Verified on paper only: the restart call from a homebrew process, the restart message arriving in
+the new process, and the behaviour under a forwarder. Verified on the console before: mapping,
+protecting and unmapping the ranges.
+
+## What is inside a slow online frame
+
+The end-of-run report of `--net`/`--online` lists the twelve slowest first-pass frames with what
+happened in them: time writing log lines on the simulation thread, time inside the netplay device,
+write faults and disc reads (`net: slow frame ...`), and counts for all frames of 8 ms or more.
+Log time spent inside the device is part of both numbers.
+

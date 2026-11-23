@@ -54,3 +54,9 @@ void fixedmap_release(uintptr_t addr) {
 void fixedmap_release_all(void) {
   for (int i = 0; i < MAX_RANGES; ++i) if (g_ranges[i].size) fixedmap_release(g_ranges[i].addr);
 }
+
+// The layout problem is Horizon's; --simulate-bad-layout is accepted so the same arguments work.
+int fixedmap_startup(int* argc, char*** argv, const uintptr_t* ranges, int count) { (void)argc; (void)argv; (void)ranges; (void)count; return 0; }
+const char* fixedmap_layout(void) { return "layout: Linux, fixed ranges are asked for with mmap"; }
+int fixedmap_relaunch_count(void) { return 0; }
+int fixedmap_relaunch(void) { snprintf(g_error, sizeof g_error, "no relaunch on Linux"); return -1; }

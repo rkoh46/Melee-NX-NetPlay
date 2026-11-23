@@ -87,6 +87,7 @@ FILE* run_log = nullptr;
 void say(const char* format, ...) {
   char line[2048];
   va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
+  net_host::LogTime timed;
   std::printf("%s\n", line); std::fflush(stdout);
   if (run_log) { std::fprintf(run_log, "%s\n", line); std::fflush(run_log); }
 #ifdef __SWITCH__
@@ -766,6 +767,7 @@ void usage() {
   say("mu-native [--iso PATH] [--script NAME|PATH] [--frames N] [--out DIR] [--game melee_game.so]");
   say("          [--snapshot-at VS_MATCH_FRAME] [--print-digest] [--rollback-test EVERY[:DEPTH]] [--rollback-verify] [--rollback-draw]");
   say("          [--track-remap] [--no-overclock] [--cpu-mhz N] [--core N] [--profile]");
+  say("          [--relaunch] (start the title again when its address layout cannot hold the game) [--simulate-bad-layout N]");
   net_host::usage(say);
   std::string names;
   for (size_t i = 0; i < mu_embedded_script_count; ++i) names += std::string(" ") + mu_embedded_scripts[i].name;
@@ -779,6 +781,10 @@ int main(int argc, char** argv) {
   socketInitializeDefault();
   nxlinkStdio();            // stdout and stderr go to the nxlink host when there is one
 #endif
+  // Main memory with the game image behind it, and the locked cache: can this process hold them?
+  // (fixedmap.h, "the process layout"). After a relaunch this also brings back the first launch's arguments.
+  static const uintptr_t fixed_ranges[] = {0x80000000u, 0x04000000u, 0xE0000000u, 0x00100000u};
+  const int layout = fixedmap_startup(&argc, &argv, fixed_ranges, 2);
   Options options;
   bool help = false;
   for (int i = 1; i < argc; ++i) {
@@ -809,12 +815,23 @@ int main(int argc, char** argv) {
     else if (arg == "--core") options.core = int(std::strtol(next().c_str(), nullptr, 0));
     else if (arg == "--no-overclock") options.overclock = false;
     else if (arg == "--cpu-mhz") options.cpu_mhz = uint32_t(std::strtoul(next().c_str(), nullptr, 0));
+    else if (arg == "--relaunch") {}                          // read by fixedmap_startup
+    else if (arg == "--simulate-bad-layout") next();          // likewise
     else if (net_host::parse_option(arg, next, &options.net)) {}
     else help = true;
   }
   mkdir(options.out_dir.c_str(), 0777);
   run_log = std::fopen((options.out_dir + "/run.log").c_str(), "a");
   say("---- mu-native (native engine, headless) ----");
+  say("%s", fixedmap_layout());
+  if (layout > 0) {
+    say("this process cannot hold the game; starting the title again (start %d of at most 5)", fixedmap_relaunch_count() + 2);
+    if (run_log) { std::fclose(run_log); run_log = nullptr; }
+    fixedmap_relaunch();                                      // does not come back when it works
+    run_log = std::fopen((options.out_dir + "/run.log").c_str(), "a");
+  }
+  if (layout) say("cannot start: %s", fixedmap_error());
+  else if (fixedmap_relaunch_count()) say("started over %d time(s) to get a usable layout", fixedmap_relaunch_count());
 #ifdef __SWITCH__
   say("Horizon: applet type %d", appletGetAppletType());
   // Clocks, as the app does it (switch/src/switch_clocks.cpp): every timing below is at a known clock.
@@ -832,7 +849,8 @@ int main(int argc, char** argv) {
   } else say("clocks: left as they are (%s)", options.overclock ? "no clock service" : "--no-overclock");
 #endif
   int result = 2;
-  if (help || options.iso.empty() || !options.frames) usage();
+  if (layout) {}
+  else if (help || options.iso.empty() || !options.frames) usage();
   else {
     // The game runs its own main loop and expects a desktop-sized stack: give it its own thread.
     ThreadArgs args{options, 1};
