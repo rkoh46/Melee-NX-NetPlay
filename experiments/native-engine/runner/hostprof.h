@@ -10,8 +10,8 @@ namespace hostprof {
 constexpr int kSlots = 128;
 struct Sample { uint64_t calls[kSlots]; uint64_t ticks[kSlots]; };   // ticks: exclusive time
 
-// Call before linux_host::initialize: wraps both tables as the host hands them over.
-void install();
+// Wraps both tables; call from the host's tables hook (once with the host table, once with the game's).
+void wrap_tables(MuHostApi* host, MuGameApi* game);
 bool installed();
 // Totals so far.
 void read(Sample* out);

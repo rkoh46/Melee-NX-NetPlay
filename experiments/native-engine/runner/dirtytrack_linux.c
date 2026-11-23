@@ -49,7 +49,9 @@ int dirtytrack_install(DirtyTrackFirstWrite callback) {
   action.sa_sigaction = on_fault;
   action.sa_flags = SA_SIGINFO | SA_NODEFER;
   sigemptyset(&action.sa_mask);
-  if (sigaction(SIGSEGV, &action, &g_previous)) { snprintf(g_error, sizeof g_error, "sigaction: %s", strerror(errno)); return -1; }
+  static int installed;      // a second install must not record this handler as the "previous" one
+  if (sigaction(SIGSEGV, &action, installed ? NULL : &g_previous)) { snprintf(g_error, sizeof g_error, "sigaction: %s", strerror(errno)); return -1; }
+  installed = 1;
   return 0;
 }
 

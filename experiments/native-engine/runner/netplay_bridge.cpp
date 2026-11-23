@@ -1,0 +1,119 @@
+// See netplay_bridge.h. Compiled against the app's own headers (port/runtime/...).
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "netplay_bridge.h"
+#include "slippi_online.h"
+#include "slippi_net.h"
+#include "slippi_matchmaking_ws.h"
+#include "slippi_report.h"
+#include "slippi_http.h"
+#include "discord_rpc.h"
+#include "exi_slippi.h"
+#include "host.h"
+#include "gx_core.h"
+#include <chrono>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <sys/stat.h>
+
+namespace { uint32_t (*g_retrace_count)() = nullptr; int g_ping_ms = 0; }
+
+// ---- what the app's netplay code expects from the rest of the app -------------------------------
+namespace host {
+Options options;
+void log(const char* format, ...) {
+  char line[1024];
+  va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
+  std::fprintf(stderr, "[net] %s\n", line);
+}
+// The app's device keeps Dolphin-style savestates of guest memory. The native engine's state is
+// saved by the runner's own store (commands 0xB1/0xB2 never reach the device), so these only have
+// to keep the device's unused savestate objects empty.
+static uint8_t g_nothing[16];
+uint8_t* ptr(uint32_t, uint32_t) { return g_nothing; }
+uint32_t rd32(uint32_t) { return 0; }
+uint32_t retrace_count() { return g_retrace_count ? g_retrace_count() : 0; }
+double now_seconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+void sim_cost_add(int, double) {}
+void set_emulation_speed(double) {}       // Slippi's time sync nudges the frame rate; the test runs at a fixed rate
+void set_online_ping_ms(int ms) { g_ping_ms = ms; }
+int online_ping_ms() { return g_ping_ms; }
+void input_mark_match_start() {}
+void notify_local(const std::string&, const std::string&) {}
+}
+namespace gx { void gpu_sync_all() {} }
+namespace slippi {
+const std::string& last_replay_path() { static const std::string none; return none; }
+namespace discord {
+void set_menus() {} void set_local_port(int) {} void set_searching(const std::string&) {}
+void set_opponent(const std::string&, const std::string&, int) {}
+}
+namespace report {
+// No HTTP in this build: every request fails at once without touching the network.
+bool http_request(const char*, const std::string&, const std::string&, const std::string&, const char*, int* status, std::string*, std::string* error) {
+  if (status) *status = 0;
+  if (error) *error = "HTTP is not part of this test build";
+  return false;
+}
+void init(const std::string&, const std::string&) {}
+void log_game(const GameReport&) {}
+void match_status(const std::string&, const std::string&, const std::string&, const std::string&, bool) {}
+void fetch_user_rank(const std::string&) {}
+void fetch_match_result(const std::string&, const std::string&, const std::string&) {}
+void shutdown() {}
+RankFetchStatus rank_info(RankInfo*) { return RankFetchStatus{}; }
+}
+// The matchmaking service client: never used with a local peer, and never allowed to start.
+namespace mm {
+uint64_t start(const Request&) { return 0; }
+State state() { return State::Failed; }
+std::string error_message() { return "matchmaking is not part of this test build"; }
+std::string latest_version() { return {}; }
+bool take_result_json(std::string*) { return false; }
+void cancel(uint64_t) {}
+void shutdown() {}
+void set_log(void (*)(const char*)) {}
+void stun_build_request(uint8_t out[kStunRequestLen]) { std::memset(out, 0, kStunRequestLen); }
+bool stun_parse_response(const uint8_t*, const uint8_t*, size_t, StunObservation*) { return false; }
+}
+}
+
+namespace netplay_bridge {
+bool start(const Setup& setup, std::string* error) {
+  g_retrace_count = setup.retrace_count;
+  mkdir(setup.user_dir.c_str(), 0777);
+  // A made-up identity: the device wants a user.json before it will search. Nothing reads it but
+  // this process, and the "play key" opens nothing.
+  const std::string path = setup.user_dir + "/user.json";
+  if (FILE* out = std::fopen(path.c_str(), "w")) {
+    std::fprintf(out, "{\"uid\":\"local-test-%d\",\"playKey\":\"local-test-only\",\"connectCode\":\"TEST#%03d\",\"displayName\":\"Local %d\"}\n",
+                 setup.local_index, setup.local_index + 1, setup.local_index + 1);
+    std::fclose(out);
+  } else { if (error) *error = "cannot write " + path; return false; }
+  auto& peer = slippi::Matchmaking::local_peer;
+  peer.enabled = true; peer.local_index = setup.local_index; peer.local_port = setup.local_port;
+  peer.remote_ip = setup.remote_ip; peer.remote_port = setup.remote_port;
+  auto& config = slippi::online::config();
+  config.offline = false; config.user_dir = setup.user_dir; config.delay = setup.delay_frames; config.delay_auto = false;
+  host::options.cache_dir = setup.user_dir;
+  slippi::online::init();
+  if (!slippi::online::available()) { if (error) *error = "the app's online module is not available in this build"; return false; }
+  return true;
+}
+void shutdown() { slippi::online::shutdown(); }
+bool handle(uint8_t command, const uint8_t* payload, uint32_t size, std::vector<uint8_t>* reply) {
+  return slippi::online::handle(command, payload, size, *reply);
+}
+void request_match(uint8_t character, uint8_t color) {
+  std::vector<uint8_t> ignored;
+  // CMD_SET_MATCH_SELECTIONS: team, character, colour, character chosen, stage (2 bytes), stage
+  // option 3 (random from the allowed list), mode 2 (direct), alternate stage flag.
+  const uint8_t selections[9] = {0, character, color, 1, 0, 0, 3, 2, 0};
+  slippi::online::handle(0xB5, selections, sizeof selections, ignored);
+  uint8_t find[19] = {2};                                   // direct mode, then the opponent's code
+  std::memcpy(find + 1, "PEER#001", 8);
+  ignored.clear();
+  slippi::online::handle(0xB4, find, sizeof find, ignored);
+}
+uint64_t rollbacks_seen_by_device() { return slippi::online::rollback_count(); }
+}

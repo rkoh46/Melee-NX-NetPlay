@@ -44,10 +44,9 @@ void hook(MuHostApi* host, MuGameApi* game) {
 }
 } // namespace
 
-void install() {
-  mu_prof_sp = &mu_prof_stack[0][0];
-  linux_host::set_tables_hook(hook);
-  is_installed = true;
+void wrap_tables(MuHostApi* host, MuGameApi* game) {
+  if (!is_installed) { mu_prof_sp = &mu_prof_stack[0][0]; is_installed = true; }
+  hook(host, game);
 }
 bool installed() { return is_installed; }
 const char* name(int slot) { return slot >= 0 && slot < kSlots ? slot_names[slot] : nullptr; }

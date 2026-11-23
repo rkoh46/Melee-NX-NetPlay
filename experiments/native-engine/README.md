@@ -178,6 +178,30 @@ Horizon specifics, from the kernel source (Atmosphere's mesosphere) and the firs
 how the kernel's memory blocks split and merge, the fault round trip, that every register survives 200,000
 retries, and what a file read into a read-only page does.
 
+## The engine's own online path (`--net`)
+
+melee-unlocked's game has its own Slippi online code (`sourceport/game/shim/mu_online.c`): it sends the host the
+same command bytes and payloads a Slippi game sends its EXI device (`slippi_command`), saves and loads state by
+frame (0xB1, 0xB2), and drives re-simulation itself inside one frame. In `--net` mode the runner answers those
+commands with:
+- the hot-page store for 0xB1/0xB2 (and 0xF0/0xF1, the engine's rollback self-test, `--selftest EVERY:DEPTH`);
+- **this repository's Slippi 3.7.0 netplay** (`port/runtime/hle/slippi_online.cpp`, `slippi_net.cpp`, ENet) for
+  everything else, through `runner/netplay_bridge.*`. Matchmaking, login, reporting, HTTP and Discord are
+  stubbed: two instances peer directly ("local peer"), nothing leaves the machine, and the user file is made up.
+
+`tools/net_test.sh FRAMES DELAY_MS JITTER_MS [runner arguments]` runs two headless instances in one container
+with no network, optionally through `tools/udp_delay_relay.py`, and compares the states both sides showed that
+were never replaced by a rollback (`tools/compare_net_digests.py`). `MU_DISC_DIR` names the folder with the disc.
+`--net-store engine` serves the savestates with melee-unlocked's own snapshot engine instead, for comparison.
+
+Measured on Linux: with 60 ms delay and 40 ms jitter a 3,600-retrace match has about 580 rollbacks per side,
+2 to 6 frames deep, and every confirmed state is identical on both sides. The engine's self-test is NOT clean:
+every comparison finds 60 to 140 differing byte ranges (joint matrices and flags of non-fighter objects, the
+camera, particle display and video state, and now and then one byte at fighter+0x6D4) with our store and with
+the engine's own alike, so it is a property of the engine's undrawn re-simulation, not of the store.
+
+The snapshot now also leaves out the sound driver's state listed in `melee_game.snapexcl`, as the engine's host does.
+
 ## Licensing
 
 Our files are GPL-3.0-or-later. melee-unlocked's host code is GPL-2.0-or-later and is compiled in from the

@@ -22,7 +22,8 @@ build_game() {
     cmake -S build/native-engine/mu/sourceport/game -B $b -G Ninja -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ \
       -DCMAKE_BUILD_TYPE=Release -DMELEE_CPU_BASELINE=AVX2 -DYOUGAME_AGENT_TEST_HOOK=OFF -DYOUGAME_RANKED_BRANCH=ON -DMELEE_DOUBLES=OFF >/dev/null
     cmake --build $b --target melee_game -j "$(nproc)" | tail -2
-    cp $b/melee_game.so build/native-engine/out/melee_game.so'
+    cp $b/melee_game.so build/native-engine/out/melee_game.so
+    cp $b/melee_game.snapexcl build/native-engine/out/melee_game.snapexcl'
   echo "built $out/melee_game.so"
 }
 
@@ -36,6 +37,8 @@ generate() {
     echo '.section .rodata'
     echo '.balign 16'; echo '.global mu_embedded_game'; echo 'mu_embedded_game: .incbin "build/native-engine/out/melee_game.so"'
     echo '.global mu_embedded_game_end'; echo 'mu_embedded_game_end:'
+    echo '.global mu_embedded_snapexcl'; echo 'mu_embedded_snapexcl: .incbin "build/native-engine/out/melee_game.snapexcl"'
+    echo '.global mu_embedded_snapexcl_end'; echo 'mu_embedded_snapexcl_end:'
     for f in "$gen"/scripts/*.txt; do n=$(basename "$f" .txt)
       echo ".balign 8"; echo "mu_script_$n: .incbin \"build/native-engine/gen/scripts/$n.txt\""; echo "mu_script_${n}_end:"
       echo ".global mu_script_$n"; echo ".global mu_script_${n}_end"
@@ -76,6 +79,16 @@ DEFINES='-DMU_FOREIGN_ELF -DMU_SQUAD=1 -DMELEE_NO_SLIPPI -DMELEE_PORT_VERSION=\"
 CXXFLAGS='-O2 -g -std=gnu++17 -Wall -fno-strict-aliasing -ffp-contract=on'
 SOURCES=$(echo $SOURCES); INCLUDES=$(echo $INCLUDES)
 
+# The app's Slippi netplay (this repository's port/runtime/hle) and ENet, compiled against the app's
+# own headers, for the runner's --net mode. No matchmaking, login or reporting code is linked.
+NET_INC='-Iexperiments/native-engine/runner -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app'
+NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"wss://invalid.invalid/\"'
+NET_CXX='port/runtime/hle/slippi_online.cpp port/runtime/hle/slippi_net.cpp port/runtime/hle/slippi_offline.cpp port/runtime/hle/slippi_net_diag.cpp port/runtime/hle/slippi_match_quality.cpp port/runtime/hle/slippi_text.cpp port/runtime/hle/slippi_version.cpp experiments/native-engine/runner/netplay_bridge.cpp'
+NET_C='callbacks compress host list packet peer protocol unix'
+# \$1 C compiler, \$2 C++ compiler, \$3 extra flags, \$4 object directory, \$5 ld, \$6 objcopy; run inside a container.
+# Everything but the bridge's own interface becomes local to the combined object.
+NET_BUILD='net_build() { mkdir -p $4/net; for f in '"$NET_C"'; do $1 $3 -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/$f.c -o $4/net/enet_$f.o; done; for f in '"$NET_CXX"'; do $2 $3 -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden '"$NET_INC $NET_DEF"' -c $f -o $4/net/$(basename $f .cpp).o; done; $5 -r --force-group-allocation $4/net/*.o -o $4/netplay.o; $6 --localize-hidden $4/netplay.o; }'
+
 build_linux() {
   generate
   dock 600 "$LINUX_IMG" "
@@ -85,7 +98,8 @@ build_linux() {
     gcc -c build/native-engine/gen/embedded.S -o \$o/embedded.o
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/dirtytrack_linux.c -o \$o/dirtytrack.o
     gcc -fPIE -c experiments/native-engine/runner/hostprof.S -o \$o/hostprof.o
-    g++ $CXXFLAGS $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/hostprof.o -DMU_CARD_SIMPLE_COMMIT -pie -fPIE -lpthread -lz -lm -o build/native-engine/out/mu-native-linux"
+    $NET_BUILD; net_build gcc g++ -fPIE \$o ld objcopy
+    g++ $CXXFLAGS $DEFINES $INCLUDES $SOURCES \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/hostprof.o \$o/netplay.o -DMU_CARD_SIMPLE_COMMIT -pie -fPIE -lpthread -lz -lm -o build/native-engine/out/mu-native-linux"
   echo "built $out/mu-native-linux"
 }
 
@@ -101,7 +115,8 @@ build_nro() {
     aarch64-none-elf-gcc -O2 -g -Wall \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.c -o \$o/dirtytrack.o
     aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/dirtytrack_horizon.S -o \$o/dirtytrack_entry.o
     aarch64-none-elf-gcc \$ARCH -c experiments/native-engine/runner/hostprof.S -o \$o/hostprof.o
-    aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES -Iswitch/src $SOURCES switch/src/switch_clocks.cpp \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \$o/hostprof.o \
+    $NET_BUILD; net_build aarch64-none-elf-gcc aarch64-none-elf-g++ \"\$ARCH\" \$o aarch64-none-elf-ld aarch64-none-elf-objcopy
+    aarch64-none-elf-g++ $CXXFLAGS \$ARCH $DEFINES $INCLUDES -Iswitch/src $SOURCES switch/src/switch_clocks.cpp \$o/fixedmap.o \$o/mu_imports.o \$o/embedded.o \$o/dirtytrack.o \$o/dirtytrack_entry.o \$o/hostprof.o \$o/netplay.o \
       -I/opt/devkitpro/portlibs/switch/include -specs=/opt/devkitpro/libnx/switch.specs -L/opt/devkitpro/portlibs/switch/lib -L/opt/devkitpro/libnx/lib -lz -lnx -lm -o build/native-engine/out/mu-native.elf
     nacptool --create 'mu-native' 'Melee-NX-NetPlay' '0.1' build/native-engine/out/mu-native.nacp
     elf2nro build/native-engine/out/mu-native.elf build/native-engine/out/mu-native.nro --nacp=build/native-engine/out/mu-native.nacp
