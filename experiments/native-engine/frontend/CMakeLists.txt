@@ -110,6 +110,31 @@ if(NOT MU_FE_VARIANT STREQUAL "switch")
   target_compile_definitions(mu_host PRIVATE MU_CARD_SIMPLE_COMMIT)
 endif()
 
+# ---- the mod installer (src/modinstall/: plain C++, also built for macOS by ../tools/mod_install_test.sh) ----
+# The LZMA SDK's decoders (public domain) from the fetched tree's port/third_party/lzma; zlib from the system or devkitPro;
+# nlohmann/json from this repository's port/third_party. The catalog is melee-unlocked's mods-catalog-2.json, built in.
+set(MU_MOD_CATALOG "${REPO}/build/native-engine/mu/mods-catalog-2.json")
+if(NOT EXISTS "${MU_MOD_CATALOG}")
+  message(FATAL_ERROR "missing ${MU_MOD_CATALOG}: run ../fetch.sh first")
+endif()
+file(READ "${MU_MOD_CATALOG}" _catalog)
+string(FIND "${_catalog}" ")mucatalog\"" _bad)
+if(NOT _bad EQUAL -1)
+  message(FATAL_ERROR "mods-catalog-2.json contains the raw-string delimiter")
+endif()
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/gen_mods/mods_catalog_json.h" CONTENT
+  "// Generated from melee-unlocked's mods-catalog-2.json (the fetched tree) by frontend/CMakeLists.txt.\n#pragma once\nstatic const char kModsCatalogJson[] = R\"mucatalog(@_catalog@)mucatalog\";\n" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MU_MOD_CATALOG}")
+add_library(mu_modinstall STATIC
+  "${FE}/modinstall/mi_hash.cpp" "${FE}/modinstall/mi_io.cpp" "${FE}/modinstall/mi_archive.cpp" "${FE}/modinstall/mi_lzma.cpp"
+  "${FE}/modinstall/mi_vcdiff.cpp" "${FE}/modinstall/mi_catalog.cpp" "${FE}/modinstall/mod_install.cpp"
+  "${MU}/port/third_party/lzma/LzmaDec.c" "${MU}/port/third_party/lzma/Lzma2Dec.c")
+target_include_directories(mu_modinstall PRIVATE "${MU}/port/third_party/lzma" "${REPO}/port/third_party")
+target_compile_options(mu_modinstall PRIVATE -O2 -g -Wall)
+if(MU_FE_VARIANT STREQUAL "switch")
+  target_include_directories(mu_modinstall SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+endif()
+
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
   "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GEN}/gx_aurora_bridge.cpp" "${GEN}/subframe.cpp" "${GXSRC}/authored_pose.cpp" "${GXSRC}/gx_shader.cpp"
@@ -139,6 +164,11 @@ else()
     "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
+  # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and its
+  # minimal Mods page in the in-game menu.
+  target_sources(mu_gx PRIVATE "${FE}/mods_service.cpp" "${FE}/mods_page.cpp")
+  target_include_directories(mu_gx PRIVATE "${CMAKE_BINARY_DIR}/gen_mods")
+  target_link_libraries(mu_gx PUBLIC mu_modinstall)
   # game_menu.cpp's menu_frame becomes app_menu_frame (play_io.cpp's menu_frame calls it in app mode). Off the console
   # it lays its rows out as on the console (MU_MENU_CONSOLE), so the Linux test sees the console's menu.
   set(_menu_defs "menu_frame=app_menu_frame;MELEE_PORT_VERSION=\"${MU_APP_VERSION}\"")
@@ -240,7 +270,8 @@ endif()
 # through libcurl). The netplay object has its own copies of the last two, local to it.
 if(NOT MU_FE_VARIANT STREQUAL "null")
   add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${GEN}/app/switch_signin.cpp"
-    "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp")
+    "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp"
+    "${FE}/modinstall/mi_fetch_curl.cpp")   # the mod installer's downloads (mods_service.cpp finds it through a weak reference)
   target_include_directories(mu_app_services PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${APPSRC}"
     "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi")
   target_compile_definitions(mu_app_services PRIVATE MU_FE_AURORA=1 MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")

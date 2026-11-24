@@ -62,7 +62,8 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `patches/0112-phillip-ai-own-engine.patch`, `patches/0113-practice-menu-download-question.patch` | Against build-time copies of upstream's `phillip_ai.cpp/.h` and `practice_menu.cpp` (`build/native-engine-gfx/gen/proai`): the own engine, the app's folder, the device timing, downloads only when chosen; the download question. |
 | `test-proai-linux.sh` | The Practice menu (four looks), Fight a pro in Training, the download from a local stand-in, with screenshots and onnxruntime run on the recorded steps. |
 | `src/replay_view.h`, `test-replays-linux.sh` | The replay viewer's overlay state (replays.cpp to overlay_draw.cpp and the render loop's repaint); the replay viewer, takeover, coach and Replays page in play mode with screenshots. |
-| `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots. |
+| `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots; `install`: the Mods page installs rogueMelee, then a match on it. |
+| `src/modinstall/`, `src/mods_service.*`, `src/mods_page.cpp` | The mod installer (catalog, download, zip/7z, VCDIFF, checks, profiles) and its minimal Mods page (see "Mod catalog, download and install"). |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
@@ -379,6 +380,87 @@ the console `<out>` is `sdmc:/switch/mu-native`.
 `slippi_menus 1` serves Slippi 3.7.0's menu files (ten of the disc's files with Slippi's patch applied, plus
 `GameSetup_gui.dat` and `SlippiCSS_gui.dat` with their links into the disc resolved) and sets the game's
 Slippi-menus bit: the game then starts on its Online Play page. Nothing is sent anywhere by this.
+
+### Mod catalog, download and install
+
+The app installs the mods of melee-unlocked's catalog for the player, as melee-unlocked's launcher does
+(`port/app/launcher_mods.inl`, `launcher_mod_catalog.cpp` in the fetched tree), with this program's own code for every
+step. melee-unlocked runs `xdelta3.exe`, `7zr.exe` and `tar.exe`; here nothing from a mod or from another program is run.
+
+- **Catalog**: `mods-catalog-2.json` of the fetched tree, built in (`build/native-engine-gfx/<variant>/gen_mods/`). Checked
+  with melee-unlocked's rules: every field, https links, well-formed hashes, unique ids. **A mod gets automatic download
+  only when the catalog records a licence or a permission** (policy `licensed` or `permission_granted`: 20XX TE, Training
+  Mode CE, Akaneia, ACE, the 20XX Hack Pack). The others (Melee 3D, Melee Maker, rogueMelee: `link_only`; Animelee and
+  Animelee DBZ: MediaFire pages, which melee-unlocked's launcher cannot fetch either) are listed with their page: the
+  player downloads the file and puts it in `mods/Downloads/`, and Install takes it from there. MediaFire is not scraped.
+  melee-unlocked also asks GitHub's release API for the asset's digest and refreshes the catalog from its own GitHub;
+  here the catalog's pinned URL and SHA-256 are used (melee-unlocked's fallback when the API does not answer), and the
+  catalog changes with the fetched tree.
+- **Download**: HTTPS through libcurl (the services program; devkitPro's libcurl on the console, TLS through the console's
+  ssl service), redirects to https only, a size limit from the known size, continued with a range request after an
+  interruption or a cancel (`<name>.part`). Free space is checked before anything is fetched or written (the download plus
+  the finished disc).
+- **Checks**: the download's SHA-256; the player's disc against the vanilla NTSC 1.02 MD5 (read in full once, then kept
+  with the disc's size and time in `mods/.work/vanilla.txt`); the patch's SHA-256 and the finished disc's SHA-256 and MD5
+  against the catalog, while the bytes go by. A disc that does not match is deleted and the installed one kept.
+- **Archives**: zip (stored or deflated, zip64; zlib's inflate) and 7z (LZMA, LZMA2 or stored folders, encoded headers;
+  the LZMA SDK's decoders from the fetched tree's `port/third_party/lzma`), read as streams: the patch is applied straight
+  out of the archive, never unpacked to the SD card (ACE's patch alone is 1.3 GB). The first `.xdelta` entry is the
+  patch, as melee-unlocked's installer picks it. Entry CRC-32s are checked.
+- **Patch**: `src/modinstall/mi_vcdiff.cpp`, a VCDIFF decoder for xdelta3's patches: RFC 3284's code table and address
+  cache, source windows, the per-window Adler-32, and xdelta3's secondary compressors DJW (Hack Pack, Melee 3D, Melee
+  Maker) and LZMA (Training Mode CE, Akaneia; one xz stream per section kind that runs on across windows). It holds one
+  target window (at most 16 MiB from xdelta3; 64 MiB accepted) and reads the source disc through eight cached 1 MiB
+  blocks: the 1.4 GB disc is never in memory. (`port/runtime/host/vcdiff.cpp` decodes Slippi's small in-memory patches
+  and has no secondary compression.)
+- **Result**: `mods/<id>/<id>.iso` (20XX TE: `mods/te/20XXTE-v2d-r4-USA.gci`), which is the mod profile `<id>` that
+  `mods.cpp` loads (the folder form: every disc and save in `mods/<id>/`; the TE save is recognised there and switches
+  the native TE features on, any other save is copied to the profile's card `card-<id>`). `mods/<id>/installed.txt`
+  records the version and the SHA-256. A fetched archive is deleted once its disc is built; a file the player put in
+  `mods/Downloads/` stays. Remove deletes the disc or save and the record; the profile's memory card stays.
+- A mod disc never goes online: a session that can go online loads no profile (above).
+- On the console: Install runs on its own thread while the menu is open or the game runs; one job at a time. Measured on
+  the Mac (M-series, NVMe): 13 s for a disc from a small patch, 42 s for ACE. The console's SD card is slower; not yet
+  measured there.
+
+| Path | What it is |
+|---|---|
+| `src/modinstall/mod_install.h/.cpp` | The API: `modinstall::Manager`. |
+| `src/modinstall/mi_catalog.*` | The catalog and its rules; the known download and disc sizes (by SHA-256). |
+| `src/modinstall/mi_vcdiff.*`, `mi_lzma.*`, `mi_archive.*`, `mi_hash.*`, `mi_io.*` | VCDIFF with DJW and LZMA; LZMA/LZMA2 and xz; zip and 7z streams; SHA-256, MD5, CRC-32, Adler-32; files, `Platform` (free space) and `Fetcher` (HTTPS). Plain C++17 and POSIX file calls. |
+| `src/modinstall/mi_fetch_curl.*` | The `Fetcher` over libcurl (services program only). |
+| `src/mods_service.*` | The app's `Manager` (its folders, the built-in catalog, libcurl when linked) and the profile at the next start. |
+| `src/mods_page.cpp` | The minimal Mods page in the in-game menu. |
+| `../tools/mod_install_test.sh` | The host test (macOS or Linux, native): rules, licence gate, free space, an interrupted download, every catalog mod built and compared. |
+| `test-mods-linux.sh install` | The Mods page with a controller script: rogueMelee installed, then a match on it. |
+
+**API** (`src/modinstall/mod_install.h`, `src/mods_service.h`), for any screen (the minimal page, or a launcher in
+melee-unlocked's look):
+
+```cpp
+modinstall::Manager& m = fe::mod_manager();          // the app's installer; plain C++, no Switch code
+m.catalog_ok(); m.catalog_error();                   // the built-in catalog passed melee-unlocked's rules
+std::vector<modinstall::ModStatus> mods = m.list();  // one per catalog entry, cheap enough for a few calls a second:
+//   .mod (CatalogMod: id, name, version, credits, license, page, url, asset_pattern, kind, policy, note,
+//         download_bytes, disc_bytes (0: not known)), .state (NotInstalled, Installed, UpdateAvailable, Working),
+//   .automatic (Install downloads it), .file_ready (its file is in mods/Downloads), .installed_version,
+//   .line (what is happening or how the last job ended), .percent (-1: none), .failed, .downloads_path
+m.install(id, &why);   // Install or Update: a job on the installer's thread (false: why it cannot start)
+m.cancel();            // stops the running job at the next block; a partial download is kept and continued later
+m.remove(id, &why);    // the disc or save and its record; the profile's memory card stays
+m.busy(); m.busy_id(); m.profiles();                 // profiles mods.cpp can load (folders and Profiles/*.ini)
+fe::mod_profile_next(); fe::mod_profile_set(name);   // settings.ini mod_profile: what the next start loads ("" none)
+fe::mod_profile_choices();                           // "" first, then m.profiles()
+fe::mod_downloads_available();                       // false in the program without services (no libcurl)
+```
+
+Another program (melee-unlocked-macOS) builds the same library with its own `Config`: `mods_dir`, `disc_path`,
+`catalog_json`, a `Fetcher` (`modinstall::curl_fetcher()` or its own) and optionally a `Platform` for free space.
+
+**The Mods page** (in-game menu, the last host page, right above Controls; the main page's rows from Controls down are one lower than before): `Mod` picks one of the catalog's mods (Left/Right), then
+its state, size and licence, the action (Install / Install from mods/Downloads / Update to ... / Cancel / Play it at the
+next start), Remove (press A twice), for a mod that cannot be fetched its page and where to put the file, and `Mod
+profile *` (the profile the next start loads). Install and Remove are greyed while the session is online.
 
 ### Netplay
 
@@ -959,7 +1041,11 @@ why is not known. The same costume's portrait on the character select screen is 
 ## Licensing
 
 Our files are GPL-3.0-or-later, except `src/controls_core.h` and `src/controls_files.*`, which are adapted from melee-unlocked's
-`input_bindings.h`, `controller_profiles.cpp` and `dolphin_profile.cpp` and keep their GPL-2.0-or-later notice. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
+`input_bindings.h`, `controller_profiles.cpp` and `dolphin_profile.cpp` and keep their GPL-2.0-or-later notice. In the mod
+installer, the catalog checks of `src/modinstall/mi_catalog.cpp` follow melee-unlocked's `launcher_mod_catalog.cpp` and the
+DJW decoder in `src/modinstall/mi_vcdiff.cpp` is adapted from xdelta 3.1.0's `xdelta3-djw.h` (both GPL-2.0-or-later, used
+under GPL-3.0-or-later, credited in the files); the LZMA SDK's decoders (public domain) are compiled from the fetched tree
+and zlib is the system's or devkitPro's. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
 
