@@ -55,6 +55,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `test-overlays-linux.sh` | The overlays and picture options in play mode with controller scripts and screenshots. |
 | `src/controls.cpp`, `src/controls_core.h`, `src/controls_files.*` | The controller setup beyond the button remap (see "Controller setup"): bindings, box mode, analog options, profiles, Dolphin import, chords, report rates. |
 | `patches/0111-game-menu-open-page.patch` | After 0104: `menu_open_extra`, the menu opened on a host page by its title (the Start + D-pad Up + Z chord). |
+| `src/replay_view.h`, `test-replays-linux.sh` | The replay viewer's overlay state (replays.cpp to overlay_draw.cpp and the render loop's repaint); the replay viewer, takeover, coach and Replays page in play mode with screenshots. |
 | `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots. |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
@@ -513,9 +514,31 @@ two to five messages per run depending on when the match ended, the match itself
 | `subframe 0|1|2`, `fps N` | presentation: Off / Predict / Interpolate sub-frames; `fps` caps presents per second (tests). The simulation stays at 60 Hz |
 | `input_suggestions 0` | Slippi 3.7.0 input suggestions off (default on; the Game page's row; from the next online game). See "Input suggestions" |
 
-`--replay FILE|latest|N` plays a replay (the game takes one only at boot): Start pauses, A steps, D-pad Left/Right
-5 s back/forward, Up 1/2 and 1/4 speed, Down fast forward; the end of the run compares the game's post-frame records
-with the file's. `--frame-mode off|predict|interpolate` and `--fps N` on the command line; `MU_FRAME_MODE`,
+`--replay FILE|latest|N` plays a replay (the game takes one only at boot; the Replays page's "Watch it" restarts the game
+with it). The viewer's controls (upstream's controller layer, `gx/replay_hud.cpp`): Start or Z pause, D-pad Left/Right 5 s
+back/forward (paused: Right steps a frame), L speed 1, 1/2, 1/4, R fast forward, B hides the overlay, A takes over the
+player named top left (D-pad Up/Down picks another), X/Y jump to that player's last/next coach tip. In a takeover the
+controller plays that port; Start retries from the takeover's frame, Start held goes back to watching. The overlay
+(`src/replay_view.h`, drawn by `overlay_draw.cpp`) shows a timeline with the tips' markers, the time, the state and the
+buttons (it fades while the replay just plays), the newest frame data reading, a tip's banner at its moment and a try's
+result; while paused the render loop draws the last frame again so the overlay and the in-game menu keep working. The end
+of the run compares the game's post-frame records with the file's (takeover frames are not compared). Jumps simulate the
+frames on the way with their draw pass and do not show them (an undrawn frame is not exact with items).
+
+| settings.ini | What it does |
+|---|---|
+| `replay_try_length 0..3` | a takeover's try: until the combo drops (or 10 s without a hit), 10 s, 20 s, no limit (default) |
+| `replay_opponent 0..3` | the other players once the live game leaves the recording (command 0xE9): smart defence (default), no DI or techs, the Practice CPU's settings, follow the recording |
+| `replay_tips 0` | no tip banners or timeline markers |
+| `replay_sort 0..3`, `replay_hide_short 1` | the Replays page's list: most recent, oldest, longest, shortest first; games under 30 s hidden |
+
+The Replays page (`src/features/replay_library.cpp`): the folder's replays one at a time (characters, stage, length, date),
+Watch it, sort, hide short games, the shown replay's stats per player (kills, damage, openings per kill, neutral wins,
+counter hits, conversions, L-cancels, inputs per minute, dodges, wavedashes, ledge grabs; upstream's
+`launcher_replay_data.cpp` compiled from the fetched tree), Delete this replay (A twice within 5 s), the takeover and tip
+settings, and Analyze (while a replay plays: the rest of it run unseen so the game measures every moment, then back).
+`test-replays-linux.sh DISC record plain controls tips takeover practice analyze library` runs each with screenshots.
+`--frame-mode off|predict|interpolate` and `--fps N` on the command line; `MU_FRAME_MODE`,
 `MU_PRESENT_FPS` in the environment for scripted runs.
 
 Presentation (`src/features/present/`, compiled with the renderer, not the module glob; `patches/0106` adds per-draw
@@ -531,8 +554,9 @@ Replay fidelity needs `../patches/decomp-0003` in the game image (`../fetch.sh` 
 image built before it records one uninitialised shield-flag byte of the second fighter that a playback cannot
 reproduce). Verification hooks (command line, play mode): `--feature-test training[:CHARACTER[:STAGE]]` (Go to Training from
 the title screen; STAGE is the stage select's stage id, default 32), `--feature-test major:N` (ask the game for scene N: Event Match 43, Classic 3, Training 28),
-`--feature-test replay-controls` (presses the viewer's buttons on a timeline of its own, since a controller script
-stops while the replay is paused).
+`--feature-test replay-controls|replay-tips|replay-takeover|replay-practice|replay-analyze` (press the viewer's buttons on a
+timeline of their own, since a controller script stops while the replay is paused; the takeover tests also press the live
+player's buttons), `--feature-test replay-library` (with `--app`: the Replays page opened, its rows logged, a delete and Watch it).
 
 Mod discs beyond 20XX (built on the PC with xdelta3 from each catalog archive's own patch, checked against
 `mods-catalog-2.json`): put the disc in `mods/<name>/` and set `mod_profile <name>`. Training Mode CE sets
@@ -760,6 +784,24 @@ Online and replay features of 0.4.3 on Linux (runner and patches from the workin
 | Skip in Unranked (`blockcode1`) | three matches with the listed code turned down, no match played |
 | Network overlay (`netoverlay 1`, `test-net-linux.sh` with delay) | the line on screen during the match |
 | NROs (`../build.sh nro`, `MU_NET_SERVICES=1 ../build.sh nro`, `./build.sh nro`) | link; both programs pass the `netplay_link` check |
+
+Replay viewer, takeover, coach and library on Linux (`test-replays-linux.sh`, a 37 s offline match recorded by play mode
+with the controller script, Falco against a level 1 Fox on Onett, items on; screenshots in
+`build/native-engine-gfx/run-replays/<case>/shots/` looked at):
+
+| Case | Result |
+|---|---|
+| `plain` | 4500 post-frame records compared with the file, 0 differ |
+| `controls` | pause, two frame steps, play, 5 s back (from the kept state at -122), 5 s forward, 1/2, 1/4, 1x, fast forward on and off, overlay hidden and shown: 0 of 4794 differ |
+| `tips` | 30 events read from the file in 0 ms, 4 tips for P1 and 9 for P2; next, next, next and last tip jumps land a second before each; the game's own readings logged (`coach:` lines); 0 differ |
+| `takeover` | P1 taken over at frame 400 with the test's jabs, "P2 left the recording at frame 416" and defended (setting 0), Start retried, held Start back to watching: 0 of 3880 compared records differ, 914 takeover records not compared |
+| `practice` | tip 1 jumped to, taken over there, `replay_try_length 0`: two tries ended (no hit in 10 s) and started again with the result shown, back to watching: 0 differ |
+| `analyze` | the rest of the replay run unseen (31 events) and back to frame 301: 0 differ. Before jumps kept the draw pass, this pass differed from frame 1866 on (undrawn frames with items) |
+| `library` | the app's Replays page opened on its own: both copies' stats, one deleted with A twice, Watch it restarted the game with the other: it played with 0 of 4500 differing |
+
+After these changes: the five reference scripts headless IDENTICAL; `test-net-linux.sh` and `test-online-linux.sh` final
+state IDENTICAL on both sides and `net check` lines equal. Not seen: any of it on the console (controller feel of the
+viewer's buttons, the overlay at 1080p and on the handheld screen, the stats worker on the SD card's speed).
 
 Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
 over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble
