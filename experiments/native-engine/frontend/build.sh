@@ -29,7 +29,8 @@ GFX_IMG="${MU_GFX_IMAGE:-mu-arm-gfx}"
 NX_IMG="${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}"
 jobs="${MELEE_BUILD_JOBS:-8}"
 W=build/native-engine-gfx
-dock() { local limit=$1 image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
+# MU_TIMEOUT_SCALE multiplies the container time limits (app-build.sh sets it where the arm64 image runs under qemu).
+dock() { local limit=$(( $1 * ${MU_TIMEOUT_SCALE:-1} )) image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
 SAN="${MU_SANITIZE:-}"; SAN_SFX=""; SAN_FLAGS=""
 case "$SAN" in
   "") ;;
@@ -224,7 +225,7 @@ build_net_services_linux() {
   echo "built $repo/$o/netplay.o"
 }
 
-build_image() { timeout 900 docker build -t "$GFX_IMG" -f "$here/linux-gfx.Dockerfile" "$here"; }
+build_image() { timeout $(( 900 * ${MU_TIMEOUT_SCALE:-1} )) docker build -t "$GFX_IMG" -f "$here/linux-gfx.Dockerfile" "$here"; }
 
 build_deps() {
   dock 3000 "$GFX_IMG" "

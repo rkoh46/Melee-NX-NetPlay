@@ -14,7 +14,8 @@ LINUX_IMG="${MU_LINUX_IMAGE:-mu-arm-gcc15}"                    # docker build -t
 NX_IMG="${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}"
 [ -d "$tree/port/linux" ] || { echo "run ./fetch.sh first" >&2; exit 1; }
 mkdir -p "$out" "$gen"
-dock() { local limit=$1 image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
+# MU_TIMEOUT_SCALE multiplies the container time limits (app-build.sh sets it where the arm64 image runs under qemu).
+dock() { local limit=$(( $1 * ${MU_TIMEOUT_SCALE:-1} )) image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
 
 build_game() {
   dock 900 "$LINUX_IMG" '

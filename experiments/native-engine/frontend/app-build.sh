@@ -23,6 +23,8 @@ step() { printf '\n== app-build: %s\n' "$*"; }
 for need in build/sdk/SDK_MANIFEST.json build/switch-aurora/_deps/imgui-src; do
   [ -e "$need" ] || { echo "app-build: missing $need: run install.sh once on this computer (it builds the app's SDK and Aurora's sources)" >&2; exit 1; }
 done
+# The game's Linux pieces are built for arm64; on an x86 build computer they run under qemu, several times slower.
+case "$(uname -m)" in aarch64|arm64) ;; *) export MU_TIMEOUT_SCALE="${MU_TIMEOUT_SCALE:-8}" ;; esac
 docker image inspect mu-arm-gcc15 >/dev/null 2>&1 || { step "the aarch64 Linux image"; timeout 7200 docker build --platform linux/arm64 -t mu-arm-gcc15 -f experiments/native-engine/linux-gcc15.Dockerfile experiments/native-engine; }
 
 step "melee-unlocked at its pinned commit"; bash experiments/native-engine/fetch.sh
