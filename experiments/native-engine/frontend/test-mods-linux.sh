@@ -10,6 +10,9 @@
 #   frozen          Training with practice_rng 2 (frozen) from settings.ini
 #   vanilla-only    --vanilla-only with a mod profile and CPU options in settings.ini: no profile loaded, the memory card
 #                   folder <card>/VanillaOnly, the gameplay option words without mods or CPU options; --auto-vs match
+#   mex             the Akaneia disc's profile (MU_MODS_DIR; MU_MEX_PROFILE=ace the ACE disc): its m-ex stage rows and
+#                   stage select, then a Training match on the select's stage id MU_MEX_STAGE
+#   rogue           the rogueMelee disc's profile (MU_MODS_DIR): 1-P Mode > Regular Match > All-Star, which Rogue Mode replaces
 #   vanilla-refuse  --vanilla-only with a disc that is not GALE01 revision 2 (an 8-byte stand-in made here): refused
 # MU_MODS_DIR: a folder with mod profiles (mounted as <out>/mods) for vanilla-only. Output:
 # build/native-engine-gfx/run-mods-test/<case>/ (console.log, host.log, settings.ini, shots/). MU_TEST_LIMIT: time limit in s.
@@ -43,7 +46,7 @@ run() {
 }
 report() {
   echo "== $(basename "$1")"
-  grep -hE "^training|^mods|^play: (options|match|stopped|started|vanilla|a vanilla)|\[pc\]|\[game\].*rng|^replay|exit code|rror" "$1/console.log" "$1/host.log" 2>/dev/null | cut -c1-220 | tail -25 || true
+  grep -hE "^training|^mods|^play: (options|match|stopped|started|vanilla|a vanilla)|\[pc\]|\[mex\] stages|\[rogue\]|\[game\].*(rng|stage)|^replay|exit code|rror" "$1/console.log" "$1/host.log" 2>/dev/null | cut -c1-220 | tail -25 || true
   echo "shots: $(ls "$1/shots" 2>/dev/null | wc -l | tr -d ' ')"
 }
 fresh() { rm -rf "$1"; mkdir -p "$1/shots"; }
@@ -103,6 +106,24 @@ PY
     fresh "$dir"
     printf '%s\n' "mod_profile hackpack" "cpu_20xx 1" "cpu_tech 1" "practice_rng 2" > "$dir/settings.ini"
     run "$dir" 1500 3 "--auto-vs --vanilla-only"
+    ;;
+  mex)
+    # MU_MODS_DIR with the Akaneia disc in akaneia/ (profile "akaneia"; MU_MEX_PROFILE=ace for ace/): the disc's m-ex
+    # stage rows as the game builds them and its stage select, then a Training match on the stage select's id
+    # MU_MEX_STAGE (default 84; --feature-test training:2:STAGE).
+    dir="$root/mex-${MU_MEX_PROFILE:-akaneia}"; fresh "$dir"
+    printf "%s\n" "mod_profile ${MU_MEX_PROFILE:-akaneia}" > "$dir/settings.ini"
+    run "$dir" 1500 3 "--feature-test training:2:${MU_MEX_STAGE:-84}"
+    ;;
+  rogue)
+    # MU_MODS_DIR with the rogueMelee disc in roguemelee/: 1-P Mode > Regular Match > the third row (All-Star, which
+    # Rogue Mode takes over with this disc), then the character select: up onto a fighter, A, Start.
+    fresh "$dir"
+    printf '%s\n' "mod_profile roguemelee" > "$dir/settings.ini"
+    # Times from the start (as the Hack Pack checks did): A at the intro, Start on the title screen, then the menus.
+    printf '%s\n' "130 A" "140" "400 START" "410" "520 A" "524" "600 A" "604" "660 sy=-127" "664" "690 sy=-127" "694" "740 A" "744" \
+      "1000 sy=127" "1010" "1030 A" "1034" "1100 START" "1104" "1200 START" "1204" "1400 A" "1404" "1500 A" "1504" > "$dir/script.txt"
+    run "$dir" 3000 3 ""
     ;;
   vanilla-refuse)
     fresh "$dir"

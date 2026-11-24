@@ -274,12 +274,18 @@ void test_tick() {
       }
     }
   }
-  // --feature-test training[:CHARACTER]: Go to Training once a menu (the title screen or the main menu) has been
-  // up for a second.
+  // --feature-test training[:CHARACTER[:STAGE]]: Go to Training once a menu (the title screen or the main menu) has
+  // been up for a second; STAGE is the stage id Training's stage select picks (default 32, Final Destination; on an
+  // m-ex disc the select's ids follow the disc's own table).
   std::string value;
   if (test_done || !feature_test("training", &value)) return;
   test_main_menu_ticks = scene_major() == 1 || scene_major() == 24 ? test_main_menu_ticks + 1 : 0;
-  if (test_main_menu_ticks == 60) { test_done = true; go_training(value.empty() ? 2 : std::atoi(value.c_str()), -1); }
+  if (test_main_menu_ticks == 60) {
+    test_done = true;
+    const size_t colon = value.find(':');
+    go_training(value.empty() ? 2 : std::atoi(value.c_str()), -1);
+    if (colon != std::string::npos) enter.stage = std::clamp(std::atoi(value.c_str() + colon + 1), 0, 0x7F);
+  }
 }
 
 void hud(std::vector<HudLine>& out) {

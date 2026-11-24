@@ -473,8 +473,8 @@ round(refresh / 60) times through its present hook.
 
 Replay fidelity needs `../patches/decomp-0003` in the game image (`../fetch.sh` applies every `decomp-*.patch`; an
 image built before it records one uninitialised shield-flag byte of the second fighter that a playback cannot
-reproduce). Verification hooks (command line, play mode): `--feature-test training[:CHARACTER]` (Go to Training from
-the title screen), `--feature-test major:N` (ask the game for scene N: Event Match 43, Classic 3, Training 28),
+reproduce). Verification hooks (command line, play mode): `--feature-test training[:CHARACTER[:STAGE]]` (Go to Training from
+the title screen; STAGE is the stage select's stage id, default 32), `--feature-test major:N` (ask the game for scene N: Event Match 43, Classic 3, Training 28),
 `--feature-test replay-controls` (presses the viewer's buttons on a timeline of its own, since a controller script
 stops while the replay is paused).
 
@@ -714,6 +714,20 @@ screen (drawn only in Training mode, not looked at); 120 Hz on a display that ha
 Not looked at: the Hack Pack's random variants (its debug menu, a chosen variant and the stage select pages were checked
 in 0.4.1; hidden characters, training displays and playlists since, see "Mod discs" under Feature modules); TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
 holds beyond what is listed.
+
+Mods and Training session options on Linux (`test-mods-linux.sh`, screenshots looked at): `training-menu` sets the
+Practice CPU, Random numbers "Same each start" and seed number 3 on the menu's Training page, saves slot 1, turns the
+Practice CPU off and loads slot 1 back (`practicecpuslot1`, `practice_rng 1`, `practice_rng_seed 3` written); the next
+start's Training match ran the slot's settings and seeded the game's random numbers (`[pc] rng seed DAA66D14 (same each
+start)`); `frozen`: `[pc] rng seed 8FF3473A (frozen)`. `vanilla-only` with `mod_profile hackpack` and CPU options: the
+profile not loaded, option words 0, a VS match saved to `card-play/VanillaOnly`; `vanilla-refuse`: a disc header that
+is not GALE01 revision 2 ends the start with code 2. `rogue`: Rogue Mode's map and first fight. `mex`: the Akaneia and
+ACE discs' added stages built and shown on the stage select (a match on one not played; see FEATURES.md). With a
+`practice_rng 2`, `practicecpu_on 1` settings file on both sides: `test-net-linux.sh` and `test-online-linux.sh` final
+state IDENTICAL, `net check` lines equal, 0 desync messages; `parity_vs_onett` with a picture (`test-linux.sh`) and the five reference scripts headless IDENTICAL after the
+merge with main. Not seen: whether items then come out the same, the replay refusal of a vanilla-only session, any of it
+on the console. "Go to Training" picked in the menu leaves the menu open, and Training's menus are not pressed through
+while it is (the press-through gives up after 15 s; close the menu first).
 
 On the console, by the session that ran it:
 
