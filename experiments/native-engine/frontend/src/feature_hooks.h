@@ -115,5 +115,8 @@ std::vector<HudLine> hud_lines();
 bool take_restart_request(std::vector<std::string>* extra_args);
 // The replays on the SD card, newest first (file names in the replay folder), for a launcher's list.
 std::vector<std::string> replays_list();
+// Slippi's game report asked for the replay (the netplay object's reporter thread, any thread): the path of the online game the
+// game reported last, once the replay writer has written it (waits up to 15 s); empty when there is none.
+std::string online_replay_for_report();
 
 }  // namespace fe::features

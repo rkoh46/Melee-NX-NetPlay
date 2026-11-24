@@ -375,6 +375,7 @@ int play_main() {
   }
   if (direct || menu_online) {
     net_host::set_speed_hook(io_game_speed);
+    if (&fe::features::online_replay_for_report) net_host::set_replay_path_hook(fe::features::online_replay_for_report);   // Slippi's replay upload
     if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); screens_stop(); log_close(); return code; }
     net_on = true;
     // Tests (input suggestions): MU_NET_CONTROLLERS=1 lets the controllers, or the controller script, play a direct match

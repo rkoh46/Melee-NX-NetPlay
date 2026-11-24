@@ -48,6 +48,16 @@ bool training_lab_overlay();         // Training's "Inputs and frame advantage" 
 bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
 std::vector<uint8_t> training_replay_defense(int setting);   // a takeover's opponents (0xE9): MuPcConfig bytes, empty to follow the recording
 
+// search.cpp: the keep-search question's and the search-again offer's buttons (options.cpp pad_read).
+void search_pad_hook(MuPadStatus pads[4]);
+
+// proai.cpp: the warm-up room's sparring partner (search.cpp). The pro whose AI plays this character (external id), as Fight a
+// pro offers them (their Phillip policy when any is installed, else the habit tables with games), -1 none; the player's Practice
+// CPU kept and the pro's put in (label: "Zain AI"); and the player's own back.
+int proai_for_character(int character);
+bool proai_spar_begin(int pro, std::string* label);
+void proai_spar_end();
+
 // overlays.cpp
 bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
 

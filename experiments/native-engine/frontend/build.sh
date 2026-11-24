@@ -224,7 +224,9 @@ WEAKEN_LINUX="for v in obj-linux obj-linux-services obj-linux-services$SAN_SFX; 
 # every other symbol local. Its service address is the loopback stand-in's, compiled in. Made here because the test
 # needs one that matches the synced bridge header. The netplay sources are ../net_sources.sh's patched copy.
 NET_INC="-I$W/runner -I$W/netsrc/port/runtime/hle -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app"
-NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DMU_NET_SERVICES'
+# Slippi's HTTP services (user profile, game reports, replay upload) go to the loopback stand-in too (patches/net-0008,
+# ../tools/mock_slippi_http.py).
+NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DSLIPPI_PIN_SERVICES_URL=\"http://127.0.0.1:8766\" -DMU_NET_SERVICES'
 NET_CXX='slippi_online slippi_net slippi_offline slippi_net_diag slippi_match_quality slippi_text slippi_version slippi_matchmaking_ws slippi_report slippi_http_curl slippi_login'
 build_net_services_linux() {
   local o="$W/net/obj-linux-services$SAN_SFX" stamp

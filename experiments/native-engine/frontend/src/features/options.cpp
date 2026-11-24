@@ -221,6 +221,7 @@ void pad_read(MuPadStatus out[4]) {
   const bool replay = replay_playing();
   replay_pad_hook(out);
   training_pad_hook(out);
+  search_pad_hook(out);
   const bool offline = !online() && !replay && !vanilla();
   MuLcancelView view{};
   bool gameplay = false;

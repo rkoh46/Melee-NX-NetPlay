@@ -20,6 +20,7 @@
 
 namespace {
 uint32_t (*g_retrace_count)() = nullptr; void (*g_log_time)(uint64_t) = nullptr; void (*g_set_speed)(double) = nullptr;
+std::string (*g_replay_path)() = nullptr;
 // Slippi's time sync: the emulation speed it last asked for (game thread; read by the host's pacing and the sound output).
 std::atomic<double> g_speed{1.0};
 // Set by the netplay thread (each pad acknowledgement) and the game thread, read by the game, render (HUD) and netplay threads.
@@ -56,7 +57,8 @@ void notify_local(const std::string&, const std::string&) {}
 }
 namespace gx { void gpu_sync_all() {} }
 namespace slippi {
-const std::string& last_replay_path() { static const std::string none; return none; }
+// Only the reporter's thread asks (patches/net-0008); the host's answer may wait for its replay writer.
+const std::string& last_replay_path() { static std::string path; path = g_replay_path ? g_replay_path() : std::string(); return path; }
 namespace discord {
 void set_menus() {} void set_local_port(int) {} void set_searching(const std::string&) {}
 void set_opponent(const std::string&, const std::string&, int) {}
@@ -122,7 +124,7 @@ static bool start_services(const Setup& setup, std::string* error) {
 }
 
 bool start(const Setup& setup, std::string* error) {
-  g_retrace_count = setup.retrace_count; g_log_time = setup.log_time; g_set_speed = setup.set_speed;
+  g_retrace_count = setup.retrace_count; g_log_time = setup.log_time; g_set_speed = setup.set_speed; g_replay_path = setup.replay_path;
   if (setup.services) return start_services(setup, error);
   mkdir(setup.user_dir.c_str(), 0777);
   // A made-up identity: the device wants a user.json before it will search. Nothing reads it but
@@ -177,6 +179,7 @@ SearchInfo search_info() {
   SearchInfo out;
   out.state = s.state; out.mode = s.mode; out.locked = s.locked; out.character = s.character; out.color = s.color;
   out.kept = s.kept; out.remote_ready = s.remote_ready; out.elapsed_ms = s.elapsed_ms; out.error = s.error; out.opponent = s.opponent;
+  out.code = s.code; out.remote_character = s.remote_character; out.remote_color = s.remote_color;
   return out;
 }
 void keep_search(bool kept) { slippi::online::keep_search(kept); }
