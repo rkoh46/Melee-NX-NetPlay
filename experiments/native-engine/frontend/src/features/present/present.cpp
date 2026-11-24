@@ -132,7 +132,20 @@ void loop(gx::Backend& backend, gx::FrameQueue& queue, const std::atomic<bool>& 
     // Take the newest finished game frame. Before the first one, and in Off mode on a display no faster than the
     // game, wait for it; otherwise only look.
     const double hz_now = fps_cap.load() > 0 ? double(fps_cap.load()) : measured_hz.load();   // 0 until measured
-    const bool wait_for_new = !have_cur || (calibrated && m0 == 0 && fps_cap.load() <= 0 && hz_now < 70.0);
+    // One present per game tick (a 60 Hz display, the console's panel and dock, or a cap of 60): sub-frame re-posing has no
+    // smoothness to add there, only delay, so it is skipped as upstream skips it (threaded_backend.cpp: presented rate 60).
+    // MU_SUBFRAME_AT_60=1 keeps it (tests of the solver on a 60 Hz display).
+    static const bool keep_at_60 = std::getenv("MU_SUBFRAME_AT_60") != nullptr;
+    const bool one_per_tick = m0 != 0 && calibrated && hz_now > 1.0 && hz_now < 70.0 && !keep_at_60;
+    {
+      static int told = -1;
+      if (calibrated && int(one_per_tick) != told) {
+        told = one_per_tick;
+        if (one_per_tick) say("present: %.1f presents a second, one per game frame: sub-frame re-posing skipped (no smoothness to gain, only delay)", hz_now);
+      }
+    }
+    const bool off_like = m0 == 0 || one_per_tick;
+    const bool wait_for_new = !have_cur || (calibrated && off_like && fps_cap.load() <= 0 && hz_now < 70.0);
     bool got = false;
     if (wait_for_new) got = queue.pop(incoming);
     else got = queue.try_pop(incoming);
@@ -162,7 +175,7 @@ void loop(gx::Backend& backend, gx::FrameQueue& queue, const std::atomic<bool>& 
       if (next_tick == 0 || t - next_tick > 4 * period) next_tick = t;
       if (next_tick > t) std::this_thread::sleep_for(std::chrono::duration<double>(next_tick - t));
       next_tick += period;
-    } else if (calibrated && !got && m0 == 0 && hz_now < 70.0) {
+    } else if (calibrated && !got && off_like && hz_now < 70.0) {
       // 60 Hz display, Off: nothing new to show, unless a paused replay's overlay or the menu changes (replay_view.h).
       static double repainted = 0;
       if (!(&features::replay_repaint_wanted && features::replay_repaint_wanted() && start_repaint_due(repainted))) continue;
@@ -170,7 +183,7 @@ void loop(gx::Backend& backend, gx::FrameQueue& queue, const std::atomic<bool>& 
     // Draw.
     const double start = now_s();
     const bool online_now = features::online();
-    bool sub = m0 != 0 && !paused && calibrated;
+    bool sub = m0 != 0 && !paused && calibrated && !one_per_tick;
     if (sub) {
       double t = std::clamp((start - cur_arrival) / kGamePeriod, 0.0, 1.0);
       solver.build(t, m0 == 2, mats);
