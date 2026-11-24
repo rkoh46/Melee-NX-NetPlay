@@ -1,0 +1,28 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_B): side b of the search-again test (features/search.cpp). As
+# online_shield_b.txt (Fox; Z held on the select after the match ends the session, so side a goes to Training by
+# online_training_after and is offered "Search Unranked again?"), then START on the select about 15 s later: a new search, which
+# meets side a's search started from the offer.
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132 sx=127
+138
+150 A
+156
+240 START
+246
+2400 Z
+2600
+3500 START
+3506
+3600 START
+3606
+@scene 08 02
+200 R
+500
+700 R
+1000

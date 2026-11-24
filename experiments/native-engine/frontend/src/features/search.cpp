@@ -306,9 +306,9 @@ void search_again() {
       o.character, o.color);
 }
 
-void offer_tick(uint32_t major, uint32_t minor) {
+void offer_tick(const netplay_bridge::SearchInfo& s, uint32_t major, uint32_t minor) {
   if (offer.mode < 0) return;
-  if (major == kOnlineMajor) { offer = Offer{}; return; }        // a new online session: the offer is stale
+  if (s.state >= 1 && s.state <= 4) { offer = Offer{}; return; }   // a search started some other way: the offer is stale
   if (!offer.shown && major == kTrainingMajor && minor == 2 && kept.stage == Stage::Off) {
     offer.shown = true;
     say("search: Training is running; asking whether to search %s again", mode_label(offer.mode));
@@ -332,19 +332,21 @@ void on_retrace(const Retrace& info) {
   watch_session(info, s);
   last_info = s;
   // What the pad hook was answered (the keep-search question, the search-again offer): done here, between frames.
+  // A search kept here is seen from the next retrace on (this one's search_info is from before it).
+  bool acted = false;
   switch (Pending(pending.exchange(0))) {
     case Pending::Keep:
-      if (question_possible(s, major, minor)) begin_menus(s, pending_port.load(), "the player kept searching and left the select");
+      if (question_possible(s, major, minor)) { begin_menus(s, pending_port.load(), "the player kept searching and left the select"); acted = true; }
       break;
     case Pending::Stop:
       say("search: the player stopped the search and left the select");
       request_major(kMainMenuMajor);              // the main menu's own cleanup stops it
       break;
-    case Pending::Again: search_again(); break;
+    case Pending::Again: search_again(); acted = kept.stage != Stage::Off; break;
     case Pending::None: break;
   }
   if (asking && !question_possible(s, major, minor)) { asking = false; say("search: the keep-searching question went away (the search changed)"); }
-  offer_tick(major, minor);
+  offer_tick(s, major, minor);
   {
     std::string prompt;
     if (asking) prompt = "KEEP SEARCHING WHILE YOU PLAY?   A: Yes, keep my place   B: No, stop searching";
@@ -353,6 +355,7 @@ void on_retrace(const Retrace& info) {
     std::lock_guard<std::mutex> lock(hud_mutex);
     prompt_text = prompt;
   }
+  if (acted) return;
   int port = 0;
   const bool lr = lr_held(&port);
   if (!lr) armed = true;
