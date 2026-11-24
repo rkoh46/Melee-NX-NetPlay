@@ -168,9 +168,27 @@ void set_online_prefs(const OnlinePrefs& prefs) {
   config.shield_online = prefs.shield_online;
   for (int i = 0; i < 3; ++i) config.blocked_codes[i] = prefs.skip[i];
   config.nx_build_message = !prefs.as_slippi;
+  config.pick_previews = prefs.pick_previews;
 }
 uint32_t port_colour_bits() { return slippi::online::port_colour_bits(); }
 uint32_t shield_color(int slot) { return slippi::online::shield_color(slot); }
+SearchInfo search_info() {
+  const slippi::online::SearchInfo s = slippi::online::search_info();
+  SearchInfo out;
+  out.state = s.state; out.mode = s.mode; out.locked = s.locked; out.character = s.character; out.color = s.color;
+  out.kept = s.kept; out.remote_ready = s.remote_ready; out.elapsed_ms = s.elapsed_ms; out.error = s.error; out.opponent = s.opponent;
+  return out;
+}
+void keep_search(bool kept) { slippi::online::keep_search(kept); }
+void set_chat(int mode, bool pick_previews) {
+  auto& config = slippi::online::config();
+  config.chat = std::clamp(mode, 0, 2);
+  config.pick_previews = pick_previews;
+}
+int local_slot() { return slippi::online::local_player_slot(); }
+bool search_kept() { return slippi::online::search_info().kept; }
+void end_kept_search(const char* why) { slippi::online::end_kept_search(why); }
+FrameTrace frame_trace() { FrameTrace t; slippi::online::frame_trace(&t.skip, &t.advanced, &t.offset_us); return t; }
 double emulation_speed() { return g_speed.load(std::memory_order_relaxed); }
 int ping_ms() { return g_ping_seen.load(std::memory_order_relaxed) ? g_ping_ms.load(std::memory_order_relaxed) : -1; }
 void set_delay(int frames, bool automatic) {
