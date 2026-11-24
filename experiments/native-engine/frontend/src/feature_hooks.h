@@ -14,6 +14,7 @@
 //   dispatch_run_end()            after linux_host::run returns, before the game is unmapped
 //   menu_entries()                the rows the in-game menu shows on the modules' pages
 //   hud_lines()                   short text lines for the overlay, read by the render or menu thread
+//   dispatch_reply(...)           after the netplay host answered a slippi_command (play mode with netplay), read only
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <climits>
@@ -83,6 +84,11 @@ struct HudLine { std::string text; uint32_t rgba = 0xFFFFFFFFu; };
 using HudFn = void (*)(std::vector<HudLine>& out);
 void add_hud(HudFn fn);
 
+// The netplay host's answer to a slippi_command the modules did not take (0xB3, the online match state, carries the
+// players' names), on the simulation thread. Read only: the game gets the answer unchanged.
+using ReplyFn = void (*)(uint8_t command, const uint8_t* response, uint32_t size);
+void add_reply(ReplyFn fn);
+
 // ---- what play mode calls ----
 void dispatch_tables(MuHostApi* host, MuGameApi* game);
 int32_t dispatch_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity,
@@ -90,6 +96,7 @@ int32_t dispatch_command(uint8_t command, const uint8_t* payload, uint32_t size,
 void dispatch_retrace(const Retrace& info);
 bool dispatch_setting(const std::string& key, const std::string& value);
 void dispatch_run_end();
+void dispatch_reply(uint8_t command, const uint8_t* response, uint32_t size);
 const std::vector<MenuEntry>& menu_entries();
 std::vector<HudLine> hud_lines();
 // A module asks play mode to start the game again with these arguments added (the replay viewer's "Watch

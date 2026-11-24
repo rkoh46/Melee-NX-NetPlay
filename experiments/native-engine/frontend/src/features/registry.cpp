@@ -19,12 +19,13 @@ struct Registry {
   std::vector<RunEndFn> run_ends;
   std::vector<MenuEntry> menu;
   std::vector<HudFn> huds;
+  std::vector<ReplyFn> replies;
 };
 Registry& registry() { static Registry r; return r; }
 void ensure() {
   static std::once_flag once;
   std::call_once(once, [] {
-    register_options(); register_training(); register_replays();
+    register_options(); register_training(); register_replays(); register_overlays();
     if (present::linked()) { present::register_settings(); present::configure_from_arguments(options.rest); }
   });
 }
@@ -37,6 +38,7 @@ void add_setting(SettingFn fn) { registry().settings.push_back(fn); }
 void add_run_end(RunEndFn fn) { registry().run_ends.push_back(fn); }
 void add_menu_entry(const MenuEntry& entry) { registry().menu.push_back(entry); }
 void add_hud(HudFn fn) { registry().huds.push_back(fn); }
+void add_reply(ReplyFn fn) { registry().replies.push_back(fn); }
 
 void dispatch_tables(MuHostApi* host, MuGameApi* game) {
   ensure();
@@ -76,6 +78,11 @@ bool dispatch_setting(const std::string& key, const std::string& value) {
 void dispatch_run_end() {
   ensure();
   for (RunEndFn fn : registry().run_ends) fn();
+}
+
+void dispatch_reply(uint8_t command, const uint8_t* response, uint32_t size) {
+  ensure();
+  for (ReplyFn fn : registry().replies) fn(command, response, size);
 }
 
 const std::vector<MenuEntry>& menu_entries() { ensure(); return registry().menu; }

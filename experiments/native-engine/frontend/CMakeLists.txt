@@ -135,7 +135,7 @@ else()
     "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
   # The app's in-game menu and HUD (game_menu.cpp with patches/0104, drawn by overlay_imgui.cpp through Aurora's ImGui
   # pass), the controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
-  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
+  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${FE}/overlay_draw.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
     "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
   # game_menu.cpp's menu_frame becomes app_menu_frame (play_io.cpp's menu_frame calls it in app mode). Off the console
   # it lays its rows out as on the console (MU_MENU_CONSOLE), so the Linux test sees the console's menu.

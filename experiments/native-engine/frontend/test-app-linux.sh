@@ -15,8 +15,11 @@
 #   signin   no user.json: the sign-in screen comes first; B (Play offline) through the test pad file starts the game offline
 #   update   a fake build computer on 127.0.0.1 (python http.server) publishes the version after VERSION: the prompt, A, the download, the
 #            check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app closes; then the same version: no prompt
+#   overlaymenu  the menu's Overlays and Picture pages: one row changed on each (saved to settings.ini), screenshots
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
+# MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
+# MU_APP_SETTINGS="playernicknames 1" ./test-app-linux.sh DISC online).
 # MU_SANITIZE=address|thread runs the sanitizer build (build.sh with MU_SANITIZE; reports in san.* beside each console log);
 # MU_DEAD_FIRST=N (online case): the stand-in matches each app's first N searches with a peer that never answers, so each
 # of those connection attempts fails and the app searches again before the two apps are paired.
@@ -36,6 +39,8 @@ make_app() {
   rm -rf "$dir"; mkdir -p "$dir/melee-nx-netplay/User/Slippi" "$dir/shots"
   { echo "iso=/iso/GALE01.iso"; echo "frames=$frames"; [ "$script" = - ] || echo "script=/out/$(basename "$script")"; for l in "$@"; do echo "$l"; done; } > "$dir/melee-nx-netplay/launcher.ini"
   [ "$script" = - ] || cp "$script" "$dir/"
+  # MU_APP_SETTINGS="key value;key value": a settings.ini with these lines (the app writes its template around them).
+  [ -z "${MU_APP_SETTINGS:-}" ] || printf '%s\n' "$MU_APP_SETTINGS" | tr ';' '\n' > "$dir/melee-nx-netplay/settings.ini"
   if [ "$user" != 0 ]; then
     printf '{"uid":"mock-test-%s","playKey":"mock-test-only","connectCode":"MOCK#00%s","displayName":"Mock %s"}\n' "$user" "$user" "$user" > "$dir/melee-nx-netplay/User/Slippi/user.json"
   fi
@@ -181,6 +186,28 @@ EOF
       sed -i "s/^script=.*//" /out/melee-nx-netplay/launcher.ini; sed -i "s/^frames=.*/frames=400/" /out/melee-nx-netplay/launcher.ini
       cd /out && /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
     echo "launcher.ini after the menu:"; grep -E "^(volume|hud|keyboard)=" "$dir/melee-nx-netplay/launcher.ini" || true
+    echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
+    ;;
+  overlaymenu)
+    # The in-game menu's Overlays and Picture pages (feature module pages 4 and 5, after Game, Training and Replays): down
+    # 15 rows from the first, A; on Overlays, right on the first row (input display on); B; down one more, A; on Picture,
+    # down two rows (Internal resolution) and right; B; Start closes the menu.
+    python3 -I - "$root/overlaymenu-script.txt" <<'PY'
+import sys
+lines = ["@scene 01 00", "300 L+R+START", "345"]
+t = 360
+for i in range(15): lines += [f"{t} sy=-127", f"{t+4}"]; t += 12
+lines += [f"{t+20} A", f"{t+24}"]; t += 120
+lines += [f"{t} sx=127", f"{t+4}"]; t += 120
+lines += [f"{t} B", f"{t+4}"]; t += 30
+lines += [f"{t} sy=-127", f"{t+4}", f"{t+20} A", f"{t+24}"]; t += 120
+for i in range(2): lines += [f"{t} sy=-127", f"{t+4}"]; t += 12
+lines += [f"{t} sx=127", f"{t+4}"]; t += 120
+lines += [f"{t} B", f"{t+4}", f"{t+40} START", f"{t+44}"]
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    make_app "$dir" 1 1800 "$root/overlaymenu-script.txt"
+    run "$dir" 'shots 1; cd /out && /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
     ;;
   handover)

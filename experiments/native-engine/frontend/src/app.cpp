@@ -293,8 +293,22 @@ bool app_layout_screen(const char* reason) {
 }
 
 // ---- HUD ----
+namespace {
+// The performance graph's history (overlay_draw.cpp): the newest 240 frame times, written by the simulation thread.
+std::atomic<uint32_t> perf_ring[240];
+std::atomic<uint32_t> perf_count{0};
+}
+int perf_history(float* out, int capacity) {
+  const uint32_t n = perf_count.load(std::memory_order_acquire);
+  const int have = int(std::min<uint32_t>(n, 240u)), take = std::min(have, capacity);
+  for (int i = 0; i < take; ++i) out[i] = perf_ring[(n - uint32_t(take) + uint32_t(i)) % 240u].load(std::memory_order_relaxed) / 100.0f;
+  return take;
+}
 void hud_frame(double work_ms) {
   hud_work_x100.store(uint32_t(std::max(0.0, work_ms) * 100.0), std::memory_order_relaxed);
+  const uint32_t n = perf_count.load(std::memory_order_relaxed);
+  perf_ring[n % 240u].store(uint32_t(std::max(0.0, work_ms) * 100.0), std::memory_order_relaxed);
+  perf_count.store(n + 1, std::memory_order_release);
   if (work_ms > 1000.0 / 60) hud_late.fetch_add(1, std::memory_order_relaxed);
 }
 // "slippi: automatic input delay 3 frames (...)": the delay the netplay device chose for this game.

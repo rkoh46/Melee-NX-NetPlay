@@ -143,6 +143,7 @@ int32_t command(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* respo
     say("play: online: the game closed the connection");
   }
   const int32_t result = net_command(c, payload, size, response, capacity, response_size);
+  if (result == 0 && response && response_size) features::call_reply(c, response, *response_size);   // read only (overlay names)
   const uint64_t t2 = now_ns();
   if (store) { sim_cost[1] += t1 - t0; sim_cost[0] += t2 - t1; } else sim_cost[2] += t2 - t0;
   return result;
