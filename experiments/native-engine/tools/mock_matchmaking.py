@@ -7,11 +7,17 @@ and tools/test_matchmaking_ws.cpp describe it) to pair the first two clients tha
 No TLS, no accounts, nothing leaves the machine. Point a services build at it with the app's own
 override:  SLIPPI_MM_URL=ws://127.0.0.1:PORT
 
-usage: mock_matchmaking.py [PORT]   (default 8765)"""
+usage: mock_matchmaking.py [PORT]   (default 8765)
+       mock_matchmaking.py PORT --dead-first N
+           keeps running: each client's first N searches (counted by connect code) are matched at once with a
+           made-up opponent at 127.0.0.1:9, where nothing answers, so that connection attempt fails after the
+           netplay client's 8 s and the client searches again; after that, clients are paired with each other.
+           For the failed-connection-then-search-again path (tests only)."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import base64, hashlib, json, socket, struct, sys
 
 port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+dead_first = int(sys.argv[sys.argv.index('--dead-first') + 1]) if '--dead-first' in sys.argv else None
 server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(('127.0.0.1', port)); server.listen(4)
 
@@ -48,6 +54,54 @@ def send(conn, payload, opcode=0x1):
     if isinstance(payload, str): payload = payload.encode()
     head = bytes([0x80 | opcode]) + (bytes([len(payload)]) if len(payload) < 126 else b'\x7e' + struct.pack('>H', len(payload)))
     conn.sendall(head + payload)
+
+def match_message(mode, me, entries, host_index):
+    """entries: (uid, displayName, connectCode, 'ip:port') per player, in port order."""
+    players = [{'uid': uid, 'displayName': name, 'connectCode': code, 'port': k + 1, 'isLocalPlayer': k == me,
+                'ipAddress': address, 'ipAddressLan': address} for k, (uid, name, code, address) in enumerate(entries)]
+    return json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == host_index, 'players': players,
+                       'stages': [2, 3, 8, 28, 31, 32]})
+
+def drain_and_close(conn):
+    try: read_text(conn)
+    except Exception: pass
+    conn.close()
+
+if dead_first is not None:
+    import threading
+    lock = threading.Lock(); searches = {}; waiting = []; matches = [0]
+    def serve(conn):
+        try:
+            handshake(conn)
+            join = json.loads(read_text(conn))
+        except Exception:
+            conn.close(); return
+        user = join['user']; code = user.get('connectCode')
+        mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams'}.get(join['search'].get('mode'), 'unranked')
+        me_entry = (user['uid'], user['displayName'], code, '127.0.0.1:%d' % join['port'])
+        with lock:
+            searches[code] = searches.get(code, 0) + 1; n = searches[code]
+        send(conn, json.dumps({'type': 'joined', 'ticketId': 't-%s-%d' % (code, n), 'token': 'mock'}))
+        if n <= dead_first:
+            # Alternate the sides so both roles (decider and not) fail: odd searches put the client first and make it the host.
+            dead = ('mock-dead', 'Nobody', 'DEAD#000', '127.0.0.1:9')
+            first = n % 2 == 1
+            entries = [me_entry, dead] if first else [dead, me_entry]
+            send(conn, match_message(mode, 0 if first else 1, entries, 0))
+            print('mock: search %d of %s matched with a peer that never answers' % (n, code), flush=True)
+            drain_and_close(conn); return
+        with lock:
+            waiting.append((conn, me_entry, mode))
+            if len(waiting) < 2: return
+            pair = waiting[:2]; del waiting[:2]; matches[0] += 1
+        entries = [pair[0][1], pair[1][1]]
+        for me, (c, _, _) in enumerate(pair):
+            send(c, match_message(pair[0][2], me, entries, 0))
+        print('mock: matched %s and %s in mode %s (pair %d)' % (entries[0][2], entries[1][2], pair[0][2], matches[0]), flush=True)
+        for c, _, _ in pair: threading.Thread(target=drain_and_close, args=(c,), daemon=True).start()
+    while True:
+        conn, _ = server.accept()
+        threading.Thread(target=serve, args=(conn,), daemon=True).start()
 
 clients = []
 while len(clients) < 2:

@@ -10,6 +10,7 @@
 #include "exi_slippi.h"
 #include "host.h"
 #include "gx_core.h"
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -17,7 +18,11 @@
 #include <cstring>
 #include <sys/stat.h>
 
-namespace { uint32_t (*g_retrace_count)() = nullptr; int g_ping_ms = 0; bool g_ping_seen = false; void (*g_log_time)(uint64_t) = nullptr; }
+namespace {
+uint32_t (*g_retrace_count)() = nullptr; void (*g_log_time)(uint64_t) = nullptr;
+// Set by the netplay thread (each pad acknowledgement) and the game thread, read by the game, render (HUD) and netplay threads.
+std::atomic<int> g_ping_ms{0}; std::atomic<bool> g_ping_seen{false};
+}
 
 // ---- what the app's netplay code expects from the rest of the app -------------------------------
 namespace host {
@@ -39,8 +44,8 @@ uint32_t retrace_count() { return g_retrace_count ? g_retrace_count() : 0; }
 double now_seconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void sim_cost_add(int, double) {}
 void set_emulation_speed(double) {}       // Slippi's time sync nudges the frame rate; the test runs at a fixed rate
-void set_online_ping_ms(int ms) { g_ping_ms = ms; g_ping_seen = true; }
-int online_ping_ms() { return g_ping_ms; }
+void set_online_ping_ms(int ms) { g_ping_ms.store(ms, std::memory_order_relaxed); g_ping_seen.store(true, std::memory_order_relaxed); }
+int online_ping_ms() { return g_ping_ms.load(std::memory_order_relaxed); }
 void input_mark_match_start() {}
 void notify_local(const std::string&, const std::string&) {}
 }
@@ -151,7 +156,7 @@ bool request_match(int mode, const std::string& connect_code, uint8_t character,
   return true;
 }
 uint64_t rollbacks_seen_by_device() { return slippi::online::rollback_count(); }
-int ping_ms() { return g_ping_seen ? g_ping_ms : -1; }
+int ping_ms() { return g_ping_seen.load(std::memory_order_relaxed) ? g_ping_ms.load(std::memory_order_relaxed) : -1; }
 void set_delay(int frames, bool automatic) {
   auto& config = slippi::online::config();
   config.delay_auto = automatic;

@@ -1,0 +1,742 @@
+Netplay host thread safety (Melee-NX-NetPlay 0.4.2): the game thread, the matchmaking thread and the netplay thread
+shared objects without locks. Found by the console crash of 0.4.1 (newlib's malloc on a corrupted free list during a
+search after failed connection attempts) and by ThreadSanitizer on Linux (frontend/test-online-linux.sh with
+MU_SANITIZE=thread MU_DEAD_FIRST=N). Applied by ../net_sources.sh after net-0001; port/ is unchanged.
+- Matchmaking: the players, the match result, the stages and the error text are written by the matchmaking thread
+  at every match found and copied by the game thread every frame (0xB3: GetPlayerName, GetPlayerInfo, ...): now
+  built aside and published under a lock; the local player index and the service session id are atomics; a second
+  FindMatch on a thread still joinable no longer ends the program.
+- User: user.json is read again by the game thread (0xB9) while the matchmaking thread copies the record: a lock.
+- NetplayClient: the time sync (frame offsets, last frame timings, game started), the acknowledged frames and their
+  timers, the remote selections and the remote synced states were shared by the game and netplay threads without
+  locks (a vector copied while the other thread appended to it); the peer health time was a static shared by clients.
+- net_diag: the netplay thread wrote sample rows to the file the game thread closes at a cleanup; a lock, and the
+  retrace and ping are taken on the game thread. The online frame counter is an atomic.
+- The matchmaking port generator is shared by the old and the new Matchmaking objects after a cleanup: a lock.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+diff -ru a/port/runtime/hle/slippi_net.cpp b/port/runtime/hle/slippi_net.cpp
+--- a/port/runtime/hle/slippi_net.cpp	2026-11-23 19:09:40
++++ b/port/runtime/hle/slippi_net.cpp	2026-11-23 19:25:00
+@@ -143,26 +143,44 @@
+   std::ifstream f(dir_ + "/user.json");
+   if (!f) { logged_in_ = false; return false; }
+   try {
++    // Parsed into a copy and swapped in under the lock: the matchmaking thread may be copying the record right now.
+     json j = json::parse(f);
+-    info_.uid = jget(j, "uid", "");
+-    info_.play_key = jget(j, "playKey", "");
+-    info_.display_name = jget(j, "displayName", "");
+-    info_.connect_code = jget(j, "connectCode", "");
+-    info_.latest_version = jget(j, "latestVersion", "");
+-    info_.chat_messages.clear();
+-    if (j.count("chatMessages") && j["chatMessages"].is_array()) for (auto& m : j["chatMessages"]) info_.chat_messages.push_back(m.get<std::string>());
+-    if (info_.chat_messages.size() != 16) info_.chat_messages = GetDefaultChatMessages();
++    UserInfo read;
++    read.uid = jget(j, "uid", "");
++    read.play_key = jget(j, "playKey", "");
++    read.display_name = jget(j, "displayName", "");
++    read.connect_code = jget(j, "connectCode", "");
++    read.latest_version = jget(j, "latestVersion", "");
++    if (j.count("chatMessages") && j["chatMessages"].is_array()) for (auto& m : j["chatMessages"]) read.chat_messages.push_back(m.get<std::string>());
++    if (read.chat_messages.size() != 16) read.chat_messages = GetDefaultChatMessages();
++    {
++      std::lock_guard<std::mutex> lk(mutex_);
++      info_.uid.swap(read.uid);
++      info_.play_key.swap(read.play_key);
++      info_.display_name.swap(read.display_name);
++      info_.connect_code.swap(read.connect_code);
++      info_.latest_version.swap(read.latest_version);
++      info_.chat_messages.swap(read.chat_messages);
++    }
++    const UserInfo now = GetUserInfo();
+     bool was = logged_in_;
+-    logged_in_ = !info_.uid.empty() && !info_.play_key.empty();
+-    if (logged_in_ && !was) host::log("slippi: logged in as %s (%s)", info_.display_name.c_str(), info_.connect_code.c_str());
++    logged_in_ = !now.uid.empty() && !now.play_key.empty();
++    if (logged_in_ && !was) host::log("slippi: logged in as %s (%s)", now.display_name.c_str(), now.connect_code.c_str());
+   } catch (const std::exception& e) {
+     host::log("slippi: cannot parse %s/user.json: %s", dir_.c_str(), e.what());
+     logged_in_ = false;
+   }
+   return logged_in_;
+ }
+-void User::LogOut() { logged_in_ = false; info_ = UserInfo(); host::log("slippi: logged out (user.json left in place)"); }
+-std::vector<std::string> User::GetUserChatMessages() const { return info_.chat_messages.size() == 16 ? info_.chat_messages : GetDefaultChatMessages(); }
++void User::LogOut() {
++  logged_in_ = false;
++  { std::lock_guard<std::mutex> lk(mutex_); info_ = UserInfo(); }
++  host::log("slippi: logged out (user.json left in place)");
++}
++std::vector<std::string> User::GetUserChatMessages() const {
++  std::lock_guard<std::mutex> lk(mutex_);
++  return info_.chat_messages.size() == 16 ? info_.chat_messages : GetDefaultChatMessages();
++}
+ std::vector<std::string> User::GetDefaultChatMessages() {
+   return {"ggs", "one more", "brb", "good luck", "well played", "that was fun", "thanks", "too good",
+           "sorry", "my b", "lol", "wow", "gotta go", "one sec", "let's play again later", "bad connection"};
+@@ -314,15 +332,18 @@
+           c.second.is_disconnected = true;
+         }
+       }
+-      FrameTiming timing = last_frame_timing_[pidx];
+-      if (!has_game_started_) { timing.frame = 0; timing.time_us = cur_time; }
+-      int64_t opponent_send_time_us = (int64_t)cur_time - (int64_t)(ping_us_[pidx].load(std::memory_order_relaxed) / 2);
+-      int64_t frame_diff_offset_us = 16683 * (int64_t)(timing.frame - frame);
+-      int64_t time_offset_us = opponent_send_time_us - (int64_t)timing.time_us + frame_diff_offset_us;
+-      auto& fod = frame_offset_data_[pidx];
+-      if ((int)fod.buf.size() < ONLINE_LOCKSTEP_INTERVAL) fod.buf.push_back((int32_t)time_offset_us);
+-      else fod.buf[fod.idx] = (int32_t)time_offset_us;
+-      fod.idx = (fod.idx + 1) % ONLINE_LOCKSTEP_INTERVAL;
++      {   // the game thread copies frame_offset_data_ (CalcTimeOffsetUs) and writes last_frame_timing_ (SendSlippiPad)
++        std::lock_guard<std::mutex> lk(timing_mutex_);
++        FrameTiming timing = last_frame_timing_[pidx];
++        if (!has_game_started_) { timing.frame = 0; timing.time_us = cur_time; }
++        int64_t opponent_send_time_us = (int64_t)cur_time - (int64_t)(ping_us_[pidx].load(std::memory_order_relaxed) / 2);
++        int64_t frame_diff_offset_us = 16683 * (int64_t)(timing.frame - frame);
++        int64_t time_offset_us = opponent_send_time_us - (int64_t)timing.time_us + frame_diff_offset_us;
++        auto& fod = frame_offset_data_[pidx];
++        if ((int)fod.buf.size() < ONLINE_LOCKSTEP_INTERVAL) fod.buf.push_back((int32_t)time_offset_us);
++        else fod.buf[fod.idx] = (int32_t)time_offset_us;
++        fod.idx = (fod.idx + 1) % ONLINE_LOCKSTEP_INTERVAL;
++      }
+       int64_t inputs_to_copy;
+       {
+         std::lock_guard<std::mutex> lk(pad_mutex_);
+@@ -438,8 +459,8 @@
+         uint8_t idx = PlayerIdxFromPort(s->player_idx);
+         if (idx >= remote_player_count_) break;
+         host::log("slippi: received selections from player %u (char %u color %u stage %u)", s->player_idx, s->character_id, s->character_color, s->stage_id);
+-        match_info_.remote[idx].Merge(*s);
+-        has_game_started_ = false;
++        { std::lock_guard<std::mutex> lk(match_mutex_); match_info_.remote[idx].Merge(*s); }
++        { std::lock_guard<std::mutex> lk(timing_mutex_); has_game_started_ = false; }
+         suggestions::reset_remote(idx);
+         std::lock_guard<std::mutex> lk(pad_mutex_);
+         remote_pad_queue_[idx].clear();
+@@ -476,7 +497,7 @@
+       SyncedGameState r;
+       packet >> r.match_id >> r.game_index >> r.tiebreak_index >> r.seconds_remaining;
+       for (int i = 0; i < 4; ++i) packet >> r.fighters[i].stocks_remaining >> r.fighters[i].current_health;
+-      remote_sync_states_[pidx] = r;
++      { std::lock_guard<std::mutex> lk(sync_mutex_); remote_sync_states_[pidx] = r; }
+       break;
+     }
+     default: host::log("slippi: unknown netplay message %u", mid); break;
+@@ -682,14 +703,15 @@
+       std::unique_ptr<Packet> p;
+       { std::lock_guard<std::mutex> lk(async_mutex_); if (async_queue_.empty()) break; p = std::move(async_queue_.front()); async_queue_.pop_front(); }
+       Send(*p);
+-      net_diag::on_queue_depth(async_queue_.size());
++      size_t depth;
++      { std::lock_guard<std::mutex> lk(async_mutex_); depth = async_queue_.size(); }   // the game thread appends to it
++      net_diag::on_queue_depth(depth);
+     }
+     net_diag::maybe_sample(time_us());
+     {   // every 5 s: is each peer's reliable channel being acknowledged? (issue 9: the connection in use times out at 30 s)
+-      static uint64_t last_health_ms = 0;
+       const uint64_t now_ms = time_ms();
+-      if (now_ms - last_health_ms >= 5000) {
+-        last_health_ms = now_ms;
++      if (now_ms - last_health_ms_ >= 5000) {
++        last_health_ms_ = now_ms;
+         for (size_t i = 0; i < client_->peerCount; ++i) {
+           ENetPeer* p = &client_->peers[i];
+           if (p->state == ENET_PEER_STATE_DISCONNECTED) continue;
+@@ -773,16 +795,19 @@
+ }
+ 
+ void NetplayClient::StartSlippiGame() {
+-  has_game_started_ = false;
+   local_pad_queue_.clear();
+-  for (int i = 0; i < remote_player_count_; ++i) {
+-    last_frame_timing_[i] = {0, time_us()};
+-    last_frame_acked_[i] = 0;
+-    ack_timers_[i].clear();
++  {
++    std::lock_guard<std::mutex> lk(timing_mutex_);
++    has_game_started_ = false;
++    for (int i = 0; i < remote_player_count_; ++i) last_frame_timing_[i] = {0, time_us()};
+   }
++  {
++    std::lock_guard<std::mutex> lk(ack_mutex_);   // the netplay thread updates both on every acknowledgement
++    for (int i = 0; i < remote_player_count_; ++i) { last_frame_acked_[i] = 0; ack_timers_[i].clear(); }
++  }
+   is_desync_recovery_ = false;
+   { std::lock_guard<std::mutex> lk(game_prep_mutex_); game_prep_step_queue_.clear(); }
+-  match_info_.Reset();
++  { std::lock_guard<std::mutex> lk(match_mutex_); match_info_.Reset(); }
+ }
+ 
+ void NetplayClient::SendSlippiPadSuggestion(int32_t target_frame, uint32_t seq, const uint8_t pad[PAD_INPUT_SIZE]) {
+@@ -801,9 +826,12 @@
+     net_diag::on_pad_sent(time_us());
+   }
+   int min_ack = INT_MAX;
+-  for (int i = 0; i < remote_player_count_; ++i) {
+-    if (!player_active_[match_info_.remote[i].player_idx].load(std::memory_order_acquire)) continue;
+-    min_ack = std::min(min_ack, last_frame_acked_[i]);
++  {
++    std::lock_guard<std::mutex> lk(ack_mutex_);   // written by the netplay thread on every acknowledgement
++    for (int i = 0; i < remote_player_count_; ++i) {
++      if (!player_active_[match_info_.remote[i].player_idx].load(std::memory_order_acquire)) continue;
++      min_ack = std::min(min_ack, last_frame_acked_[i]);
++    }
+   }
+   if (!local_pad_queue_.empty()) min_ack = std::max(min_ack, local_pad_queue_.front()->frame - 128);
+   while (!local_pad_queue_.empty() && local_pad_queue_.back()->frame < min_ack) local_pad_queue_.pop_back();
+@@ -814,19 +842,27 @@
+   for (auto& p : local_pad_queue_) spac->append(p->buf, PAD_WIRE_SIZE);   // inputs plus the RNG bits
+   SendAsync(std::move(spac));
+   uint64_t t = time_us();
+-  has_game_started_ = true;
++  {
++    std::lock_guard<std::mutex> lk(timing_mutex_);
++    has_game_started_ = true;
++    for (int i = 0; i < remote_player_count_; ++i) last_frame_timing_[i] = {frame, t};
++  }
+   for (int i = 0; i < remote_player_count_; ++i) {
+-    last_frame_timing_[i] = {frame, t};
+     std::lock_guard<std::mutex> lk(ack_mutex_);
+     ack_timers_[i].push_back({frame, t});
+   }
+ }
+ 
+ void NetplayClient::SetMatchSelections(PlayerSelections& s) {
+-  match_info_.local.Merge(s);
+-  match_info_.local.player_idx = player_idx_;
++  PlayerSelections local;
++  {
++    std::lock_guard<std::mutex> lk(match_mutex_);
++    match_info_.local.Merge(s);
++    match_info_.local.player_idx = player_idx_;
++    local = match_info_.local;
++  }
+   auto spac = std::make_unique<Packet>();
+-  WriteSelections(*spac, match_info_.local);
++  WriteSelections(*spac, local);
+   SendAsync(std::move(spac));
+ }
+ void NetplayClient::SendGamePrepStep(const GamePrepStepResults& s) {
+@@ -1030,8 +1066,9 @@
+   std::vector<int> offsets;
+   for (int i = 0; i < remote_player_count_; ++i) {
+     if (!player_active_[match_info_.remote[i].player_idx].load(std::memory_order_acquire)) continue;
+-    if (frame_offset_data_[i].buf.empty()) continue;
+-    std::vector<int32_t> buf = frame_offset_data_[i].buf;
++    std::vector<int32_t> buf;
++    { std::lock_guard<std::mutex> lk(timing_mutex_); buf = frame_offset_data_[i].buf; }   // the netplay thread appends to it
++    if (buf.empty()) continue;
+     std::sort(buf.begin(), buf.end());
+     int n = (int)buf.size(), off = (int)((1.0f / 3.0f) * n), end = n - off;
+     int sum = 0;
+@@ -1045,6 +1082,7 @@
+ }
+ bool NetplayClient::IsWaitingForDesyncRecovery() {
+   if (!is_desync_recovery_) return false;
++  std::lock_guard<std::mutex> lk(sync_mutex_);
+   for (int i = 0; i < remote_player_count_; ++i)
+     if (local_sync_state_.game_index != remote_sync_states_[i].game_index || local_sync_state_.tiebreak_index != remote_sync_states_[i].tiebreak_index) return true;
+   return false;
+@@ -1055,8 +1093,10 @@
+   r.is_waiting = IsWaitingForDesyncRecovery();
+   if (!r.is_recovering || r.is_waiting) return r;
+   r.state = local_sync_state_;
++  SyncedGameState remote[REMOTE_PLAYER_MAX];   // copied: the netplay thread writes them (match id strings included)
++  { std::lock_guard<std::mutex> lk(sync_mutex_); for (int i = 0; i < remote_player_count_; ++i) remote[i] = remote_sync_states_[i]; }
+   for (int i = 0; i < remote_player_count_; ++i) {
+-    auto& s = remote_sync_states_[i];
++    auto& s = remote[i];
+     if (std::abs((int)r.state.seconds_remaining - (int)s.seconds_remaining) > 1) { r.is_error = true; return r; }
+     if (s.seconds_remaining > r.state.seconds_remaining) r.state.seconds_remaining = s.seconds_remaining;
+     for (int j = 0; j < 4; ++j) {
+@@ -1076,15 +1116,26 @@
+ Matchmaking::Matchmaking(User* user) : user_(user) {}
+ Matchmaking::~Matchmaking() {
+   is_mm_terminated_ = true;
++  setError("Matchmaking shut down");
+   state_ = ERROR_ENCOUNTERED;
+-  error_msg_ = "Matchmaking shut down";
+-  if (session_id_) mm::cancel(session_id_);   // never blocks; the thread below sees the flag within a poll
++  if (const uint64_t id = session_id_.load()) mm::cancel(id);   // never blocks; the thread below sees the flag within a poll
+   if (thread_.joinable()) thread_.join();
+   terminateMmConnection();
+ }
++void Matchmaking::setError(const std::string& message) {
++  std::lock_guard<std::mutex> lk(info_mutex_);
++  error_msg_ = message;
++}
+ void Matchmaking::FindMatch(MatchSearchSettings settings) {
++  // Assigning a new thread over one that was never joined ends the program (std::terminate). The game cleans up
++  // (0xBA, a new object) before it searches again; if it ever does not, a search still running is kept, and one
++  // that has ended is joined (its thread is only freeing its port).
++  if (thread_.joinable()) {
++    if (IsSearching()) { host::log("slippi: a search is already running; the new search request is ignored"); return; }
++    thread_.join();
++  }
+   search_settings_ = settings;
+-  error_msg_.clear();
++  setError("");
+   state_ = INITIALIZING;
+   host::log("slippi: matchmaking started (mode %d, code '%s')", settings.mode, settings.connect_code.c_str());
+   thread_ = std::thread(&Matchmaking::MatchmakeThread, this);
+@@ -1105,7 +1156,7 @@
+   terminateMmConnection();   // leave the queue if still in it and free the port
+ }
+ void Matchmaking::terminateMmConnection() {
+-  if (session_id_ != 0) { mm::cancel(session_id_); session_id_ = 0; }
++  if (const uint64_t id = session_id_.exchange(0)) mm::cancel(id);
+   if (client_) { enet_host_destroy(client_); client_ = nullptr; }
+ }
+ 
+@@ -1174,42 +1225,51 @@
+ void Matchmaking::startMatchmaking() {
+   client_ = nullptr;
+   UserInfo me = user_->GetUserInfo();
++  // Shared by every Matchmaking object: after a cleanup (0xBA) the old object's thread can still be here while the
++  // new one starts.
++  static std::mutex rng_mutex;
+   static std::mt19937 rng((uint32_t)time_ms());
++  const auto random_port = [] { std::lock_guard<std::mutex> lk(rng_mutex); return 41000 + (int)(rng() % 10000); };
+ 
+   if (local_peer.enabled) {
+     // Two local instances peer directly; the "match" is fabricated the way the server would report it.
+     host_port_ = local_peer.local_port;
+-    local_player_index_ = local_peer.local_index;
+-    is_host_ = local_player_index_ == 0;
+-    player_info_.clear();
++    const int local_index = local_peer.local_index;
++    is_host_ = local_index == 0;
++    std::vector<UserInfo> players;
+     remote_ips_.clear();
+     for (int i = 0; i < 2; ++i) {
+       UserInfo p;
+-      if (i == local_player_index_) p = me;
++      if (i == local_index) p = me;
+       else { p.uid = "local-peer"; p.display_name = "Peer"; p.connect_code = "PEER#001"; }
+       p.port = i + 1;
+       p.chat_messages = User::GetDefaultChatMessages();
+-      player_info_.push_back(p);
++      players.push_back(p);
+     }
+     remote_ips_.push_back(local_peer.remote_ip + ":" + std::to_string(local_peer.remote_port));
+-    allowed_stages_ = {0x2, 0x3, 0x8, 0x1C, 0x1F, 0x20};
+-    mm_result_.id = "mode." + std::string(search_settings_.mode == DIRECT ? "direct" : "unranked") + "-local-test";
+-    mm_result_.players = player_info_;
+-    mm_result_.stages = allowed_stages_;
+-    mm_result_.items = 0;
++    {
++      std::lock_guard<std::mutex> lk(info_mutex_);
++      player_info_ = players;
++      allowed_stages_ = {0x2, 0x3, 0x8, 0x1C, 0x1F, 0x20};
++      mm_result_.id = "mode." + std::string(search_settings_.mode == DIRECT ? "direct" : "unranked") + "-local-test";
++      mm_result_.players = player_info_;
++      mm_result_.stages = allowed_stages_;
++      mm_result_.items = 0;
++    }
++    local_player_index_ = local_index;
+     state_ = OPPONENT_CONNECTING;
+-    host::log("slippi: local peer test: player %d on port %d, peer %s", local_player_index_, host_port_, remote_ips_[0].c_str());
++    host::log("slippi: local peer test: player %d on port %d, peer %s", local_index, host_port_, remote_ips_[0].c_str());
+     return;
+   }
+ 
+   // The host is bound to the port we will play on. Talking to the STUN servers through its socket creates the NAT
+   // mapping opponents will use and tells us what it is.
+   for (int retry = 0; !client_ && retry < 15; ++retry) {
+-    host_port_ = forced_port ? forced_port : 41000 + (int)(rng() % 10000);
++    host_port_ = forced_port ? forced_port : random_port();
+     ENetAddress addr; addr.host = ENET_HOST_ANY; addr.port = (enet_uint16)host_port_;
+     client_ = enet_host_create(&addr, 1, 3, 0, 0);
+   }
+-  if (!client_) { state_ = ERROR_ENCOUNTERED; error_msg_ = "Failed to create mm client"; return; }
++  if (!client_) { setError("Failed to create mm client"); state_ = ERROR_ENCOUNTERED; return; }
+   prioritize_socket(client_->socket);
+ 
+   std::vector<ENetAddress> stun_addrs;
+@@ -1274,9 +1334,10 @@
+         host::log("slippi: the matchmaking service says Slippi %s is required; this build implements %s", latest.c_str(), version::kSemver);
+         version::note_service_requires(latest);
+       }
+-      error_msg_ = message.empty() ? "Matchmaking failed" : message;
++      if (message.empty()) message = "Matchmaking failed";
++      setError(message);
+       session_id_ = 0;
+-      host::log("slippi: mm error: %s", error_msg_.c_str());
++      host::log("slippi: mm error: %s", message.c_str());
+       state_ = ERROR_ENCOUNTERED;
+       return;
+     }
+@@ -1284,7 +1345,7 @@
+     default:
+       // The session ended without a result: it was cancelled out from under us.
+       session_id_ = 0;
+-      error_msg_ = "Matchmaking was cancelled";
++      setError("Matchmaking was cancelled");
+       state_ = ERROR_ENCOUNTERED;
+       return;
+   }
+@@ -1294,14 +1355,17 @@
+   json resp = have ? json::parse(result_json, nullptr, false) : json();
+   if (!have || resp.is_discarded() || !resp.is_object()) {
+     host::log("slippi: match result %s", have ? "could not be parsed" : "was missing");
+-    error_msg_ = "Invalid response when getting mm status";
++    setError("Invalid response when getting mm status");
+     state_ = ERROR_ENCOUNTERED;
+     return;
+   }
+   try {
+   netplay_client_ = nullptr;
+   remote_ips_.clear();
+-  player_info_.clear();
++  // Built here and published under info_mutex_ at the end: the game thread copies the players every frame.
++  std::vector<UserInfo> players;
++  std::vector<uint16_t> stages;
++  int local_index = local_player_index_;
+   std::string match_id = jget(resp, "matchId", "");
+   host::log("slippi: match id %s", match_id.c_str());
+   auto queue = resp["players"];
+@@ -1327,11 +1391,11 @@
+         p.ranked_regional_placement = jget(rk, "regionalPlacement", 0);
+         p.ranked_mmr = jget(rk, "mmr", 0.0f);
+       }
+-      player_info_.push_back(p);
++      players.push_back(p);
+       if (is_local) {
+         std::string ip = jget(el, "ipAddress", "1.1.1.1:123");
+         local_external_ip = ip.substr(0, ip.find(':'));
+-        local_player_index_ = p.port - 1;
++        local_index = p.port - 1;
+         // The address the opponent will dial. Behind carrier-grade NAT the public port differs from the local one; if
+         // matchmaking advertises a port nothing forwards, the opponent's own attempt dies and Slippi Dolphin closes the
+         // healthy connection when it expires (docs/MAC_FIXES.md issue 9).
+@@ -1339,7 +1403,7 @@
+       }
+     }
+     for (auto& el : queue) {
+-      if (jget(el, "port", 0) - 1 == local_player_index_) continue;
++      if (jget(el, "port", 0) - 1 == local_index) continue;
+       std::string ext = jget(el, "ipAddress", "1.1.1.1:123");
+       std::string lan = jget(el, "ipAddressLan", "1.1.1.1:123");
+       
+@@ -1348,25 +1412,31 @@
+     }
+   }
+   is_host_ = jget(resp, "isHost", false);
+-  allowed_stages_.clear();
+-  if (resp.count("stages") && resp["stages"].is_array()) for (auto& s : resp["stages"]) if (s.is_number()) allowed_stages_.push_back((uint16_t)s.get<int>());
+-  if (allowed_stages_.empty()) {
+-    allowed_stages_ = {0x3, 0x8, 0x1C, 0x1F, 0x20};
+-    if (player_info_.size() == 2) allowed_stages_.push_back(0x2);
++  if (resp.count("stages") && resp["stages"].is_array()) for (auto& s : resp["stages"]) if (s.is_number()) stages.push_back((uint16_t)s.get<int>());
++  if (stages.empty()) {
++    stages = {0x3, 0x8, 0x1C, 0x1F, 0x20};
++    if (players.size() == 2) stages.push_back(0x2);
+   }
+-  mm_result_.id = match_id;
+-  mm_result_.players = player_info_;
+-  mm_result_.stages = allowed_stages_;
+-  mm_result_.items = jget(resp, "items", 0u);
++  const uint32_t items = jget(resp, "items", 0u);
++  {
++    std::lock_guard<std::mutex> lk(info_mutex_);
++    player_info_ = players;
++    allowed_stages_ = stages;
++    mm_result_.id = match_id;
++    mm_result_.players = std::move(players);
++    mm_result_.stages = std::move(stages);
++    mm_result_.items = items;
++  }
++  local_player_index_ = local_index;
+   } catch (const std::exception& e) {
+     host::log("slippi: unexpected match result shape: %s", e.what());
+-    error_msg_ = "Invalid response when getting mm status";
++    setError("Invalid response when getting mm status");
+     state_ = ERROR_ENCOUNTERED;
+     return;
+   }
+   if (remote_ips_.empty() || remote_ips_.size() > REMOTE_PLAYER_MAX) {
+     host::log("slippi: match result names %zu remote players", remote_ips_.size());
+-    error_msg_ = "Invalid response when getting mm status";
++    setError("Invalid response when getting mm status");
+     state_ = ERROR_ENCOUNTERED;
+     return;
+   }
+@@ -1393,8 +1463,8 @@
+       continue;
+     }
+     if (st != NetplayClient::ConnectStatus::CONNECTED) {
+-      if (local_peer.enabled) { state_ = ERROR_ENCOUNTERED; error_msg_ = "Could not connect to the local peer"; return; }
+-      if (search_settings_.mode == TEAMS) { state_ = ERROR_ENCOUNTERED; error_msg_ = "Timed out waiting for other players to connect"; return; }
++      if (local_peer.enabled) { setError("Could not connect to the local peer"); state_ = ERROR_ENCOUNTERED; return; }
++      if (search_settings_.mode == TEAMS) { setError("Timed out waiting for other players to connect"); state_ = ERROR_ENCOUNTERED; return; }
+       host::log("slippi: connection attempt failed, searching again");
+       state_ = INITIALIZING;
+       return;
+@@ -1405,6 +1475,7 @@
+ }
+ 
+ int Matchmaking::GetPlayerRank(uint8_t port) const {
++  std::lock_guard<std::mutex> lk(info_mutex_);
+   if (port >= player_info_.size()) return 0;
+   const UserInfo& info = player_info_[port];
+   const float r = info.ranked_rating;
+diff -ru a/port/runtime/hle/slippi_net.h b/port/runtime/hle/slippi_net.h
+--- a/port/runtime/hle/slippi_net.h	2026-11-23 19:09:40
++++ b/port/runtime/hle/slippi_net.h	2026-11-23 19:24:52
+@@ -126,17 +126,20 @@
+  public:
+   explicit User(std::string user_dir);
+   bool AttemptLogin();          // (re)reads user.json
+-  bool IsLoggedIn() const { return logged_in_; }
+-  UserInfo GetUserInfo() const { return info_; }
++  bool IsLoggedIn() const { return logged_in_.load(std::memory_order_acquire); }
++  UserInfo GetUserInfo() const { std::lock_guard<std::mutex> lk(mutex_); return info_; }
+   void LogOut();
+-  void OverwriteLatestVersion(const std::string& v) { info_.latest_version = v; }
++  void OverwriteLatestVersion(const std::string& v) { std::lock_guard<std::mutex> lk(mutex_); info_.latest_version = v; }
+   std::vector<std::string> GetUserChatMessages() const;
+   static std::vector<std::string> GetDefaultChatMessages();
+   const std::string& dir() const { return dir_; }
+  private:
+   std::string dir_;
++  // The game thread re-reads user.json (0xB9) and the matchmaking thread copies the record at every search and
++  // writes the latest version the service asks for: info_ is only touched under the lock.
++  mutable std::mutex mutex_;
+   UserInfo info_;
+-  bool logged_in_ = false;
++  std::atomic<bool> logged_in_{false};
+ };
+ 
+ // Connect-code history (direct-codes.json / teams-codes.json in the user folder).
+@@ -191,6 +194,9 @@
+   uint64_t GetPingUs(int index) const { return ping_us_[index].load(std::memory_order_relaxed); }
+   DisconnectReason GetDisconnectReason() const { return (DisconnectReason)disconnect_reason_.load(std::memory_order_acquire); }
+   MatchInfo* GetMatchInfo() { return &match_info_; }
++  // The selections as they are now: the netplay thread merges the other players' selections in while the game thread
++  // reads them every frame (0xB3).
++  MatchInfo GetMatchInfoSnapshot() const { std::lock_guard<std::mutex> lk(match_mutex_); return match_info_; }
+   PlayerSelections GetSlippiRemoteChatMessage(bool chat_enabled);
+   uint8_t GetSlippiRemoteSentChatMessage(bool chat_enabled);
+   int32_t CalcTimeOffsetUs();
+@@ -237,8 +243,13 @@
+   std::atomic<bool> do_loop_{true};
+   std::atomic<unsigned> rtt_ms_{0};
+   std::atomic<unsigned> connect_rtt_ms_{0};
++  uint64_t last_health_ms_ = 0;   // netplay thread: the last peer health line (was a static shared by every client)
+   void UpdateConnectRoundTrip();
+-  bool is_decider_ = false, has_game_started_ = false;
++  bool is_decider_ = false;
++  // last_frame_timing_, has_game_started_ and frame_offset_data_: written by the game thread (pads sent) and the netplay
++  // thread (pads received), read by both (the time sync): only under timing_mutex_.
++  std::mutex timing_mutex_;
++  bool has_game_started_ = false;
+   uint8_t player_idx_ = 0;
+   std::unordered_map<std::string, std::map<_ENetPeer*, ActiveConnectionInfo>> active_connections_;
+   std::atomic<bool> player_active_[PLAYER_COUNT_MAX] = {};
+@@ -248,6 +259,7 @@
+   std::deque<Pad> remote_pad_history_[REMOTE_PLAYER_MAX];
+   bool is_desync_recovery_ = false;
+   struct ChecksumEntry { int32_t frame = 0; uint32_t value = 0; } remote_checksums_[REMOTE_PLAYER_MAX];
++  std::mutex sync_mutex_;   // remote_sync_states_: written by the netplay thread, copied by the game thread every frame
+   SyncedGameState remote_sync_states_[REMOTE_PLAYER_MAX], local_sync_state_;
+   std::mutex game_prep_mutex_;   // filled by the netplay thread, drained by the game thread
+   std::deque<GamePrepStepResults> game_prep_step_queue_;
+@@ -262,6 +274,7 @@
+   std::atomic<ConnectStatus> status_{ConnectStatus::UNSET};
+   std::atomic<uint32_t> pending_disconnect_reason_{0}, disconnect_reason_{0};
+   std::vector<int> failed_connections_;
++  mutable std::mutex match_mutex_;   // match_info_'s selections (the players' indices are fixed at construction)
+   MatchInfo match_info_;
+   std::mutex chat_mutex_;        // set by the netplay thread, taken by the game thread
+   PlayerSelections remote_chat_message_;
+@@ -280,16 +293,21 @@
+   ~Matchmaking();
+   void FindMatch(MatchSearchSettings settings);
+   ProcessState GetMatchmakeState() const { return state_; }
+-  std::string GetErrorMessage() const { return error_msg_; }
++  // The getters below are called by the game thread every frame (0xB3) while the matchmaking thread may be writing
++  // a new result: they copy under info_mutex_.
++  std::string GetErrorMessage() const { std::lock_guard<std::mutex> lk(info_mutex_); return error_msg_; }
+   bool IsSearching() const { return state_ == INITIALIZING || state_ == MATCHMAKING || state_ == OPPONENT_CONNECTING; }
+   std::unique_ptr<NetplayClient> GetNetplayClient() { return std::move(netplay_client_); }
+-  int LocalPlayerIndex() const { return local_player_index_; }
+-  std::vector<UserInfo> GetPlayerInfo() const { return player_info_; }
+-  std::string GetPlayerName(uint8_t port) const { return port < player_info_.size() ? player_info_[port].display_name : ""; }
++  int LocalPlayerIndex() const { return local_player_index_.load(std::memory_order_acquire); }
++  std::vector<UserInfo> GetPlayerInfo() const { std::lock_guard<std::mutex> lk(info_mutex_); return player_info_; }
++  std::string GetPlayerName(uint8_t port) const {
++    std::lock_guard<std::mutex> lk(info_mutex_);
++    return port < player_info_.size() ? player_info_[port].display_name : "";
++  }
+   int GetPlayerRank(uint8_t port) const;
+-  std::vector<uint16_t> GetStages() const { return allowed_stages_; }
+-  uint8_t RemotePlayerCount() const { return player_info_.empty() ? 0 : (uint8_t)(player_info_.size() - 1); }
+-  MatchmakeResult GetMatchmakeResult() const { return mm_result_; }
++  std::vector<uint16_t> GetStages() const { std::lock_guard<std::mutex> lk(info_mutex_); return allowed_stages_; }
++  uint8_t RemotePlayerCount() const { std::lock_guard<std::mutex> lk(info_mutex_); return player_info_.empty() ? 0 : (uint8_t)(player_info_.size() - 1); }
++  MatchmakeResult GetMatchmakeResult() const { std::lock_guard<std::mutex> lk(info_mutex_); return mm_result_; }
+   static bool IsFixedRulesMode(OnlinePlayMode m) { return m == UNRANKED || m == RANKED || m == PARTY; }
+   static LocalPeer local_peer;          // set from the command line for local two-instance tests
+   static uint16_t forced_port;          // 0 = random 41000..50999
+@@ -302,22 +320,27 @@
+   void terminateMmConnection();
+   bool stunBindingRequest(const void* server, void* result);   // ENetAddress, mm::StunObservation
+   void sendStunKeepalive();
++  void setError(const std::string& message);   // error_msg_ under info_mutex_
+ 
+   User* user_;
+   _ENetHost* client_ = nullptr;   // bound to the netplay port while queued; only its socket is used (STUN)
+   uint32_t stun_host_ = 0; uint16_t stun_port_ = 0; bool has_stun_addr_ = false;
+   uint64_t last_keepalive_ms_ = 0;
+-  uint64_t session_id_ = 0;       // the matchmaking service session this object started
++  std::atomic<uint64_t> session_id_{0};   // the matchmaking service session this object started (read by the destructor)
+   std::atomic<bool> is_mm_terminated_{false};
+   std::thread thread_;
+   MatchSearchSettings search_settings_;
+   std::atomic<ProcessState> state_{IDLE};
++  // Written by the matchmaking thread (a new result at every match found, also after a failed connection attempt),
++  // read by the game thread every frame: only under info_mutex_. The matchmaking thread is their only writer.
++  mutable std::mutex info_mutex_;
+   std::string error_msg_;
+-  int host_port_ = 0, local_player_index_ = 0;
+-  std::vector<std::string> remote_ips_;
+   MatchmakeResult mm_result_;
+   std::vector<UserInfo> player_info_;
+   std::vector<uint16_t> allowed_stages_;
++  int host_port_ = 0;
++  std::atomic<int> local_player_index_{0};
++  std::vector<std::string> remote_ips_;
+   bool is_host_ = false;
+   std::unique_ptr<NetplayClient> netplay_client_;
+ };
+diff -ru a/port/runtime/hle/slippi_net_diag.cpp b/port/runtime/hle/slippi_net_diag.cpp
+--- a/port/runtime/hle/slippi_net_diag.cpp	2026-11-23 19:09:40
++++ b/port/runtime/hle/slippi_net_diag.cpp	2026-11-23 19:25:31
+@@ -10,6 +10,7 @@
+ #include <chrono>
+ #include <cstdio>
+ #include <cstring>
++#include <mutex>
+ #include <string>
+ 
+ namespace net_diag {
+@@ -42,6 +43,16 @@
+ 
+ std::string g_path;
+ FILE* g_file = nullptr;
++// The netplay thread writes sample rows while the game thread opens and closes the file at a game's start and end
++// (cleanup_connection closes it while the old client's netplay thread may still be sampling): g_file only under
++// this lock. The game's retrace count and the ping are taken on the game thread and handed over as atomics.
++std::mutex g_file_mutex;
++std::atomic<uint32_t> g_retrace{0};
++std::atomic<int> g_ping_ms{-1};
++void note_game_thread() {
++  g_retrace.store((uint32_t)host::retrace_count(), std::memory_order_relaxed);
++  g_ping_ms.store(host::online_ping_ms(), std::memory_order_relaxed);
++}
+ 
+ uint64_t now_unix_us() {
+   return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+@@ -50,14 +61,15 @@
+ }
+ 
+ void row(const char* event, uint64_t us) {
++  std::lock_guard<std::mutex> lk(g_file_mutex);
+   if (!g_file) return;
+   const uint64_t acks = g_acks.load(), ack_us = g_acks_latency_us.load();
+   const uint64_t recv_us = g_last_recv_us.load();
+   std::fprintf(g_file, "%llu,%s,%d,%u,%llu,%llu,%d,%llu,%.1f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.2f,%llu\n",
+                (unsigned long long)us, event,
+-               slippi::online::current_online_frame(), (unsigned)host::retrace_count(),
++               slippi::online::current_online_frame(), (unsigned)g_retrace.load(std::memory_order_relaxed),
+                (unsigned long long)g_rollbacks.load(), (unsigned long long)g_rollbacks_interval.value.exchange(0),
+-               host::online_ping_ms(),
++               g_ping_ms.load(std::memory_order_relaxed),
+                (unsigned long long)(g_ack_latency_us.drain() / 1000),
+                acks ? (double)ack_us / (double)acks / 1000.0 : 0.0,
+                (unsigned long long)g_pads_sent.load(), (unsigned long long)g_send_gap_us.drain(),
+@@ -71,6 +83,9 @@
+ }  // namespace
+ 
+ void match_started(const char* cache_dir) {
++  note_game_thread();
++  {
++  std::lock_guard<std::mutex> lk(g_file_mutex);
+   if (!g_file) {
+     g_path = std::string(cache_dir) + "/network.csv";
+     g_file = std::fopen(g_path.c_str(), "a");
+@@ -82,18 +97,22 @@
+       host::log("slippi: cannot open %s; network diagnostics disabled", g_path.c_str());
+     }
+   }
++  }
+   g_active.store(true, std::memory_order_release);
+   row("game_start", now_unix_us());
+ }
+ 
+ void match_ended(const char* why) {
+   if (!g_active.exchange(false, std::memory_order_acq_rel)) return;
++  note_game_thread();
+   row(why, now_unix_us());
++  std::lock_guard<std::mutex> lk(g_file_mutex);
+   if (g_file) { std::fclose(g_file); g_file = nullptr; }
+ }
+ 
+-void on_pad_sent(uint64_t us) {
++void on_pad_sent(uint64_t us) {   // game thread
+   if (!g_active.load(std::memory_order_relaxed)) return;
++  note_game_thread();
+   const uint64_t last = g_last_sent_us.exchange(us, std::memory_order_relaxed);
+   if (last) g_send_gap_us.offer(us - last);
+   ++g_pads_sent;
+diff -ru a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.cpp
+--- a/port/runtime/hle/slippi_online.cpp	2026-11-23 19:09:40
++++ b/port/runtime/hle/slippi_online.cpp	2026-11-23 19:25:10
+@@ -196,7 +196,7 @@
+ bool g_currently_skipping = false, g_currently_advancing = false;
+ std::mt19937 g_rng((uint32_t)time_ms());
+ uint64_t g_rollbacks = 0;
+-int32_t g_current_online_frame = 0;   // for the rollback log line
++std::atomic<int32_t> g_current_online_frame{0};   // for the rollback log line; net_diag reads it on the netplay thread
+ bool g_in_online_match = false;
+ 
+ // ---------------------------------------------------------------- input suggestions, the sending side
+@@ -663,7 +663,7 @@
+   ++g_rollbacks;
+   net_diag::on_rollback();
+   // One line per rollback: a crash or desync right after one points at savestate coverage.
+-  host::log("slippi: rollback to frame %d from frame %d (%zu preserved blocks)", frame, g_current_online_frame, blocks.size());
++  host::log("slippi: rollback to frame %d from frame %d (%zu preserved blocks)", frame, g_current_online_frame.load(), blocks.size());
+   for (auto& kv : g_active_savestates) g_available_savestates.push_back(std::move(kv.second));
+   g_active_savestates.clear();
+ }
+@@ -815,7 +815,8 @@
+     bool connected = g_netplay->GetSlippiConnectStatus() == NetplayClient::ConnectStatus::CONNECTED;
+     if (g_netplay->GetActivePlayerIndices().size() != g_matchmaking->RemotePlayerCount()) connected = false;
+     if (connected) {
+-      MatchInfo* mi = g_netplay->GetMatchInfo();
++      const MatchInfo match_info = g_netplay->GetMatchInfoSnapshot();   // the netplay thread merges selections in
++      const MatchInfo* mi = &match_info;
+       remote_ready = 1;
+       uint8_t remote_count = g_matchmaking->RemotePlayerCount();
+       for (int i = 0; i < remote_count; ++i) if (!mi->remote[i].is_character_selected) remote_ready = 0;
+@@ -865,7 +866,8 @@
+   if (local_ready && remote_ready) {
+     bool decider = g_netplay->IsDecider();
+     uint8_t remote_count = g_matchmaking->RemotePlayerCount();
+-    MatchInfo* mi = g_netplay->GetMatchInfo();
++    const MatchInfo match_info = g_netplay->GetMatchInfoSnapshot();
++    const MatchInfo* mi = &match_info;
+     PlayerSelections lps = mi->local;
+     PlayerSelections rps[REMOTE_PLAYER_MAX];
+     for (int i = 0; i < REMOTE_PLAYER_MAX; ++i) rps[i] = mi->remote[i];
+@@ -1097,7 +1099,7 @@
+ bool available() { return true; }
+ uint64_t rollback_count() { return g_rollbacks; }
+ uint8_t local_player_slot() { return g_local_player_index; }
+-int32_t current_online_frame() { return g_current_online_frame; }
++int32_t current_online_frame() { return g_current_online_frame.load(std::memory_order_relaxed); }
+ bool is_online_match() { return g_in_online_match; }
+ 
+ void init() {

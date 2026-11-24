@@ -58,6 +58,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `app-build.sh`, `update-host-native.patch`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
+| `patches/0107-gx-core-array-pool-fence.patch` | After 0102: the decoder reuses a vertex-array buffer the render thread let go of only after an acquire fence (0.4.2; ThreadSanitizer). |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
 | `CMakeLists.txt`, `build.sh` | Three variants: `null` (Linux, no graphics device), `linux` (Aurora on Vulkan, test build), `switch` (NRO). |
 | `linux-gfx.Dockerfile`, `DawnLinux.cmake`, `test-linux.sh` | The off-console picture test: Xvfb and Mesa's software Vulkan driver. |
@@ -74,7 +75,20 @@ downloaded here. Everything is written to `build/native-engine-gfx/`; `build/nat
 ./build.sh nro      # out/mu-native-gfx.nro and out/mu-native-gfx-services.nro
 # test build with a picture:
 ./build.sh image && ./build.sh deps && ./build.sh linux    # out/mu-native-gfx-linux
+# sanitizer test builds (own build folders; this program's code and the services netplay object instrumented,
+# not Aurora, Dawn, SDL or the game image):
+MU_SANITIZE=address ./build.sh null|linux   # out/mu-native-gfx-<variant>[-services]-asan
+MU_SANITIZE=thread ./build.sh null|linux    # ...-tsan
 ```
+
+The sanitizer builds are run by `test-online-linux.sh` and `test-app-linux.sh` with `MU_SANITIZE=address|thread`
+(reports in `san.*` beside each console log). `MU_DEAD_FIRST=N` makes the matchmaking stand-in pair each side's first
+N searches with a peer that never answers (`../tools/mock_matchmaking.py --dead-first N`): each connection attempt
+fails after 8 s and the side searches again, the path of the 0.4.1 console crash. ThreadSanitizer runs use
+`MU_VARIANT=null` (test-online-linux.sh, no picture, `--online unranked`): with Mesa's software Vulkan driver
+ThreadSanitizer's runtime once hung (the game thread waiting on the decoder, the decoder and Aurora's threads inside
+the sanitizer's own allocator lock and a raw futex in llvmpipe). `../tools/tsan_graphics.supp` suppresses reports
+from the graphics stack only (llvmpipe, Aurora's workers, the decoder's array pool fence).
 
 `./build.sh sync` takes the runner and `../patches` from the working tree (`MU_SYNC_REF=<commit>` takes them from a
 commit; play mode needs the runner's `--net-delay auto`, which is newer than `1c556fc`), and from `build/native-engine/`
@@ -405,9 +419,9 @@ Counter) and the match plays those moves; the 20XX Hack Pack's debug menu opens 
 Battlefield variant chosen on its TEXTURES page is saved on B and the match loads that variant's file (`pick: stage 31
 page 1 -> 31, letter '2'`), and D-pad down and up on the stage select change the page (its own icons on page 2).
 
-## The app: Melee-NX-NetPlay 0.4.1
+## The app: Melee-NX-NetPlay 0.4.2
 
-`out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" with the version in `VERSION`, 0.4.1, the app's icon: `build/icon.jpg` when
+`out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" with the version in `VERSION`, 0.4.2, the app's icon: `build/icon.jpg` when
 the app's build drew one, else `switch/icon.jpg`) replaces the recompiled app. Started with no arguments (the Homebrew
 Menu, a forwarder that adds only `--relaunch`) it is the app; with arguments it is the test program described above.
 Off the console `--app [--base DIR]` gives the same (default folder `./melee-nx-netplay`).
@@ -464,7 +478,7 @@ restarts itself if `--relaunch` was given (a forwarder), otherwise it shows "PLE
 `game` entry), prompt (A install, B later, + quit), download beside the NRO, size and SHA-256 check, rename into place,
 `.bak` kept. The target is the NRO the app was started from (`argv[0]`), else `sdmc:/switch/melee-nx-netplay/melee-nx-netplay.nro`.
 This program has no RomFS holding its file open, so the swap happens right after the download; a swap left waiting
-is finished at the next start. The comparison is `VERSION` (0.4.1) / Slippi `3.7.0` (the netplay object's pin).
+is finished at the next start. The comparison is `VERSION` (0.4.2) / Slippi `3.7.0` (the netplay object's pin).
 
 **Feature modules**: the other modules plug in through `src/feature_hooks.h` (their interface): play mode calls
 `dispatch_tables` first in its tables hook, `dispatch_command` first in `mu_frontend_command`, `dispatch_retrace` each

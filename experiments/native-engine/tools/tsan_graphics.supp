@@ -1,0 +1,11 @@
+# ThreadSanitizer suppressions for the Linux sanitizer test builds (frontend/build.sh with MU_SANITIZE=thread).
+# Only the graphics stack: Mesa's software Vulkan driver (llvmpipe, the Linux stand-in for the console's NVK) and
+# Aurora's render and FIFO workers hand data over through code that is not instrumented (their atomics are invisible
+# to ThreadSanitizer), so their reports cannot be judged from these builds. The netplay host, the frontend and the
+# host services are not suppressed.
+called_from_lib:libvulkan_lvp.so
+race:aurora::gfx::
+race:aurora::gx::
+# The GX decoder's vertex-array pool (frontend/patches/0107): reuse is ordered by an acquire fence after use_count(),
+# which ThreadSanitizer does not model.
+race:pooled_array

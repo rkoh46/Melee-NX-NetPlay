@@ -10,6 +10,9 @@
 #   ./build.sh linux    Linux with Aurora on Vulkan (the picture test)       -> out/mu-native-gfx-linux
 #   ./build.sh nro      Horizon                                              -> out/mu-native-gfx.nro
 #   ./build.sh          sync, null, nro
+#   MU_SANITIZE=address|thread ./build.sh null|linux   test builds with AddressSanitizer or ThreadSanitizer: this program's
+#                       own code and the services netplay object instrumented (not Aurora, Dawn, SDL or the game image),
+#                       in their own build folders; out/mu-native-gfx-<variant>[-services]-asan or -tsan
 # Each of null, linux and nro also makes the services program (out/mu-native-gfx-*-services, out/mu-native-gfx-services.nro):
 # the same objects linked with the netplay object that has the app's matchmaking client, user file and reporting.
 # The Linux one is pinned to the loopback stand-in (../tools/mock_matchmaking.py) and cannot reach a real service.
@@ -27,6 +30,14 @@ NX_IMG="${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}"
 jobs="${MELEE_BUILD_JOBS:-8}"
 W=build/native-engine-gfx
 dock() { local limit=$1 image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
+SAN="${MU_SANITIZE:-}"; SAN_SFX=""; SAN_FLAGS=""
+case "$SAN" in
+  "") ;;
+  address) SAN_SFX=-asan ;;
+  thread) SAN_SFX=-tsan ;;
+  *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
+esac
+[ -z "$SAN" ] || SAN_FLAGS="-fsanitize=$SAN -fno-omit-frame-pointer"
 
 sync_tree() {
   [ -d "$src/mu/.git" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
@@ -82,6 +93,7 @@ sync_tree() {
   cp "$repo/port/runtime/gx/gx_aurora_bridge.cpp" "$gen/gxsrc/port/runtime/gx/gx_aurora_bridge.cpp"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0102-gx-core-native-memory.patch"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0103-gx-bridge-lines-points.patch"
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0107-gx-core-array-pool-fence.patch"
   # Sub-frame presentation (patches/0106: the features' presenter) in the renderer and the sub-frame solver.
   cp "$repo/port/runtime/gx/gx_aurora.cpp" "$repo/port/runtime/gx/subframe.cpp" "$gen/gxsrc/port/runtime/gx/"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0106-subframe-presentation.patch"
@@ -169,7 +181,7 @@ DEPS_ARGS=$(echo $DEPS_ARGS)
 # it: made weak in a copy, they join ours instead of clashing.
 # Only its defined symbols: see netplay_link.sh (a weakened reference pulls nothing out of an archive).
 L=experiments/native-engine/frontend/netplay_link.sh
-WEAKEN_LINUX="for v in obj-linux obj-linux-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o -a $W/net/\$v/netplay-weak.o -nt $L ] || bash $L weaken '' $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done"
+WEAKEN_LINUX="for v in obj-linux obj-linux-services obj-linux-services$SAN_SFX; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o -a $W/net/\$v/netplay-weak.o -nt $L ] || bash $L weaken '' $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done"
 
 # The netplay object with the app's real services for Linux, by the recipe of ../build.sh (net_build with
 # MU_NET_SERVICES=1) from the synced runner: the bridge, this repository's netplay sources and ENet in one object,
@@ -179,16 +191,16 @@ NET_INC="-I$W/runner -I$W/netsrc/port/runtime/hle -Iport/runtime/hle -Iport/runt
 NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DMU_NET_SERVICES'
 NET_CXX='slippi_online slippi_net slippi_offline slippi_net_diag slippi_match_quality slippi_text slippi_version slippi_matchmaking_ws slippi_report slippi_http_curl slippi_login'
 build_net_services_linux() {
-  local o="$W/net/obj-linux-services" stamp
-  stamp="$(bash "$here/../net_sources.sh" "$work/netsrc")-$(cd "$repo" && cat "$W"/runner/netplay_bridge.* | shasum -a 256 | cut -c1-16)"
+  local o="$W/net/obj-linux-services$SAN_SFX" stamp
+  stamp="$(bash "$here/../net_sources.sh" "$work/netsrc")-$(cd "$repo" && cat "$W"/runner/netplay_bridge.* | shasum -a 256 | cut -c1-16)$SAN_SFX"
   [ -f "$repo/$o/netplay.o" ] && [ "$(cat "$repo/$o/stamp" 2>/dev/null)" = "$stamp" ] && return 0
   dock 900 "$LINUX_IMG" "
     rm -rf $o; mkdir -p $o/net
     for f in callbacks compress host list packet peer protocol unix; do
-      gcc -fPIE -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/\$f.c -o $o/net/enet_\$f.o
+      gcc -fPIE -O2 -w $SAN_FLAGS -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/\$f.c -o $o/net/enet_\$f.o
     done
     for f in $NET_CXX; do echo $W/netsrc/port/runtime/hle/\$f.cpp; done > $o/list; echo $W/runner/netplay_bridge.cpp >> $o/list
-    xargs -P $jobs -I{} sh -c 'g++ -fPIE -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden $NET_INC $NET_DEF -c {} -o $o/net/\$(basename {} .cpp).o' < $o/list
+    xargs -P $jobs -I{} sh -c 'g++ -fPIE -std=gnu++20 -O2 -g -w $SAN_FLAGS -fvisibility=hidden -fvisibility-inlines-hidden $NET_INC $NET_DEF -c {} -o $o/net/\$(basename {} .cpp).o' < $o/list
     ld -r --force-group-allocation $o/net/*.o -o $o/netplay.o
     objcopy --localize-hidden $o/netplay.o"
   echo "$stamp" > "$repo/$o/stamp"
@@ -212,13 +224,13 @@ build_null() {
   build_net_services_linux
   dock 900 "$LINUX_IMG" "
     $WEAKEN_LINUX
-    cmake -S experiments/native-engine/frontend -B $W/null -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=null \
-      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} >/dev/null
-    cmake --build $W/null --parallel $jobs > $W/null-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/null-build.log | head -60; exit 1; }
-    bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/null/mu-native-gfx-null
-    bash $L check-dynamic '' $W/net/obj-linux-services/netplay.o $W/null/mu-native-gfx-null-services
-    cp $W/null/mu-native-gfx-null $W/null/mu-native-gfx-null-services $W/out/"
-  echo "built $out/mu-native-gfx-null and -services"
+    cmake -S experiments/native-engine/frontend -B $W/null$SAN_SFX -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=null \
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} -DMU_FE_SANITIZE=$SAN >/dev/null
+    cmake --build $W/null$SAN_SFX --parallel $jobs > $W/null$SAN_SFX-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/null$SAN_SFX-build.log | head -60; exit 1; }
+    bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/null$SAN_SFX/mu-native-gfx-null$SAN_SFX
+    bash $L check-dynamic '' $W/net/obj-linux-services$SAN_SFX/netplay.o $W/null$SAN_SFX/mu-native-gfx-null-services$SAN_SFX
+    cp $W/null$SAN_SFX/mu-native-gfx-null$SAN_SFX $W/null$SAN_SFX/mu-native-gfx-null-services$SAN_SFX $W/out/"
+  echo "built $out/mu-native-gfx-null$SAN_SFX and -services$SAN_SFX"
 }
 
 build_linux() {
@@ -227,13 +239,13 @@ build_linux() {
   build_net_services_linux
   dock 2400 "$GFX_IMG" "
     $WEAKEN_LINUX
-    cmake -S experiments/native-engine/frontend -B $W/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=linux \
-      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} $DEPS_ARGS >$W/linux-configure.log 2>&1 || { tail -30 $W/linux-configure.log; exit 1; }
-    cmake --build $W/linux --target mu_native_gfx mu_native_gfx_services --parallel $jobs > $W/linux-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux-build.log | head -60; exit 1; }
-    bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/linux/mu-native-gfx-linux
-    bash $L check-dynamic '' $W/net/obj-linux-services/netplay.o $W/linux/mu-native-gfx-linux-services
-    cp $W/linux/mu-native-gfx-linux $W/linux/mu-native-gfx-linux-services $W/out/"
-  echo "built $out/mu-native-gfx-linux and -services"
+    cmake -S experiments/native-engine/frontend -B $W/linux$SAN_SFX -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=linux \
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} -DMU_FE_SANITIZE=$SAN $DEPS_ARGS >$W/linux$SAN_SFX-configure.log 2>&1 || { tail -30 $W/linux$SAN_SFX-configure.log; exit 1; }
+    cmake --build $W/linux$SAN_SFX --target mu_native_gfx mu_native_gfx_services --parallel $jobs > $W/linux$SAN_SFX-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux$SAN_SFX-build.log | head -60; exit 1; }
+    bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/linux$SAN_SFX/mu-native-gfx-linux$SAN_SFX
+    bash $L check-dynamic '' $W/net/obj-linux-services$SAN_SFX/netplay.o $W/linux$SAN_SFX/mu-native-gfx-linux-services$SAN_SFX
+    cp $W/linux$SAN_SFX/mu-native-gfx-linux$SAN_SFX $W/linux$SAN_SFX/mu-native-gfx-linux-services$SAN_SFX $W/out/"
+  echo "built $out/mu-native-gfx-linux$SAN_SFX and -services$SAN_SFX"
 }
 
 build_nro() {

@@ -10,6 +10,13 @@
 #   MU_ONLY_A=1            one instance and no stand-in: to look at the menus
 #   MU_REARM=1             the scripts search again after each match (the stand-in is started again for every pair)
 #   MU_NET_DELAY, MU_NET_JITTER   ms; MU_SHOT_EVERY seconds between screenshots (default 5)
+#   MU_DEAD_FIRST=N        the stand-in matches each side's first N searches with a peer that never answers: each of
+#                          those connection attempts fails after 8 s and the side searches again (the console's
+#                          failed-connection-then-search-again path), then the two sides are paired
+#   MU_SANITIZE=address|thread   run the sanitizer build (build.sh with MU_SANITIZE): its reports go to {a,b}/san.*
+#   MU_VARIANT=null        the program without a graphics device (no picture, no controllers: pass MU_ARGS_A and MU_ARGS_B
+#                          "--online unranked"; the match is played by generated inputs). ThreadSanitizer runs use it: the
+#                          sanitizer's runtime can hang inside Mesa's software driver
 # Output: build/native-engine-gfx/run-online/{a,b}/ (console.log, picture.log, digest-net-confirmed.csv), mock.txt and shots/.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -38,17 +45,26 @@ for side in a b; do
   ini="MU_INI_$(echo $side | tr a-z A-Z)"
   if [ -n "${!ini:-}" ]; then cp "${!ini}" "$run/$side/settings.ini"; else echo "slippi_menus 1" > "$run/$side/settings.ini"; fi
 done
-timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -e SLIPPI_MM_URL=ws://127.0.0.1:8765 -v "$disc:/iso:ro" -v "$work/out:/b:ro" \
+bin=mu-native-gfx-${MU_VARIANT:-linux}-services; san_env=""
+case "${MU_SANITIZE:-}" in
+  "") ;;
+  address) bin=$bin-asan; san_env="ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0:handle_segv=0:allow_user_segv_handler=1:abort_on_error=0:log_path=san" ;;
+  thread) bin=$bin-tsan; san_env="TSAN_OPTIONS=handle_segv=0:history_size=4:second_deadlock_stack=1:suppressions=/t/tsan_graphics.supp:log_path=san" ;;
+  *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
+esac
+mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FIRST"
+timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -e SLIPPI_MM_URL=ws://127.0.0.1:8765 -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -v "$disc:/iso:ro" -v "$work/out:/b:ro" \
   -v "$here/../tools:/t:ro" -v "$run:/out" -e FRAMES="$frames" -e EXTRA="$*" -e ARGS_A="${MU_ARGS_A:-}" -e ARGS_B="${MU_ARGS_B:-}" -e ONLY_A="${MU_ONLY_A:-0}" \
   -e EVERY="${MU_SHOT_EVERY:-5}" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
     for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
-    [ "$ONLY_A" = 1 ] || { (while true; do python3 /t/mock_matchmaking.py 8765; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!; sleep 1; }
+    [ "$ONLY_A" = 1 ] || { (while true; do python3 /t/mock_matchmaking.py 8765 $MOCK_ARGS; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!; sleep 1; }
     common="--play --iso /iso/GALE01.iso --frames $FRAMES --novsync --window 640x480 --fake-user $EXTRA"
-    cd /out/a && /b/mu-native-gfx-linux-services $common --out /out/a --settings /out/a/settings.ini --play-script /out/a/pads.txt --net-inputs 1 $ARGS_A >/out/a/console.log 2>&1 & a=$!
+    [ -z "$SAN_ENV" ] || export "$SAN_ENV"
+    cd /out/a && /b/$BIN $common --out /out/a --settings /out/a/settings.ini --play-script /out/a/pads.txt --net-inputs 1 $ARGS_A >/out/a/console.log 2>&1 & a=$!
     b=$a
-    [ "$ONLY_A" = 1 ] || { cd /out/b && /b/mu-native-gfx-linux-services $common --out /out/b --settings /out/b/settings.ini --play-script /out/b/pads.txt --net-inputs 2 $ARGS_B >/out/b/console.log 2>&1 & b=$!; }
+    [ "$ONLY_A" = 1 ] || { cd /out/b && /b/$BIN $common --out /out/b --settings /out/b/settings.ini --play-script /out/b/pads.txt --net-inputs 2 $ARGS_B >/out/b/console.log 2>&1 & b=$!; }
     n=0
     while kill -0 $a 2>/dev/null || kill -0 $b 2>/dev/null; do
       sleep "$EVERY"; n=$((n+1))
@@ -64,6 +80,10 @@ if [ -f "$run/b/digest-net-confirmed.csv" ]; then
   for side in a b; do awk -F, '$2==8 && $3==2' "$run/$side/digest-net-confirmed.csv" > "$run/$side/digest-net-match.csv"; done
   python3 -I "$here/../tools/compare_net_digests.py" "$run/a/digest-net-match.csv" "$run/b/digest-net-match.csv" | sed 's/^/confirmed states in the match scene: /'
 fi
+for side in a b; do
+  [ -z "${MU_SANITIZE:-}" ] || echo "sanitizer reports $side: $(ls "$run/$side"/san.* 2>/dev/null | wc -l | tr -d ' ') files$(cat "$run/$side"/san.* 2>/dev/null | grep -cE '^(WARNING: ThreadSanitizer|==[0-9]+==ERROR: AddressSanitizer)' | sed 's/^/, reports: /')"
+  [ -z "${MU_DEAD_FIRST:-}" ] || echo "searches again after a failed connection, $side: $(grep -c 'connection attempt failed, searching again' "$run/$side/console.log" 2>/dev/null)"
+done
 for side in a b; do
   [ -f "$run/$side/console.log" ] || continue
   echo "== $side"

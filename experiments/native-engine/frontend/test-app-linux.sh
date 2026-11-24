@@ -17,6 +17,9 @@
 #            check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app closes; then the same version: no prompt
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
+# MU_SANITIZE=address|thread runs the sanitizer build (build.sh with MU_SANITIZE; reports in san.* beside each console log);
+# MU_DEAD_FIRST=N (online case): the stand-in matches each app's first N searches with a peer that never answers, so each
+# of those connection attempts fails and the app searches again before the two apps are paired.
 # Output: build/native-engine-gfx/run-app/<case>/ (console.log, the app folder with Logs/latest.log, shots/).
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -41,12 +44,21 @@ make_app() {
 # Runs the container. $1 the case folder (mounted at /out), $2 the shell commands (DISPLAY is set; `shots N` takes a
 # screenshot every N seconds in the background into /out/shots; `wait_log FILE PATTERN SECONDS`; `pad TEXT` writes the
 # test pad file the app's input code reads, MELEE_PAD_FILE).
+bin=mu-native-gfx-linux-services; san_env=""
+case "${MU_SANITIZE:-}" in
+  "") ;;
+  address) bin=$bin-asan; san_env="ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0:handle_segv=0:allow_user_segv_handler=1:log_path=san" ;;
+  thread) bin=$bin-tsan; san_env="TSAN_OPTIONS=handle_segv=0:history_size=4:second_deadlock_stack=1:suppressions=/t/tsan_graphics.supp:log_path=san" ;;
+  *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
+esac
+mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FIRST"
 run() {
   local dir=$1 body=$2
-  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$here/../tools:/t:ro" -v "$dir:/out" \
+  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -e LP_NUM_THREADS -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$here/../tools:/t:ro" -v "$dir:/out" \
     -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99
+      [ -z "$SAN_ENV" ] || export "$SAN_ENV"
       for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
       shots() { (n=0; while true; do sleep "$1"; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true; done) & }
       shot() { xwd -root -silent 2>/dev/null | convert xwd:- "/out/shots/$1.png" 2>/dev/null || true; }
@@ -61,6 +73,10 @@ report() {
   [ -f "$dir/harness.log" ] && cat "$dir/harness.log"
   grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40}
   echo "shots: $(ls "$dir/shots" 2>/dev/null | wc -l | tr -d ' ')"
+  if [ -n "${MU_SANITIZE:-}" ]; then
+    echo "sanitizer reports: $(find "$dir" -name 'san.*' | wc -l | tr -d ' ') files, $(find "$dir" -name 'san.*' -exec cat {} + 2>/dev/null | grep -cE '^(WARNING: ThreadSanitizer|==[0-9]+==ERROR: AddressSanitizer)') reports"
+  fi
+  [ -z "${MU_DEAD_FIRST:-}" ] || echo "searches again after a failed connection: $(cat "$dir"/console*.log 2>/dev/null | grep -c 'connection attempt failed, searching again')"
 }
 
 for case in "$@"; do
@@ -68,7 +84,7 @@ for case in "$@"; do
   case "$case" in
   boot)
     make_app "$dir" 1 1500 -
-    run "$dir" 'shots 4; cd /out && /b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
+    run "$dir" 'shots 4; cd /out && /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
     ;;
   menu)
     cat > "$root/menu-script.txt" <<'EOF'
@@ -155,7 +171,7 @@ for case in "$@"; do
 864
 EOF
     make_app "$dir" 1 2100 "$root/menu-script.txt"
-    run "$dir" 'cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+    run "$dir" 'cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
       wait_log /out/console.log "menu: opened" 120 && { sleep 2.5; shot menu-main; }
       wait_log /out/console.log "play: settings: music" 60 && { sleep 0.3; shot menu-page; }
@@ -163,7 +179,7 @@ EOF
       wait $app
       # Second start: what the menu wrote is read back.
       sed -i "s/^script=.*//" /out/melee-nx-netplay/launcher.ini; sed -i "s/^frames=.*/frames=400/" /out/melee-nx-netplay/launcher.ini
-      cd /out && /b/mu-native-gfx-linux-services > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
+      cd /out && /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
     echo "launcher.ini after the menu:"; grep -E "^(volume|hud|keyboard)=" "$dir/melee-nx-netplay/launcher.ini" || true
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
     ;;
@@ -195,7 +211,7 @@ EOF
 EOF
     [ -z "${MU_HANDOVER_SCRIPT:-}" ] || cp "$MU_HANDOVER_SCRIPT" "$root/handover-script.txt"   # another sequence (diagnosis)
     make_app "$dir" 1 1200 "$root/handover-script.txt" ${MU_HANDOVER_INI:-}
-    run "$dir" 'cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+    run "$dir" 'cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
       wait_log /out/console.log "menu: opened" 120 && { sleep 2; shot menu-dpad; }
       wait_log /out/console.log "menu: closed with" 60 && { sleep 1; shot after-close; }
@@ -207,7 +223,7 @@ EOF
   signin)
     make_app "$dir" 0 1200 -
     run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
-      cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
       wait_log /out/console.log "the sign-in screen comes first" 120 && { sleep 4; shot signin; pad "B"; }
       wait_log /out/console.log "sign-in: playing offline" 30 && rm -f /out/pad.txt
@@ -225,14 +241,14 @@ EOF
     run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt NEWER='"$newer"' SAME='"$same"'; pad ""
       (cd /out/server && python3 -m http.server 8080 --bind 127.0.0.1 > /out/server.log 2>&1) & server=$!
       sleep 1
-      cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
       wait_log /out/console.log "update: the build computer has version" 60 && { sleep 3; shot prompt; pad "A"; sleep 0.5; pad ""; }
       wait_log /out/console.log "the new version is" 60 && { sleep 2; shot installed; pad "A"; sleep 0.5; pad ""; }
       wait $app
       # The same version published: no prompt, the game starts.
       sed -i "s/\"$NEWER\"/\"$SAME\"/" /out/server/latest.json
-      cd /out && /b/mu-native-gfx-linux-services > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log
+      cd /out && /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log
       kill $server'
     echo "installed file now: $(shasum -a 256 "$dir/melee-nx-netplay/melee-nx-netplay.nro" | cut -c1-16) (published $(echo $sha | cut -c1-16)); backup: $(cat "$dir/melee-nx-netplay/melee-nx-netplay.nro.bak" 2>/dev/null)"
     ;;
@@ -255,10 +271,10 @@ PY
       mkdir -p "$dir/$side"; make_app "$dir/$side" $user "${MU_ONLINE_FRAMES:-4200}" "$dir/pads-$side.txt" "$hud"
     done
     run "$dir" 'shots 2
-      (while true; do python3 /t/mock_matchmaking.py 8765; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!
+      (while true; do python3 /t/mock_matchmaking.py 8765 $MOCK_ARGS; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!
       sleep 1
-      (cd /out/a && sed -i "s|^script=/out/|script=/out/a/|" melee-nx-netplay/launcher.ini && /b/mu-native-gfx-linux-services > /out/console-a.log 2>&1; echo "exit code a $?" >> /out/console-a.log) & a=$!
-      (cd /out/b && sed -i "s|^script=/out/|script=/out/b/|" melee-nx-netplay/launcher.ini && /b/mu-native-gfx-linux-services > /out/console-b.log 2>&1; echo "exit code b $?" >> /out/console-b.log) & b=$!
+      (cd /out/a && sed -i "s|^script=/out/|script=/out/a/|" melee-nx-netplay/launcher.ini && /b/$BIN > /out/console-a.log 2>&1; echo "exit code a $?" >> /out/console-a.log) & a=$!
+      (cd /out/b && sed -i "s|^script=/out/|script=/out/b/|" melee-nx-netplay/launcher.ini && /b/$BIN > /out/console-b.log 2>&1; echo "exit code b $?" >> /out/console-b.log) & b=$!
       wait $a; wait $b; kill $mock 2>/dev/null || true'
     cat "$dir/mock.txt" 2>/dev/null | tail -5
     for side in a b; do awk -F, '$2==8 && $3==2' "$dir/$side/melee-nx-netplay/Logs/digest-net-confirmed.csv" > "$dir/$side/match.csv" 2>/dev/null || true; done

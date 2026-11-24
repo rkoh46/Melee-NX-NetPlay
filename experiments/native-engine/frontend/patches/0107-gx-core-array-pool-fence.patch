@@ -1,0 +1,34 @@
+Against the build-time copy of port/runtime/gx/gx_core.cpp after patches/0102 (Melee-NX-NetPlay 0.4.2): the decoder
+reuses a vertex-array buffer once the render thread has let go of it (use_count 1), but use_count() is a relaxed load,
+so nothing ordered the render thread's last reads before the decoder's new writes on a weakly ordered CPU. An acquire
+fence pairs with the release in the render thread's reference drop. ThreadSanitizer (frontend/build.sh MU_SANITIZE=thread)
+reported the race; it does not model standalone fences (GCC's -Wtsan), so ../tools/tsan_graphics.supp names
+pooled_array. The file in port/ is not changed.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+diff -ru a/port/runtime/gx/gx_core.cpp b/port/runtime/gx/gx_core.cpp
+--- a/port/runtime/gx/gx_core.cpp	2026-11-23 20:02:30
++++ b/port/runtime/gx/gx_core.cpp	2026-11-23 20:02:45
+@@ -3,6 +3,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "gx_core.h"
+ #include "host.h"
++#include <atomic>
+ #include <cmath>
+ #include <algorithm>
+ #include <cstring>
+@@ -331,7 +332,13 @@
+   for (size_t n = 0; n < g_array_pool.size(); ++n) {
+     auto& p = g_array_pool[g_array_pool_next];
+     g_array_pool_next = (g_array_pool_next + 1) % g_array_pool.size();
+-    if (p.use_count() == 1) { p->clear(); return p; }
++    if (p.use_count() == 1) {
++      // use_count() is a relaxed load: without this fence the render thread's last reads of the buffer (before its
++      // release decrement) need not happen before the writes below on a weakly ordered CPU (the console's).
++      std::atomic_thread_fence(std::memory_order_acquire);
++      p->clear();
++      return p;
++    }
+   }
+   if (g_array_pool.size() < 4096) { g_array_pool.push_back(std::make_shared<std::vector<uint8_t>>()); return g_array_pool.back(); }
+   return std::make_shared<std::vector<uint8_t>>();

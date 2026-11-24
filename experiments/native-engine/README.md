@@ -403,3 +403,50 @@ other bits than the recording; `decomp-0003` clears the byte at creation.
   graphics device, and with a picture in all three presentation modes (off, predict, interpolate); netplay
   (`tools/net_test.sh 3600 60 40`): every confirmed state identical, `net check` lines equal. The reference digests
   do not include the byte.
+
+## Heap corruption while searching after failed connections (0.4.2)
+
+The 0.4.1 app died on the console during an Unranked search: five matches in a row had failed to connect ("online
+connection failed", "connection attempt failed, searching again"), and on the next search the simulation thread took a
+Data Abort inside newlib's `_malloc_r` (a wild pointer from a corrupted free list), reached from `operator new` for a
+`std::string` in `slippi::online::handle` -> `prepare_online_match_state` (command 0xB3, which Slippi's character
+select sends every frame).
+
+**Cause, verified with ThreadSanitizer on Linux:** the matchmaking client's worker thread writes the match result
+(`Matchmaking::player_info_`, a vector of `UserInfo` with five strings and sixteen chat strings each, plus the result
+copy, the stages and the error text) every time a match is found, also on every search after a failed connection,
+while the game thread copies the same vector and strings every frame through `GetPlayerInfo`, `GetPlayerName`,
+`GetErrorMessage` with no lock. ThreadSanitizer reported exactly that pair (`handleMatchmaking` writing,
+`GetPlayerInfo` / `GetPlayerName` from `prepare_online_match_state` reading) in the unpatched build after three
+failed connection attempts. A string or vector copied while the other thread frees or reallocates it reads freed
+memory and can free a wild pointer, which is how a heap free list gets corrupted; the crash itself comes later, at the
+next allocation that walks the damaged list. That this race is what corrupted the console's heap is inferred (the
+crash report shows where the damage was found, not where it was made); it is the only race on the path that the
+console log shows (search, match found, connection failed, search again) and the more searches, the more chances. The
+0.4.0 crash report with a Data Abort in the allocator fits it too (the race predates input suggestions).
+
+The same ThreadSanitizer runs found more races between the game, matchmaking and netplay threads, all fixed by
+`patches/net-0002-thread-safety.patch` (applied by `net_sources.sh` after net-0001; `port/` is unchanged):
+
+- `User`: user.json is read again by the game thread (0xB9) while the matchmaking thread copies the record at every
+  search start (the chat message vector was cleared and refilled in place).
+- `NetplayClient`: the time-sync frame offsets (a vector the netplay thread appends to while the game thread copies
+  it in `CalcTimeOffsetUs`), last frame timings and "game started", the acknowledged frames and their timers
+  (`StartSlippiGame` cleared the timer deques the netplay thread pops), the other players' selections merged in by the
+  netplay thread while 0xB3 reads them, the remote synced states (strings), the async queue's size, and the peer
+  health time (a static shared by the old and new client after a cleanup).
+- `net_diag`: the netplay thread wrote sample rows to the network.csv `FILE*` that the game thread closes at a
+  connection cleanup (a use after `fclose`); now under a lock, with the retrace and ping taken on the game thread.
+- `Matchmaking`: the service session id and the local player index are atomics, the port generator shared by the old
+  and new objects after a cleanup is locked, and a second search request on a thread that was never joined no longer
+  ends the program (`std::terminate`).
+
+Outside the netplay object: `runner/netplay_bridge.cpp` keeps the ping in atomics (written by the netplay thread,
+read by the game, HUD and netplay threads), and `frontend/patches/0107` adds an acquire fence where the GX decoder
+reuses a vertex-array buffer the render thread has released (`use_count()` is a relaxed load).
+
+**Reproduction off the console** (`frontend/README.md`, "Build"): `frontend/build.sh` with `MU_SANITIZE=address` or
+`thread` builds instrumented programs; `tools/mock_matchmaking.py --dead-first N` pairs each side's first N searches
+with a peer at 127.0.0.1:9 that never answers, so every connection attempt fails after 8 s and the side searches
+again (alternately as decider and not), then pairs the two sides. Results are in `frontend/README.md` ("0.4.2 on
+Linux").
