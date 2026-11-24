@@ -281,6 +281,7 @@ void on_retrace(const Retrace& info) {
     s.flashes[i] = flashes[i];
   }
   s.lab_panel = training && !info.online && training_lab_overlay();
+  s.practice_combo = training && !info.online && training_practice_combo();
   s.advantage = training_advantage(&s.advantage_frames, &s.advantage_kind, &s.advantage_retrace);
   const MuHostApi* h = host();
   s.te_inputs = !info.online && h && h->game_options2 && (h->game_options2() & MU_GAME_OPTION2_TE_INPUT_DISPLAY);

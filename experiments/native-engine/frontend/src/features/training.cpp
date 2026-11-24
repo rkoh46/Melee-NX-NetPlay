@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <utility>
 
 namespace fe::features {
 namespace {
@@ -169,12 +170,25 @@ int practice_cpu(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& re
     told_rng = c.rng_mode; told_seed = pc.rng_seed;
     say("training: random numbers %s (seed number %d)", c.rng_mode == MU_PC_RNG_FROZEN ? "frozen" : c.rng_mode == MU_PC_RNG_SAME ? "the same at each start" : "the game's own", pc.rng_seed);
   }
+  {
+    static std::string told_rows;
+    char rows[200];
+    std::snprintf(rows, sizeof rows, "only react %d, moving target %d, CPU delay %d, respawn %d, floorhug %d, smash DI %d, throw wait %d, drift %d, double jump %d",
+                  c.freeze, c.no_attacks, c.act_delay, c.respawn, c.floorhug, c.sdi_amount, c.throw_wait, c.jump_drift, c.double_jump);
+    if (c.enabled && told_rows != rows) { told_rows = rows; say("training: practice CPU sent to the game: %s", rows); }
+  }
   static int told = -1;
   if (told != c.enabled) { told = c.enabled; say("training: practice CPU %s (preset %s, tools %02X)", c.enabled ? "on" : "off", pc_preset >= 0 ? mu_pc_preset_name(pc_preset) : "own", pc.tools); }
   const auto* bytes = reinterpret_cast<const uint8_t*>(&c);
   reply.assign(bytes, bytes + sizeof c);
   return 1;
 }
+
+// The in-game menu's Practice CPU rows (below).
+int pc_row_count();
+const char* pc_row_label(int n);
+std::string pc_row_value(int n);
+void pc_row_change(int n, int d);
 
 // ---- frame advance (native_practice.cpp frame_advance_tick, through the game's practice operations) ----
 bool frame_pause(int pause, bool step) {
@@ -288,6 +302,17 @@ void test_tick() {
       }
     }
   }
+  // --feature-test practice-rows: every Practice CPU row of the in-game menu stepped once to the right at the start, through
+  // the rows' own code (verification runs; the game's next 0xF6 request gets the result, logged there).
+  {
+    static bool rows_done = false;
+    if (!rows_done && feature_test("practice-rows")) {
+      rows_done = true;
+      std::string line;
+      for (int i = 0; i < pc_row_count(); ++i) { pc_row_change(i, 1); line += std::string(i ? ", " : "") + (pc_row_label(i) + 14) + " " + pc_row_value(i); }
+      say("training: test: every Practice CPU row stepped once: %s", line.c_str());
+    }
+  }
   // --feature-test training[:CHARACTER[:STAGE]]: Go to Training once a menu (the title screen or the main menu) has
   // been up for a second; STAGE is the stage id Training's stage select picks (default 32, Final Destination; up to
   // 127), or -1: the stage select is left to the controller (an m-ex disc's added stages have ids above 127).
@@ -337,6 +362,77 @@ template <int N> void add_slot_rows() {
                     if (pc_preset < 0) w("practicecpu_preset", "-1");   // the slot's own settings, not a preset, at the next start
                   }});
 }
+// The Practice CPU's single settings on the in-game menu's Training page (upstream's Practice menu pages: CPU, Throws, Jumps,
+// Hit reactions, Ledge). Thin rows over MuPcConfig: a change counts as the player's own settings (preset 0), as upstream's
+// change() does, and settings.ini keeps the whole struct (practicecpu, upstream's hex form).
+struct PcRow { const char* label; uint8_t MuPcConfig::*field; int low, high, step; const char* format; const char* const* names; };
+const char* const kRespawnNames[] = {"Wait", "Get off", "Mix"};
+const char* const kSdiNames[] = {"None", "Light", "Medium", "Heavy"};
+const char* const kDriftNames[] = {"Mix", "Toward you", "Away", "None"};
+const char* const kTimingNames[] = {"Mix", "Rising", "Falling"};
+const char* const kRecoveryNames[] = {"Game's own", "High", "Low", "Mix"};
+const char* const kOnOff[] = {"Off", "On"};
+const PcRow kPcRows[] = {
+    {"Practice CPU: only react to hits", &MuPcConfig::freeze, 0, 1, 1, nullptr, kOnOff},
+    {"Practice CPU: moving target (no attacks)", &MuPcConfig::no_attacks, 0, 1, 1, nullptr, kOnOff},
+    {"Practice CPU: aggression", &MuPcConfig::aggression, 0, 100, 5, "%d%%", nullptr},
+    {"Practice CPU: reaction", &MuPcConfig::reaction_frames, 0, 40, 1, "%d frames", nullptr},
+    {"Practice CPU: CPU delay", &MuPcConfig::act_delay, 0, 30, 1, "%d frames", nullptr},
+    {"Practice CPU: respawn platform", &MuPcConfig::respawn, 0, MU_PC_RESPAWN_COUNT - 1, 1, nullptr, kRespawnNames},
+    {"Practice CPU: L-cancel", &MuPcConfig::l_cancel, 0, 100, 5, "%d%%", nullptr},
+    {"Practice CPU: run shine (weight)", &MuPcConfig::run_shine, 0, 100, 5, "%d", nullptr},
+    {"Practice CPU: throw wait (0: 4 to 12)", &MuPcConfig::throw_wait, 0, 60, 1, "%d frames", nullptr},
+    {"Practice CPU: jump drift", &MuPcConfig::jump_drift, 0, MU_PC_DRIFT_COUNT - 1, 1, nullptr, kDriftNames},
+    {"Practice CPU: double jump", &MuPcConfig::double_jump, 0, 100, 5, "%d%%", nullptr},
+    {"Practice CPU: fast fall", &MuPcConfig::fast_fall, 0, 100, 5, "%d%%", nullptr},
+    {"Practice CPU: fast fall delay", &MuPcConfig::fast_fall_delay, 0, 30, 1, "%d frames", nullptr},
+    {"Practice CPU: aerial timing", &MuPcConfig::aerial_timing, 0, MU_PC_TIMING_COUNT - 1, 1, nullptr, kTimingNames},
+    {"Practice CPU: full hop aerials", &MuPcConfig::full_hop_aerials, 0, 100, 5, "%d%%", nullptr},
+    {"Practice CPU: smash DI", &MuPcConfig::sdi_amount, 0, 3, 1, nullptr, kSdiNames},
+    {"Practice CPU: floorhug", &MuPcConfig::floorhug, 0, 100, 5, "%d%%", nullptr},
+    {"Practice CPU: ledge wait (most)", &MuPcConfig::ledge_delay, 0, 120, 5, "%d frames", nullptr},
+    {"Practice CPU: recovery", &MuPcConfig::recovery, 0, MU_PC_RECOVER_COUNT - 1, 1, nullptr, kRecoveryNames},
+};
+// The throw odds (upstream's Throws page): each throw's weight; the share of the four is what the CPU picks.
+const char* const kThrowNames[MU_PC_THROW_COUNT] = {"forward", "back", "up", "down"};
+int pc_row_count() { return int(sizeof kPcRows / sizeof kPcRows[0]); }
+const char* pc_row_label(int n) { return kPcRows[n].label; }
+std::string pc_row_value(int n) {
+  const PcRow& r = kPcRows[n];
+  std::lock_guard<std::mutex> lock(pc_mutex);
+  const int v = pc.*r.field;
+  if (r.names) return std::string(v >= r.low && v <= r.high ? r.names[v] : "?");
+  char b[32]; std::snprintf(b, sizeof b, r.format, v); return std::string(b);
+}
+void pc_row_change(int n, int d) {
+  const PcRow& r = kPcRows[n];
+  std::lock_guard<std::mutex> lock(pc_mutex);
+  int v = pc.*r.field + (d < 0 ? -r.step : r.step);
+  if (r.names) v = v < r.low ? r.high : v > r.high ? r.low : v;   // choices wrap
+  pc.*r.field = uint8_t(std::clamp(v, r.low, r.high));
+  pc.preset = 0; pc_preset = -1;
+}
+template <int N> void add_pc_row() {
+  add_menu_entry({"Training", kPcRows[N].label, [] { return pc_row_value(N); }, [](int d) { pc_row_change(N, d); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("practicecpu", to_text(pc)); w("practicecpu_preset", "-1"); }});
+}
+template <int N> void add_throw_row() {
+  static const std::string label = std::string("Practice CPU: ") + kThrowNames[N] + " throw";
+  add_menu_entry({"Training", label.c_str(),
+                  [] {
+                    std::lock_guard<std::mutex> lock(pc_mutex);
+                    int total = 0; for (uint8_t v : pc.throw_odds) total += v;
+                    char b[32]; std::snprintf(b, sizeof b, "%d%%", total ? (pc.throw_odds[N] * 100 + total / 2) / total : 0);
+                    return std::string(pc.throw_odds[N] ? b : "Never");
+                  },
+                  [](int d) {
+                    std::lock_guard<std::mutex> lock(pc_mutex);
+                    pc.throw_odds[N] = uint8_t(std::clamp(pc.throw_odds[N] + (d < 0 ? -5 : 5), 0, 100));
+                    pc.preset = 0; pc_preset = -1;
+                  }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("practicecpu", to_text(pc)); w("practicecpu_preset", "-1"); }});
+}
+template <int... I> void add_pc_rows(std::integer_sequence<int, I...>) { (add_pc_row<I>(), ...); }
 }  // namespace
 
 // The replay takeover's opponents once the live game leaves the recording (command 0xE9, replays.cpp; upstream
@@ -430,6 +526,8 @@ void training_scene_changed() {
   advantage_text.clear(); cpu_text.clear(); advantage_seen = false;
 }
 bool training_lab_overlay() { return tool(MU_PC_TOOL_OVERLAY); }
+bool training_practice_display() { return tool(MU_PC_TOOL_PROJECTILE_HITBOXES); }
+bool training_practice_combo() { return tool(MU_PC_TOOL_COMBO_COUNTER); }
 bool training_advantage(int* frames, int* kind, uint32_t* at) {
   std::lock_guard<std::mutex> lock(hud_mutex);
   if (!advantage_seen) return false;
@@ -483,6 +581,16 @@ void register_training() {
                   [] { return std::to_string(pc.rng_seed) + (pc.rng_mode == MU_PC_RNG_GAME ? " (not used)" : ""); },
                   [](int d) { pc.rng_seed = uint8_t(pc.rng_seed + (d < 0 ? 255 : 1)); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("practice_rng_seed", std::to_string(pc.rng_seed)); }});
+  add_pc_rows(std::make_integer_sequence<int, int(sizeof kPcRows / sizeof kPcRows[0])>{});
+  add_throw_row<0>(); add_throw_row<1>(); add_throw_row<2>(); add_throw_row<3>();
+  add_menu_entry({"Training", "Practice CPU: every setting back to the defaults", nullptr, nullptr,
+                  [] {
+                    std::lock_guard<std::mutex> lock(pc_mutex);
+                    const uint8_t tools = pc.tools, enabled = pc.enabled, rng = pc.rng_mode, seed = pc.rng_seed;
+                    mu_pc_defaults(&pc); pc.tools = tools; pc.enabled = enabled; pc.rng_mode = rng; pc.rng_seed = seed; pc_preset = -1;
+                    say("training: practice CPU settings back to the defaults");
+                  },
+                  [](fe::features::MenuEntry::Write w) { w("practicecpu", to_text(pc)); w("practicecpu_preset", "-1"); }});
   add_slot_rows<0>(); add_slot_rows<1>(); add_slot_rows<2>();
 }
 }  // namespace fe::features

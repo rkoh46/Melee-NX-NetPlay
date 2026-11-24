@@ -45,6 +45,8 @@ void training_scene_changed();
 bool training_go(int character, int costume, int cpu_character, int cpu_costume, bool from_online);
 bool training_entering();            // Training's menus are being pressed through
 bool training_lab_overlay();         // Training's "Inputs and frame advantage" is on (lab_overlay)
+bool training_practice_display();    // the Practice menu's Tools: projectile hitboxes (MU_PC_TOOL_PROJECTILE_HITBOXES)
+bool training_practice_combo();      // the Practice menu's Tools: combo counter (MU_PC_TOOL_COMBO_COUNTER)
 bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
 std::vector<uint8_t> training_replay_defense(int setting);   // a takeover's opponents (0xE9): MuPcConfig bytes, empty to follow the recording
 

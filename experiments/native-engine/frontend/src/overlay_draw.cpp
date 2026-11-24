@@ -681,7 +681,7 @@ void overlay_draw(int ww, int wh) {
     dl->PushClipRect(ImVec2(g.x0, g.y0), ImVec2(g.x1, g.y1), true);
     if (c.lcancel) draw_lcancel(dl, c, s, g);
     if (c.nicknames) draw_names(dl, s, g);
-    if (c.combo) draw_combos(dl, s, g);
+    if (c.combo || s.practice_combo) draw_combos(dl, s, g);
     dl->PopClipRect();
   }
   if (s.lab_panel) draw_training(dl, s, g, base);
