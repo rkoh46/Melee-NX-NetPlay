@@ -23,6 +23,7 @@
 #include "frontend.h"
 #include "feature_hooks.h"
 #include "features/present/present.h"
+#include "replay_view.h"            // a paused replay asks for repaints
 
 #include "frame_queue.h"
 #include "subframe.h"
@@ -51,6 +52,14 @@ std::atomic<int> fps_cap{-1};
 std::atomic<uint64_t> discontinuity{0};
 std::atomic<double> measured_hz{0.0};
 constexpr double kGamePeriod = 1.0 / 60.0;
+double now_s();
+// A repaint of a paused replay (replay_view.h): at most 60 a second.
+bool start_repaint_due(double& last) {
+  const double t = now_s();
+  if (t - last < kGamePeriod) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); return false; }
+  last = t;
+  return true;
+}
 
 double now_s() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -144,6 +153,8 @@ void loop(gx::Backend& backend, gx::FrameQueue& queue, const std::atomic<bool>& 
       }
     }
     if (!have_cur) continue;
+    // A replay jumping to a frame: its frames on the way are not shown (replay_view.h).
+    if (&features::replay_frames_unseen && features::replay_frames_unseen()) { if (!got) std::this_thread::sleep_for(std::chrono::milliseconds(2)); continue; }
     // Pacing: with a cap (or when presents do not wait for vsync), the next tick of that rate's grid; otherwise the
     // swap chain's vsync blocks in the present.
     if (fps_cap.load() > 0 || pace_hz > 0) {
@@ -152,7 +163,9 @@ void loop(gx::Backend& backend, gx::FrameQueue& queue, const std::atomic<bool>& 
       if (next_tick > t) std::this_thread::sleep_for(std::chrono::duration<double>(next_tick - t));
       next_tick += period;
     } else if (calibrated && !got && m0 == 0 && hz_now < 70.0) {
-      continue;                                        // 60 Hz display, Off: nothing new to show
+      // 60 Hz display, Off: nothing new to show, unless a paused replay's overlay or the menu changes (replay_view.h).
+      static double repainted = 0;
+      if (!(&features::replay_repaint_wanted && features::replay_repaint_wanted() && start_repaint_due(repainted))) continue;
     }
     // Draw.
     const double start = now_s();

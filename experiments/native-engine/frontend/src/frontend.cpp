@@ -27,6 +27,7 @@
 #include "gx_core.h"
 #include "gx_aurora_bridge.h"
 #include "frame_queue.h"
+#include "replay_view.h"                // a paused replay asks for repaints (feature module, weak)
 #include "features/present/present.h"   // presentation at the display's rate, sub-frames (feature module, weak)
 #include "hostprof.h"                // the runner's host service profiler (--profile)
 #if MU_FE_AURORA
@@ -377,7 +378,9 @@ PresentHook present_hook;
 std::atomic<double> refresh_hz{60.0};
 void render_loop(gx::Backend& backend, bool pump) {
   auto& queue = st.queue->queue;
-  gx::Frame frame;
+  gx::Frame frame, last;                   // last: the newest frame drawn, kept for a repaint
+  bool have_last = false;
+  uint64_t last_draw_ns = 0;
   for (;;) {
 #if MU_FE_AURORA
     if (pump)
@@ -389,6 +392,12 @@ void render_loop(gx::Backend& backend, bool pump) {
 #endif
     if (!queue.pop(frame)) {               // waits up to 2 ms
       if (st.stop.load(std::memory_order_acquire) && queue.size() == 0) break;
+      // A paused replay sends no frames, but its bar, its tips and the in-game menu still change (replay_view.h):
+      // the newest frame is drawn again, at most 60 times a second.
+      if (have_last && &features::replay_repaint_wanted && features::replay_repaint_wanted() && now_ns() - last_draw_ns >= 16'000'000) {
+        last_draw_ns = now_ns();
+        render_one(backend, last);
+      }
       continue;
     }
     // Behind the game: only the newest finished frame is worth drawing.
@@ -399,6 +408,12 @@ void render_loop(gx::Backend& backend, bool pump) {
       frame = std::move(newer);
       ++st.render.stale;
     }
+    // A replay jumping to a frame (replay_view.h): its frames on the way are simulated but not shown.
+    if (&features::replay_frames_unseen && features::replay_frames_unseen()) {
+      if (have_last) queue.recycle(std::move(last));
+      last = std::move(frame); have_last = true; frame = gx::Frame{};
+      continue;
+    }
     render_one(backend, frame);
     // A sub-frame presenter (present_hook: display-rate features) may present this frame again before the next
     // finished one, as long as no newer frame is waiting. Without one: one present per finished game frame.
@@ -407,9 +422,12 @@ void render_loop(gx::Backend& backend, bool pump) {
       for (int i = 1; i < n && queue.size() == 0 && !st.render.failed; ++i)
         if (!present_hook.present_again(&backend, &frame, i)) break;
     }
-    queue.recycle(std::move(frame));
+    last_draw_ns = now_ns();
+    if (have_last) queue.recycle(std::move(last));
+    last = std::move(frame); have_last = true;
     frame = gx::Frame{};
   }
+  if (have_last) queue.recycle(std::move(last));
 }
 
 #if MU_FE_AURORA
