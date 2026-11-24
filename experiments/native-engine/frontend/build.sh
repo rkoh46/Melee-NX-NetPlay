@@ -35,7 +35,7 @@ sync_tree() {
   # The runner this frontend was last brought up against. Play mode needs the runner's automatic input delay
   # (--net-delay auto, netplay_bridge::Setup::delay_auto), which is newer than 1c556fc and not committed yet: until
   # it is, the files on disk are used. Pin this to the commit that contains them (MU_SYNC_REF=<commit> meanwhile).
-  local ref="${MU_SYNC_REF:-3dfb787}" stage="$work/sync-stage"
+  local ref="${MU_SYNC_REF:-d53f7e7}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
