@@ -493,6 +493,54 @@ MU_TWO_SCREENS=1 ./test-online-linux.sh DISC 3000` (side a presses D-pad Up, Up 
 select and still connected; side b has its own X screen, `shots/b-NNN.png`): side b showed "Mock 2: ggs" (screenshot),
 two to five messages per run depending on when the match ended, the match itself identical on both sides.
 
+### Online extras (0.4.4)
+
+As melee-unlocked has them (its `port/runtime/hle/native_practice.cpp`, `slippi_warmup.h`, `host/net_trace*.cpp`,
+`gx/net_overlay.cpp`, `abi/mu_pick_preview.h`), in `src/features/search.cpp` and `src/features/netoverlay.cpp`, with the
+netplay object's side in `../patches/net-0005` (and `../runner/netplay_bridge.*`). Everything here stays compatible with a
+Slippi Dolphin 3.7.0 peer: nothing new goes on the wire to a peer that did not say it reads it, and nothing changes the
+simulation of a match.
+
+- **Play while you search** (`play_while_searching`, on). On Slippi's character select with an Unranked search running and
+  the fighter locked in, hold L and R (two thirds of a second, no A, Start or Z): the game goes to an offline Training match
+  with that fighter while the search goes on. The netplay object skips the game's cleanup commands while the search is kept
+  (the main menu sends one), and play mode counts the kept search as offline (the player's own option words, the offline
+  tools). A line at the top shows the search time. When an opponent is found: "Opponent found: back to the match in 3", then
+  back through the main menu to the select, still locked in, and the match starts as it would have. L and R held in
+  Training go back at once. A search that stops while away leaves the player in Training with a note. Log lines
+  `search: kept search: ...`, `slippi: kept search: ...`. Upstream keeps Slippi's Unranked only; so does this.
+- **Warm-up room** (`warmup`, on). Connected in Direct or Teams and not locked in: the same L and R hold goes to Training while
+  the connection stays up. When every other player has locked in: "Opponent is ready", three seconds, then back to the
+  select to lock in. A Slippi player just sees this player not locked in yet. Upstream's "warming up" notice to its own
+  builds (message 0xE9) is not sent.
+- **Training after online** (`online_training_after 1`, `online_return_training 1`, both off as upstream): when a session ends
+  after at least one match (the other player left, Z held, the connection dropped) and the player is still on the online
+  screens, straight into Training against the last opponent's fighter (Direct and Teams; upstream leaves Unranked out), or
+  to Training's character select (every mode).
+- **Live pick previews** (`pick_previews`, on). The game's online select sends its pick and reads the others' through
+  upstream's command 0xED; the netplay object sends upstream's pick preview bytes as message 0xD1 to a peer whose build
+  message (version 2, flag 0x04) says it reads them, so only between Melee-NX-NetPlay builds. The select shows the
+  opponent's fighter under "Playing:".
+- **Network and timing panel** (`netoverlay 1`) and **session trace** (`session_trace`): see the table below. Each online tick
+  is built from the netplay commands play mode hands the modules (`feature_hooks.h` `add_exchange`): the 0xB0 (frame, the
+  local pad, ran, halted or advanced), the netplay object's wait or time sync reason and offset, the 0xB2 loads after it and
+  the simulation thread's work in the frame. The trace is written after the match by the replay writer, beside the replay.
+- **Quick chat** (`quickchat`) reaches the netplay object (Slippi's message ids only, which a Slippi 3.7.0 peer reads).
+
+Tests (`test-online-linux.sh`; the loopback stand-in now keeps a waiting ticket alive with status messages):
+
+| Run | Result |
+|---|---|
+| `MU_PADS_A=scripts/online_keep_search_a.txt MU_PADS_B=scripts/online_keep_search_b.txt MU_TWO_SCREENS=1 ... 6000` | side a searches, goes to Training at retrace 580 and plays it offline; side b searches 20 s later; found at 1654, side a back on the select at 1858 (search state 4, locked in), the online match identical on both sides, `net check` equal, 0 desync messages; both logs `pick preview from port N`, side b's select shows "Mock 2: Falco" |
+| `MU_PADS_A=scripts/online_warmup_a.txt MU_PADS_B=scripts/online_warmup_b.txt MU_ARGS_A="--feature-test unranked-as-direct" MU_TWO_SCREENS=1 ... 7800` | after match 1 side a warms up in Training (Unranked treated as Direct for the test: the stand-in pairs Unranked searches); side b locks in, side a comes back and locks in, match 3 online; `net check` equal, 0 desync messages |
+| side a `shield_color_online FF00FF`, `online_training_after 1`, `--feature-test unranked-as-direct`; side b `shield_color_online 00FF00`, `MU_PADS_B=scripts/online_shield_b.txt` | side a's screen shows the opponent's Fox shielding in green (port 2's own is blue), side b's too; after the match side b holds Z, side a goes into Training with Falco against a Fox CPU; `net check` equal |
+| `MU_ARGS_B="--net-as-slippi"` (side b behaves as Slippi Dolphin) | no pick preview sent either way, side b logs the build message as unknown, `net check` equal |
+| `test-net-linux.sh` with `MU_NET_DELAY=40` and `netoverlay 1`, `session_trace 2` | the panel on screen; 479 rollbacks in the records, depths 1:477, 3:1, 4:1, the same as the netplay host's own count; both sides wrote a 2963-row trace; `net check` equal |
+
+Not ported: upstream's question on leaving the select while searching and its other ways out (only the L+R gesture), the
+"search again?" prompt after a session, the arena rooms, early inputs (melee-unlocked peers only; Slippi's input
+suggestions are what a Slippi 3.7.0 peer reads) and the P2P mode (melee-unlocked builds only). See FEATURES.md section 3.
+
 ### Feature modules: training, replays, options, mod discs, 120 Hz
 
 `src/features/*.cpp` and `../runner/features/*.cpp` register through `src/feature_hooks.h` (commands by
@@ -508,7 +556,10 @@ two to five messages per run depending on when the match ended, the match itself
 | `shield_colorp1..4 RRGGBB`, `offline_delay 1` + `offline_delay_frames N`, `autolcancel 1`, `zelda_as_sheik 1` | offline only (shield colours: online the ports' own) |
 | `savereplays 0`, `replay_dir DIR` | every VS and online match is written to `sdmc:/switch/melee-nx-netplay/Replays/Game_YYYYMMDDTHHMMSS.slp` (Linux: `<out>/Replays`) |
 | `slippi_spectator 1`, `slippi_spectator_port N` | the Slippi spectator server (off by default; port 51441): every recorded match goes out live over ENet as Slippi Dolphin sends it, for the Slippi Launcher's Broadcast tab and slippi-js overlays (`src/features/spectator.cpp`; on the console on every interface, off it on 127.0.0.1). Test: `test-spectator-linux.sh` (an ENet client, `../tools/spectator_client.cpp`, and `../tools/spectator_check.py`: the stream is the .slp's raw element byte for byte) |
-| `netoverlay 1` | during an online match, one line near the top: the last 10 s of ping, rollbacks, the time sync's frame rate and the time between frames (`src/features/netoverlay.cpp`; upstream's key, its graphs not drawn) |
+| `netoverlay 1` | during an online match, upstream's network and timing panel at the top right: the last 10 s of frame time and work, waits, time sync halts and advances, rollbacks by depth, ping, marks (`src/features/netoverlay.cpp`, drawn by `src/overlay_draw.cpp`; a build without a picture overlay shows one summary line). See "Online extras" |
+| `session_trace 0|1|2` | the session trace beside each online match's replay (`Game_*.trace`, upstream's CSV): 1 (default) only for a match with a mark (D-pad Left/Right/Down during the match) or a 6-frame wait, 2 every match, 0 never |
+| `play_while_searching 0`, `warmup 0`, `online_training_after 1`, `online_return_training 1` | play while you search (default on), the warm-up room (default on), Training after an online session (both off by default, as upstream). See "Online extras" |
+| `quickchat 0|1|2`, `pick_previews 0` | quick chat on, Direct only, off (upstream's key and values); live pick previews off (default on; between Melee-NX-NetPlay builds only) |
 | `compressreplays 1` | replays are written as `.slpz` (the slpz tool's format, compiled from the fetched tree's `port/app/replay_slpz.cpp`; 5 to 18 times smaller), each checked to unpack to the recording first; `--replay` and the Replays page read both (a `.slpz` is unpacked to `Replays/.slpz-playback.slp` to play). Round trip: `../tools/slpz_roundtrip.sh DIR` |
 | `subframe 0|1|2`, `fps N` | presentation: Off / Predict / Interpolate sub-frames; `fps` caps presents per second (tests). The simulation stays at 60 Hz |
 | `input_suggestions 0` | Slippi 3.7.0 input suggestions off (default on; the Game page's row; from the next online game). See "Input suggestions" |
