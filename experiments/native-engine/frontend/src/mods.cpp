@@ -284,7 +284,7 @@ void identify(const std::function<bool(const char*)>& has) {
   for (const auto& layer : layers) if (layer.kind == Layer::Iso) isos.push_back(&layer);
   const bool one_iso = isos.size() == 1;
   akaneia = one_iso && has("/mxdt.dat") && has("/plsn.dat") && has("/plts.dat");
-  if (akaneia) say("mods: Akaneia found; its fighters are the game's native ones (offline; online matches get the retail files)");
+  if (akaneia) say("mods: an m-ex disc with added fighters (Akaneia or ACE) found; its fighters are the game's native ones (offline; online matches get the retail files)");
   if (has("/tm/eventmenu.dat")) {
     if (akaneia) say("mods: Training Mode CE files found, but Training Mode CE needs the vanilla game; left off");
     else { tmce = true; say("mods: Training Mode CE files found; its events run natively (Event Match)"); }

@@ -296,13 +296,16 @@ void register_options() {
   add_retrace(on_retrace);
   add_command(0xDE, zelda_as_sheik);
   add_run_end(run_end);
-  add_menu_entry({"Game", "Automatic L-cancel (offline)", [] { return on_off(auto_lcancel); }, [](int) { auto_lcancel = !auto_lcancel; }, nullptr});
+  add_menu_entry({"Game", "Automatic L-cancel (offline)", [] { return on_off(auto_lcancel); }, [](int) { auto_lcancel = !auto_lcancel; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("autolcancel", auto_lcancel ? "1" : "0"); }});
   add_menu_entry({"Game", "Offline input delay", [] { return offline_delay_on ? std::to_string(offline_delay_frames) + " frames" : std::string("Off"); },
                   [](int d) {
                     if (!offline_delay_on) { if (d > 0) { offline_delay_on = true; offline_delay_frames = 1; } return; }
                     const int next = offline_delay_frames + d;
                     if (next < 1) offline_delay_on = false; else offline_delay_frames = std::min(next, 9);
-                  }, nullptr});
-  add_menu_entry({"Game", "Zelda starts as Sheik", [] { return on_off(zelda_sheik); }, [](int) { zelda_sheik = !zelda_sheik; }, nullptr});
+                  }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("offline_delay", offline_delay_on ? "1" : "0"); w("offline_delay_frames", std::to_string(offline_delay_frames)); }});
+  add_menu_entry({"Game", "Zelda starts as Sheik", [] { return on_off(zelda_sheik); }, [](int) { zelda_sheik = !zelda_sheik; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("zelda_as_sheik", zelda_sheik ? "1" : "0"); }});
 }
 }  // namespace fe::features

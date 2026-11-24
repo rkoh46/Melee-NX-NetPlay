@@ -1,0 +1,16 @@
+diff -ru a/src/melee/ft/fighter.c b/src/melee/ft/fighter.c
+--- a/src/melee/ft/fighter.c	2026-11-23 17:31:53
++++ b/src/melee/ft/fighter.c	2026-11-23 17:31:53
+@@ -972,6 +972,12 @@
+     if (mu_replay_code(MU_RC_INIT_PLAYER_DATA) || mu_tmce_active()) {
+         memset(fp, 0, sizeof(Fighter));
+     }
++    /* fp+221B (the shield flags) is one of the state-flag bytes a post-frame event records, and nothing
++     * initialises it until the fighter first shields: the pool hands the block out with whatever it held.
++     * A match started from the menus then records other bits than its playback (booted straight into the
++     * match) re-records (experiments/native-engine/patches/decomp-0003). Cleared here. */
++    fp->x221B_b0 = fp->x221B_b1 = fp->x221B_b2 = fp->x221B_b3 = 0;
++    fp->x221B_b4 = fp->x221B_b5 = fp->x221B_b6 = fp->x221B_b7 = 0;
+ #endif
+     fp->dat_attrs_backup = HSD_ObjAlloc(&fighter_dat_attrs_alloc_data);
+ #if defined(MU_NATIVE) && defined(MU_AKANEIA_FIGHTERS)

@@ -190,7 +190,7 @@ struct Enter { bool on = false; uint32_t ticks = 0; bool seen_select = false; in
 void go_training(int character, int cpu_character) {
   MuGameApi* g = game();
   if (!g || !g->practice || online() || replay_playing()) return;
-  if (character >= 0 && character < 26) { int32_t a[3] = {0, character, 0}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
+  if (character >= 0 && character < 128) { int32_t a[3] = {0, character, 0}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
   if (cpu_character >= 0 && cpu_character < 26) { int32_t a[3] = {1, cpu_character, 0}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
   int32_t m[1] = {int32_t(kTrainingMajor)};
   g->practice(MU_PRACTICE_REQUEST_MAJOR, m, 1);
@@ -218,6 +218,23 @@ uint32_t test_main_menu_ticks = 0;
 bool test_done = false;
 void test_tick() {
   if (go_requested.exchange(false)) go_training(-1, -1);
+  // --feature-test major:N: ask the game for scene N (decimal) once a menu has been up for a second (verification
+  // runs: Event Match 43, 1-P Classic 3, ...), as the Practice menu's own requests do.
+  {
+    static bool major_done = false; static uint32_t ticks = 0;
+    std::string v;
+    if (!major_done && feature_test("major", &v)) {
+      ticks = scene_major() == 1 || scene_major() == 24 ? ticks + 1 : 0;
+      if (ticks == 60) {
+        major_done = true;
+        if (MuGameApi* g = game(); g && g->practice) {
+          int32_t m[1] = {int32_t(std::atoi(v.c_str()))};
+          g->practice(MU_PRACTICE_REQUEST_MAJOR, m, 1);
+          say("training: test: asked for scene %d from %u/%u", m[0], scene_major(), scene_minor());
+        }
+      }
+    }
+  }
   // --feature-test training[:CHARACTER]: Go to Training once a menu (the title screen or the main menu) has been
   // up for a second.
   std::string value;
@@ -272,17 +289,22 @@ void register_training() {
   add_retrace(note_position);
   add_run_end(run_end);
   add_menu_entry({"Training", "Go to Training (offline)", nullptr, nullptr, [] { go_requested = true; }});
-  add_menu_entry({"Training", "Save states and recording on the D-pad", [] { return on_off(tool(MU_PC_TOOL_DPAD)); }, [](int) { flip(MU_PC_TOOL_DPAD); }, nullptr});
-  add_menu_entry({"Training", "Loop the recording", [] { return on_off(tool(MU_PC_TOOL_LOOP)); }, [](int) { flip(MU_PC_TOOL_LOOP); }, nullptr});
+  add_menu_entry({"Training", "Save states and recording on the D-pad", [] { return on_off(tool(MU_PC_TOOL_DPAD)); }, [](int) { flip(MU_PC_TOOL_DPAD); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab", tool(MU_PC_TOOL_DPAD) ? "1" : "0"); }});
+  add_menu_entry({"Training", "Loop the recording", [] { return on_off(tool(MU_PC_TOOL_LOOP)); }, [](int) { flip(MU_PC_TOOL_LOOP); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab_loop", tool(MU_PC_TOOL_LOOP) ? "1" : "0"); }});
   add_menu_entry({"Training", "Collision bubbles",
                   [] { return std::string(tool(MU_PC_TOOL_HITBOXES_ONLY) ? "Bubbles only" : tool(MU_PC_TOOL_HITBOXES) ? "Over the model" : "Off"); },
                   [](int d) {
                     const int now = tool(MU_PC_TOOL_HITBOXES_ONLY) ? 2 : tool(MU_PC_TOOL_HITBOXES) ? 1 : 0;
                     const int next = (now + (d < 0 ? 2 : 1)) % 3;
                     set_tool(MU_PC_TOOL_HITBOXES, next == 1); set_tool(MU_PC_TOOL_HITBOXES_ONLY, next == 2);
-                  }, nullptr});
-  add_menu_entry({"Training", "Inputs and frame advantage", [] { return on_off(tool(MU_PC_TOOL_OVERLAY)); }, [](int) { flip(MU_PC_TOOL_OVERLAY); }, nullptr});
-  add_menu_entry({"Training", "Frame advance (L+R+Z, then Z)", [] { return on_off(tool(MU_PC_TOOL_FRAME_ADVANCE)); }, [](int) { flip(MU_PC_TOOL_FRAME_ADVANCE); }, nullptr});
+                  }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab_bubbles", tool(MU_PC_TOOL_HITBOXES_ONLY) ? "2" : tool(MU_PC_TOOL_HITBOXES) ? "1" : "0"); }});
+  add_menu_entry({"Training", "Inputs and frame advantage", [] { return on_off(tool(MU_PC_TOOL_OVERLAY)); }, [](int) { flip(MU_PC_TOOL_OVERLAY); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab_overlay", tool(MU_PC_TOOL_OVERLAY) ? "1" : "0"); }});
+  add_menu_entry({"Training", "Frame advance (L+R+Z, then Z)", [] { return on_off(tool(MU_PC_TOOL_FRAME_ADVANCE)); }, [](int) { flip(MU_PC_TOOL_FRAME_ADVANCE); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("frame_advance", tool(MU_PC_TOOL_FRAME_ADVANCE) ? "1" : "0"); }});
   add_menu_entry({"Training", "Practice CPU",
                   [] { return pc.enabled ? std::string(pc_preset >= 0 ? mu_pc_preset_name(pc_preset) : "Own settings") : std::string("Off"); },
                   [](int d) {
@@ -293,6 +315,7 @@ void register_training() {
                     const uint8_t tools = pc.tools;
                     if (at == 0) pc.enabled = 0;
                     else { mu_pc_preset(at - 1, &pc); pc.tools = tools; pc.enabled = 1; pc_preset = at - 1; }
-                  }, nullptr});
+                  }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("practicecpu_on", pc.enabled ? "1" : "0"); if (pc_preset >= 0) w("practicecpu_preset", std::to_string(pc_preset)); }});
 }
 }  // namespace fe::features

@@ -50,6 +50,7 @@ static inline int gmtime_s(struct tm* out, const time_t* t) { return gmtime_r(t,
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -431,23 +432,48 @@ void apply_speed() {
   options.pace = !(pb.fast || pb.seek_target != INT32_MIN);
 }
 void sleep_ms(int ms) { usleep(useconds_t(ms) * 1000); }
+constexpr uint16_t kStart = 0x1000, kA = 0x0100, kL = 0x0040, kR = 0x0020, kDL = 0x0001, kDR = 0x0002, kDD = 0x0004, kDU = 0x0008;
+constexpr int32_t kKeepEvery = 240, kJump = 300;
+// --feature-test replay-controls: the viewer's buttons pressed by a timeline of its own (a controller script stops
+// with the game while it is paused): pause, two steps, play, back, forward, the three speeds, fast forward.
+uint16_t test_buttons() {
+  static const bool on = feature_test("replay-controls");
+  static int stage = 0, release = 0; static double t0 = 0; static int32_t back_from = 0;
+  if (!on) return 0;
+  if (release) { --release; return 0; }
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  uint16_t b = 0;
+  switch (stage) {
+    case 0: if (pb.frame >= 60) { b = kStart; t0 = now; stage = 1; } break;
+    case 1: if (now - t0 > 0.4) { b = kA; stage = 2; } break;
+    case 2: if (now - t0 > 0.8) { b = kA; stage = 3; } break;
+    case 3: if (now - t0 > 1.2) { b = kStart; stage = 4; } break;
+    case 4: if (pb.frame >= 240) { b = kDL; back_from = pb.frame; stage = 5; } break;
+    case 5: if (pb.frame < back_from - 100 && pb.frame >= 0) { b = kDR; stage = 6; } break;
+    case 6: if (pb.seek_target == INT32_MIN && pb.frame >= 300) { b = kDU; stage = 7; } break;
+    case 7: if (pb.frame >= 320) { b = kDU; stage = 8; } break;
+    case 8: if (pb.frame >= 330) { b = kDU; stage = 9; } break;
+    case 9: if (pb.frame >= 340) { b = kDD; stage = 10; } break;
+    default: break;
+  }
+  if (b) { release = 1; say("replay: test presses %04X at frame %d", b, pb.frame); }
+  return b;
+}
 uint16_t read_buttons() {
   MuPadStatus pads[4]{};
   // The pads the game was given this retrace (the viewer's controllers; the game plays the recording).
   std::memcpy(pads, pads_raw(), sizeof pads);
-  uint16_t b = 0;
+  uint16_t b = test_buttons();
   for (const auto& p : pads) b |= p.button;
   return b;
 }
 uint16_t poll_buttons() {
   MuPadStatus pads[4]{};
   read_controllers(pads);
-  uint16_t b = 0;
+  uint16_t b = test_buttons();
   for (const auto& p : pads) b |= p.button;
   return b;
 }
-constexpr uint16_t kStart = 0x1000, kA = 0x0100, kL = 0x0040, kR = 0x0020, kDL = 0x0001, kDR = 0x0002, kDD = 0x0004, kDU = 0x0008;
-constexpr int32_t kKeepEvery = 240, kJump = 300;
 
 void control_edges(uint16_t b) {
   const uint16_t pressed = b & uint16_t(~pb.last_buttons);
@@ -474,6 +500,7 @@ int replay_gate(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& rep
       present::note_discontinuity();
       answer = 2;
     }
+    if (!answer) say("replay: no kept state at or before frame %d", pb.back_target);
     pb.go_back = false;
     apply_speed();
     reply.push_back(answer);
@@ -482,7 +509,8 @@ int replay_gate(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& rep
   pb.frame = frame;
   if (pb.seek_target != INT32_MIN && frame >= pb.seek_target) { pb.seek_target = INT32_MIN; say("replay: at frame %d", frame); }
   // A state now and then, where a frame starts (the jump-back points).
-  if ((frame - Slippi::GAME_FIRST_FRAME) % kKeepEvery == 0 && !snapshot_store::has(frame)) {
+  // The first frame the game asks about (the match's first is not always one) and then every kKeepEvery frames.
+  if ((!snapshot_store::running() || (frame - Slippi::GAME_FIRST_FRAME) % kKeepEvery == 0) && !snapshot_store::has(frame)) {
     if (snapshot_store::keep(frame, 24, "replay")) pb.marks[frame] = pb.check.mark();
   }
   control_edges(read_buttons());
@@ -495,7 +523,7 @@ int replay_gate(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& rep
       const bool a = (b & kA) != 0;
       pb.a_held = a ? pb.a_held + 1 : 0;
       control_edges(b);
-      if (a && (pb.a_held == 1 || (pb.a_held > 20 && pb.a_held % 4 == 0))) break;
+      if (a && (pb.a_held == 1 || (pb.a_held > 20 && pb.a_held % 4 == 0))) { say("replay: one frame forward from frame %d", frame); break; }
     }
   }
   if (pb.slow > 1 && !pb.fast && pb.seek_target == INT32_MIN) sleep_ms(17 * (pb.slow - 1));
@@ -595,6 +623,7 @@ void register_replays() {
                     pending_restart = {"--replay", dir() + "/" + menu_list[std::min(menu_pick, menu_list.size() - 1)]};
                     say("replay: %s asked for; play mode starts the game again with it", pending_restart[1].c_str());
                   }});
-  add_menu_entry({"Replays", "Save every match", [] { return std::string(save_replays ? "On" : "Off"); }, [](int) { save_replays = !save_replays; setenv("MELEE_SOURCE_RECORD", save_replays && !playing ? "1" : "0", 1); }, nullptr});
+  add_menu_entry({"Replays", "Save every match", [] { return std::string(save_replays ? "On" : "Off"); }, [](int) { save_replays = !save_replays; setenv("MELEE_SOURCE_RECORD", save_replays && !playing ? "1" : "0", 1); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("savereplays", save_replays ? "1" : "0"); }});
 }
 }  // namespace fe::features
