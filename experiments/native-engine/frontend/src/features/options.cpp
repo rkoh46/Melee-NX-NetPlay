@@ -70,7 +70,7 @@ uint32_t w_options() {
   const uint32_t own = orig_options ? orig_options() : 0u;
   uint32_t recorded = 0;
   if (replay_word(0, &recorded)) return (own & ~(kTeWord1 | MU_GAME_OPTION_TMCE)) | recorded;
-  if (online() || settings_vanilla()) return own;
+  if (online() || vanilla()) return own;
   return own | training_option_bits() | (mods_tmce() ? MU_GAME_OPTION_TMCE : 0u);
 }
 uint32_t w_options2() { uint32_t v = 0; return replay_word(1, &v) ? v : orig_options2 ? orig_options2() : 0u; }
@@ -221,7 +221,7 @@ void pad_read(MuPadStatus out[4]) {
   const bool replay = replay_playing();
   replay_pad_hook(out);
   training_pad_hook(out);
-  const bool offline = !online() && !replay && !settings_vanilla();
+  const bool offline = !online() && !replay && !vanilla();
   MuLcancelView view{};
   bool gameplay = false;
   const MuGameApi* game = fe::features::game();
@@ -265,7 +265,7 @@ void on_retrace(const Retrace& info) {
 }
 int zelda_as_sheik(uint8_t, const uint8_t*, uint32_t size, std::vector<uint8_t>& reply) {
   if (size != 0) return 0;
-  const bool on = zelda_sheik && !online() && !replay_playing() && !settings_vanilla();
+  const bool on = zelda_sheik && !online() && !replay_playing() && !vanilla();
   if (on) say("options: Zelda starts as Sheik (setting)");
   reply.push_back(on ? 1 : 0);
   return 1;
@@ -278,7 +278,7 @@ std::string on_off(bool v) { return v ? "On" : "Off"; }
 }  // namespace
 
 bool online() { return g_online.load(std::memory_order_relaxed); }
-bool vanilla() { return settings_vanilla(); }
+bool vanilla() { return settings_vanilla() || settings_vanilla_only(); }
 uint32_t retrace() { return g_retrace; }
 uint32_t scene_major() { return g_scene_major; }
 uint32_t scene_minor() { return g_scene_minor; }

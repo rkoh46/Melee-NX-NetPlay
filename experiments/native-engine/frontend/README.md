@@ -55,6 +55,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `test-overlays-linux.sh` | The overlays and picture options in play mode with controller scripts and screenshots. |
 | `src/controls.cpp`, `src/controls_core.h`, `src/controls_files.*` | The controller setup beyond the button remap (see "Controller setup"): bindings, box mode, analog options, profiles, Dolphin import, chords, report rates. |
 | `patches/0111-game-menu-open-page.patch` | After 0104: `menu_open_extra`, the menu opened on a host page by its title (the Start + D-pad Up + Z chord). |
+| `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots. |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
@@ -242,6 +243,7 @@ the game runs as upstream runs it: its built-in code set on (UCF and the rest), 
 | `music` | 0..100 | |
 | `lowpoly`, `fodreflections`, `cssbackgroundfree`, `training_hud`, `arcade_camera_2d`, `audio_early_keyon` | | passed through, not looked at |
 | `vanilla` | 0 / 1 | ours: the retail game without the built-in code set; the CPU, 20XX and Stadium options are then not given, as upstream's vanilla session does |
+| `vanilla_only` | 0 / 1 | upstream's `--vanilla-only` (also the command-line flag here): no mod profile, no CPU, 20XX, Stadium or Training extras, its own memory card folder `<card>/VanillaOnly`, replays recorded with gameplay mods refused, and a disc that is not GALE01 revision 2 refused; the built-in code set stays (unlike `vanilla`) |
 | `onlinedelayauto` | 1 / 0 | online input delay from the round trip (2..5 frames); default 1 |
 | `onlinedelay` | 1..9 | frames, with `onlinedelayauto 0` |
 | `blockcode1..3` | connect code | Unranked turns these opponents down and searches again (upstream's skip list; patches/net-0004) |
@@ -501,6 +503,8 @@ two to five messages per run depending on when the match ended, the match itself
 | `lab 1`, `lab_loop 1`, `lab_bubbles 1|2`, `lab_overlay 1` | Training Lab, offline Training: D-pad Right save state, Left load (hot-page store), Down record the dummy, Up play it back; collision bubbles over the model or alone; frame advantage (0xF4) as an overlay line |
 | `frame_advance 1` | L+R+Z freezes offline Training, Z steps one frame (held: repeats), D-pad moves the CPU while frozen |
 | `practicecpu_on 1`, `practicecpu_preset N`, `practicecpu HEX` | the Practice CPU (command 0xF6); the Training page also has "Go to Training" |
+| `practicecpuslot1..3 HEX` | the Practice CPU's three slots (upstream's form, as `practicecpu`): the Training page's "save to slot N" keeps the current settings there, "load slot N" brings them back (the D-pad and lab switches stay as they are) |
+| `practice_rng 0|1|2`, `practice_rng_seed 0..255` | Training's random numbers (items, turnips, hammers; upstream's CPU page RNG row, applied by the game's `mu_practice_cpu.c`): the game's own, the same seed at each Training match start and after a state load, or frozen (the same seed every frame); only in offline Training, never online, in a replay or a vanilla session |
 | `shield_colorp1..4 RRGGBB`, `offline_delay 1` + `offline_delay_frames N`, `autolcancel 1`, `zelda_as_sheik 1` | offline only (shield colours: online the ports' own) |
 | `savereplays 0`, `replay_dir DIR` | every VS and online match is written to `sdmc:/switch/melee-nx-netplay/Replays/Game_YYYYMMDDTHHMMSS.slp` (Linux: `<out>/Replays`) |
 | `slippi_spectator 1`, `slippi_spectator_port N` | the Slippi spectator server (off by default; port 51441): every recorded match goes out live over ENet as Slippi Dolphin sends it, for the Slippi Launcher's Broadcast tab and slippi-js overlays (`src/features/spectator.cpp`; on the console on every interface, off it on 127.0.0.1). Test: `test-spectator-linux.sh` (an ENet client, `../tools/spectator_client.cpp`, and `../tools/spectator_check.py`: the stream is the .slp's raw element byte for byte) |
@@ -525,8 +529,8 @@ round(refresh / 60) times through its present hook.
 
 Replay fidelity needs `../patches/decomp-0003` in the game image (`../fetch.sh` applies every `decomp-*.patch`; an
 image built before it records one uninitialised shield-flag byte of the second fighter that a playback cannot
-reproduce). Verification hooks (command line, play mode): `--feature-test training[:CHARACTER]` (Go to Training from
-the title screen), `--feature-test major:N` (ask the game for scene N: Event Match 43, Classic 3, Training 28),
+reproduce). Verification hooks (command line, play mode): `--feature-test training[:CHARACTER[:STAGE]]` (Go to Training from
+the title screen; STAGE is the stage select's stage id, default 32), `--feature-test major:N` (ask the game for scene N: Event Match 43, Classic 3, Training 28),
 `--feature-test replay-controls` (presses the viewer's buttons on a timeline of its own, since a controller script
 stops while the replay is paused).
 
@@ -540,6 +544,12 @@ on the character select, X randomises a build (Falco with Samus's Charge Shot, N
 Counter) and the match plays those moves; the 20XX Hack Pack's debug menu opens from VS Mode > Tournament Melee, a
 Battlefield variant chosen on its TEXTURES page is saved on B and the match loads that variant's file (`pick: stage 31
 page 1 -> 31, letter '2'`), and D-pad down and up on the stage select change the page (its own icons on page 2).
+Since then (Linux, play mode, controller input through the test pad file): the pack's hidden characters (Z with the coin
+held over Bowser: Giga Bowser, in Training and in VS Melee, and a VS match with him against a CPU), its color overlays
+(hitstun red on the CPU in Training) and its music playlists (the global playlist set to random custom tracks: Final
+Destination plays `AF.hps` / `CE.hps` instead of its single song `30.hps`). In VS stock singles upstream's Squad Strike
+took the Z press (it adds the hovered fighter to a squad); `../patches/0005` leaves Z to the pack on its seven paired
+icons when the pack is loaded.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 
@@ -757,9 +767,24 @@ of SDL controllers, the shared pipeline cache, the card carried over from 0.3.x)
 the Replays page's "Watch it" restart (wired, not run: no replay was recorded in these tests); Training's lines on
 screen (drawn only in Training mode, not looked at); 120 Hz on a display that has it.
 
-Not looked at: the Hack Pack's hidden characters, playlists and random variants (its debug menu, a chosen variant and
-the stage select pages were checked in 0.4.1); TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
+Not looked at: the Hack Pack's random variants (its debug menu, a chosen variant and the stage select pages were checked
+in 0.4.1; hidden characters, training displays and playlists since, see "Mod discs" under Feature modules); TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
 holds beyond what is listed.
+
+Mods and Training session options on Linux (`test-mods-linux.sh`, screenshots looked at): `training-menu` sets the
+Practice CPU, Random numbers "Same each start" and seed number 3 on the menu's Training page, saves slot 1, turns the
+Practice CPU off and loads slot 1 back (`practicecpuslot1`, `practice_rng 1`, `practice_rng_seed 3` written); the next
+start's Training match ran the slot's settings and seeded the game's random numbers (`[pc] rng seed DAA66D14 (same each
+start)`); `frozen`: `[pc] rng seed 8FF3473A (frozen)`. `vanilla-only` with `mod_profile hackpack` and CPU options: the
+profile not loaded, option words 0, a VS match saved to `card-play/VanillaOnly`; `vanilla-refuse`: a disc header that
+is not GALE01 revision 2 ends the start with code 2. `rogue`: Rogue Mode's map and first fight. `mex`: the Akaneia and
+ACE discs' added stages built and shown on the stage select; Delfino Plaza picked on the Akaneia disc's second page and
+a Training match played on it. With a
+`practice_rng 2`, `practicecpu_on 1` settings file on both sides: `test-net-linux.sh` and `test-online-linux.sh` final
+state IDENTICAL, `net check` lines equal, 0 desync messages; `parity_vs_onett` with a picture (`test-linux.sh`) and the five reference scripts headless IDENTICAL after the
+merge with main. Not seen: whether items then come out the same, the replay refusal of a vanilla-only session, any of it
+on the console. "Go to Training" picked in the menu leaves the menu open, and Training's menus are not pressed through
+while it is (the press-through gives up after 15 s; close the menu first).
 
 On the console, by the session that ran it:
 

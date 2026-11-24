@@ -13,8 +13,15 @@
 //     game's own debug pause (MuGameApi.practice, MU_PRACTICE_FRAME_PAUSE / MU_PRACTICE_CPU_MOVE);
 //   - the Practice CPU's settings (command 0xF6, port/runtime/abi/mu_practice_cpu.h): the game asks for
 //     them every Training match and reports what the CPU is doing.
+//   - Training's random numbers (MuPcConfig.rng_mode / rng_seed, the game's mu_practice_cpu.c pc_rng): the game's
+//     own, the same seed at each Training match start and after a state load, or frozen (the same seed every
+//     frame). It changes the simulation, so it is off by default and never sent online, in a replay or vanilla;
+//   - the Practice CPU's three slots (upstream practice_cpu.cpp g_slots): the menu saves the current settings
+//     into a slot and loads one back; settings.ini keeps them in upstream's hex form.
 // settings.ini keys: lab, lab_bubbles (1 over the model, 2 bubbles only), lab_loop, lab_overlay,
-// frame_advance, practicecpu (upstream's hex form of MuPcConfig), practicecpu_preset (0..N), practicecpu_on.
+// frame_advance, practicecpu (upstream's hex form of MuPcConfig), practicecpu_preset (0..N), practicecpu_on,
+// practicecpuslot1..3 (hex, as practicecpu), practice_rng (0 the game's, 1 same each start, 2 frozen),
+// practice_rng_seed (0..255).
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "features_internal.h"
 #include "frontend.h"
@@ -38,6 +45,20 @@ constexpr uint32_t kTrainingMajor = 0x1C;
 
 MuPcConfig pc = [] { MuPcConfig c; mu_pc_defaults(&c); c.enabled = 0; return c; }();
 int pc_preset = -1;                           // the preset applied last (-1 none, or the setting's own)
+MuPcConfig slots[3]; bool slot_valid[3] = {};   // practicecpuslot1..3
+
+std::string to_text(const MuPcConfig& c) {     // upstream practice_cpu.cpp to_text: the whole struct as hex
+  static const char* hex = "0123456789abcdef";
+  const auto* p = reinterpret_cast<const uint8_t*>(&c);
+  std::string s;
+  for (size_t i = 0; i < sizeof c; ++i) { s += hex[p[i] >> 4]; s += hex[p[i] & 15]; }
+  return s;
+}
+bool from_text(const std::string& value, MuPcConfig* out) {
+  std::vector<uint8_t> bytes;
+  for (size_t i = 0; i + 1 < value.size(); i += 2) bytes.push_back(uint8_t(std::strtoul(value.substr(i, 2).c_str(), nullptr, 16)));
+  return !bytes.empty() && mu_pc_load(bytes.data(), unsigned(bytes.size()), out);
+}
 
 // ---- overlay ----
 std::mutex hud_mutex;
@@ -59,13 +80,19 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "frame_advance") set_tool(MU_PC_TOOL_FRAME_ADVANCE, on);
   else if (key == "practicecpu") {
     // Upstream's form: the whole struct as hex, version byte first (practice_cpu.cpp to_text).
-    std::vector<uint8_t> bytes;
-    for (size_t i = 0; i + 1 < value.size(); i += 2) bytes.push_back(uint8_t(std::strtoul(value.substr(i, 2).c_str(), nullptr, 16)));
     MuPcConfig c;
     const uint8_t tools = pc.tools;
-    if (!bytes.empty() && mu_pc_load(bytes.data(), unsigned(bytes.size()), &c)) { pc = c; pc.tools |= tools; }
+    if (from_text(value, &c)) { pc = c; pc.tools |= tools; }
     else say("training: practicecpu: not a setting this build reads");
-  } else if (key == "practicecpu_preset") {
+  } else if (key.size() == 17 && key.compare(0, 16, "practicecpuslot") == 0 && key[16] >= '1' && key[16] <= '3') {
+    const int n = key[16] - '1';
+    slot_valid[n] = from_text(value, &slots[n]);
+    if (!slot_valid[n]) say("training: %s: not a setting this build reads", key.c_str());
+  } else if (key == "practice_rng") {
+    const int n = std::atoi(value.c_str());
+    pc.rng_mode = uint8_t(n >= 0 && n < MU_PC_RNG_COUNT ? n : MU_PC_RNG_GAME);
+  } else if (key == "practice_rng_seed") pc.rng_seed = uint8_t(std::clamp(std::atoi(value.c_str()), 0, 255));
+  else if (key == "practicecpu_preset") {
     const int n = std::atoi(value.c_str());
     if (n >= 0 && n < mu_pc_preset_count()) { const uint8_t tools = pc.tools, enabled = pc.enabled; mu_pc_preset(n, &pc); pc.tools = tools; pc.enabled = enabled; pc_preset = n; }
   } else if (key == "practicecpu_on") pc.enabled = on ? 1 : 0;
@@ -125,7 +152,14 @@ int practice_cpu(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& re
     return 1;
   }
   MuPcConfig c = pc;
-  if (online() || replay_playing() || vanilla()) c.enabled = 0;   // the game also keeps it to offline Training
+  // The game also keeps both to offline Training; here nothing that changes the simulation leaves the host online,
+  // in a replay or in a vanilla session.
+  if (online() || replay_playing() || vanilla()) { c.enabled = 0; c.rng_mode = MU_PC_RNG_GAME; }
+  static int told_rng = MU_PC_RNG_GAME, told_seed = -1;   // said on a change (and not for the game's own at the first match)
+  if (told_rng != c.rng_mode || (c.rng_mode != MU_PC_RNG_GAME && told_seed != pc.rng_seed)) {
+    told_rng = c.rng_mode; told_seed = pc.rng_seed;
+    say("training: random numbers %s (seed number %d)", c.rng_mode == MU_PC_RNG_FROZEN ? "frozen" : c.rng_mode == MU_PC_RNG_SAME ? "the same at each start" : "the game's own", pc.rng_seed);
+  }
   static int told = -1;
   if (told != c.enabled) { told = c.enabled; say("training: practice CPU %s (preset %s, tools %02X)", c.enabled ? "on" : "off", pc_preset >= 0 ? mu_pc_preset_name(pc_preset) : "own", pc.tools); }
   const auto* bytes = reinterpret_cast<const uint8_t*>(&c);
@@ -210,7 +244,9 @@ void enter_tick(MuPadStatus pads[4]) {
   const auto neutral = [&] { for (int i = 0; i < 4; ++i) { const int8_t err = pads[i].err; pads[i] = MuPadStatus{}; pads[i].err = err; } };
   if (major == kTrainingMajor && minor >= 2 && enter.seen_select) { enter.on = false; say("training: in the Training match at retrace %u", retrace()); }
   else if (enter.ticks > 60 * 15 || online() || (major != kTrainingMajor && enter.ticks > 180)) { enter.on = false; say("training: stopped pressing through Training's menus (scene %u/%u)", major, minor); }
-  else if (major == kTrainingMajor && minor == 1) {
+  else if (major == kTrainingMajor && minor == 1 && enter.stage < 0) {
+    enter.on = false; say("training: at the stage select; the controller picks");   // --feature-test training:N:-1
+  } else if (major == kTrainingMajor && minor == 1) {
     neutral();
     if (MuGameApi* g = game(); g && g->practice) { int32_t a[1] = {enter.stage}; g->practice(MU_PRACTICE_TRAINING_STAGE, a, 1); }
   } else if (major == kTrainingMajor) {
@@ -240,12 +276,18 @@ void test_tick() {
       }
     }
   }
-  // --feature-test training[:CHARACTER]: Go to Training once a menu (the title screen or the main menu) has been
-  // up for a second.
+  // --feature-test training[:CHARACTER[:STAGE]]: Go to Training once a menu (the title screen or the main menu) has
+  // been up for a second; STAGE is the stage id Training's stage select picks (default 32, Final Destination; up to
+  // 127), or -1: the stage select is left to the controller (an m-ex disc's added stages have ids above 127).
   std::string value;
   if (test_done || !feature_test("training", &value)) return;
   test_main_menu_ticks = scene_major() == 1 || scene_major() == 24 ? test_main_menu_ticks + 1 : 0;
-  if (test_main_menu_ticks == 60) { test_done = true; go_training(value.empty() ? 2 : std::atoi(value.c_str()), -1); }
+  if (test_main_menu_ticks == 60) {
+    test_done = true;
+    const size_t colon = value.find(':');
+    go_training(value.empty() ? 2 : std::atoi(value.c_str()), -1);
+    if (colon != std::string::npos) enter.stage = std::clamp(std::atoi(value.c_str() + colon + 1), -1, 0x7F);
+  }
 }
 
 void hud(std::vector<HudLine>& out) {
@@ -265,6 +307,24 @@ void run_end() {
 
 std::string on_off(bool v) { return v ? "On" : "Off"; }
 void flip(uint32_t bit) { set_tool(bit, !tool(bit)); }
+
+// The menu's rows for one Practice CPU slot (the menu takes plain function pointers).
+template <int N> void add_slot_rows() {
+  static const std::string save = "Practice CPU: save to slot " + std::to_string(N + 1), load = "Practice CPU: load slot " + std::to_string(N + 1);
+  add_menu_entry({"Training", save.c_str(), [] { return std::string(slot_valid[N] ? "Saved" : "Empty"); }, nullptr,
+                  [] { slots[N] = pc; slot_valid[N] = true; say("training: practice CPU settings saved to slot %d", N + 1); },
+                  [](fe::features::MenuEntry::Write w) { if (slot_valid[N]) w(("practicecpuslot" + std::to_string(N + 1)).c_str(), to_text(slots[N])); }});
+  add_menu_entry({"Training", load.c_str(), nullptr, nullptr,
+                  [] {
+                    if (!slot_valid[N]) { say("training: practice CPU slot %d is empty", N + 1); return; }
+                    const uint8_t tools = pc.tools; pc = slots[N]; pc.tools = tools; pc_preset = -1;
+                    say("training: practice CPU settings loaded from slot %d", N + 1);
+                  },
+                  [](fe::features::MenuEntry::Write w) {
+                    w("practicecpu", to_text(pc)); w("practicecpu_on", pc.enabled ? "1" : "0");
+                    if (pc_preset < 0) w("practicecpu_preset", "-1");   // the slot's own settings, not a preset, at the next start
+                  }});
+}
 }  // namespace
 
 uint32_t training_option_bits() {
@@ -331,5 +391,14 @@ void register_training() {
                     else { mu_pc_preset(at - 1, &pc); pc.tools = tools; pc.enabled = 1; pc_preset = at - 1; }
                   }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("practicecpu_on", pc.enabled ? "1" : "0"); if (pc_preset >= 0) w("practicecpu_preset", std::to_string(pc_preset)); }});
+  add_menu_entry({"Training", "Random numbers (items, turnips)",
+                  [] { return std::string(pc.rng_mode == MU_PC_RNG_FROZEN ? "Frozen" : pc.rng_mode == MU_PC_RNG_SAME ? "Same each start" : "The game's"); },
+                  [](int d) { pc.rng_mode = uint8_t((pc.rng_mode + (d < 0 ? MU_PC_RNG_COUNT - 1 : 1)) % MU_PC_RNG_COUNT); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("practice_rng", std::to_string(pc.rng_mode)); w("practice_rng_seed", std::to_string(pc.rng_seed)); }});
+  add_menu_entry({"Training", "Random numbers: seed number",
+                  [] { return std::to_string(pc.rng_seed) + (pc.rng_mode == MU_PC_RNG_GAME ? " (not used)" : ""); },
+                  [](int d) { pc.rng_seed = uint8_t(pc.rng_seed + (d < 0 ? 255 : 1)); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("practice_rng_seed", std::to_string(pc.rng_seed)); }});
+  add_slot_rows<0>(); add_slot_rows<1>(); add_slot_rows<2>();
 }
 }  // namespace fe::features

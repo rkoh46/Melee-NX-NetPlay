@@ -14,6 +14,7 @@ everything built from them live under `build/native-engine/` (gitignored) and ar
 | `patches/0001-aarch64-build.patch` | Lets the game and the headless host build for AArch64 (compiler flags, CPU check, image checker). |
 | `patches/0002-host-foreign-elf-bridge.patch` | Lets the headless host load the image through our loader instead of `dlopen`/`mmap` (it reuses the code paths the project has for its macOS bridge). |
 | `patches/0004-host-online-time-sync-speed.patch` | The headless host's pacing follows online time sync's frame rate (see "Time sync frame rate"). |
+| `patches/0005-hackpack-z-on-paired-icons-in-vs.patch` | With the 20XX Hack Pack loaded, Squad Strike's Z on the character select stands aside on the pack's seven paired icons, so Z swaps in the hidden fighter in VS Mode too (only with the pack; the reference scripts are unchanged). |
 | `patches/decomp-0001-...patch` | Two disc read buffers get an explicit 32-byte alignment (x86-64 GCC aligned them by itself; AArch64 does not, and the game asserts). |
 | `patches/decomp-0003-...patch` | A fighter's shield flags (fp+221B) start cleared; see "Shield flags at fighter creation" below. |
 | `patches/net-*.patch`, `net_sources.sh` | Changes to this repository's netplay (`port/runtime/hle`) for the netplay object only: `net_sources.sh` copies `port/runtime/hle` to `build/native-engine/netsrc`, adds the fetched tree's `slippi_input_suggestions.h` and applies the patches; `port/` itself is never changed. `net-0001`: Slippi 3.7.0 input suggestions (frontend/README.md). |

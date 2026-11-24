@@ -22,6 +22,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <dirent.h>
@@ -174,6 +175,16 @@ void net_say(const char* format, ...) {
   va_list args; va_start(args, format); std::vsnprintf(line, sizeof line, format, args); va_end(args);
   say("%s", line);
 }
+// The disc header a vanilla-only session asks for: game id GALE01, revision 2 (upstream also compares every file; the
+// mod layers here are separate files, never the disc itself, so the header is what can differ).
+bool retail_disc(const std::string& path) {
+  unsigned char h[8] = {};
+  FILE* f = std::fopen(path.c_str(), "rb");
+  if (!f) return false;
+  const bool read = std::fread(h, 1, sizeof h, f) == sizeof h;
+  std::fclose(f);
+  return read && std::memcmp(h, "GALE01", 6) == 0 && h[7] == 2;
+}
 bool file_exists(const std::string& path) { if (FILE* f = std::fopen(path.c_str(), "rb")) { std::fclose(f); return true; } return false; }
 
 struct Run { int result = 1; };
@@ -187,9 +198,18 @@ void* play_thread(void* user) {
   // No mod files in a session that can go online (upstream switches to the retail files for the match; here they are not loaded).
   if (net_on && !direct && !settings_profile().empty())
     say("play: mod profile \"%s\" is not loaded: this session can go online (slippi_menus 0 plays it offline)", settings_profile().c_str());
-  const std::string profile_card = direct ? std::string() : mods_configure(net_on ? std::string() : settings_profile());
+  // A vanilla-only session (upstream's --vanilla-only): no mod profile, and its own card folder inside the ordinary
+  // one, so neither a modded save (20XX TE carries code) nor this session's saves cross over.
+  const bool vanilla_only = settings_vanilla_only() && !direct;
+  if (vanilla_only && !settings_profile().empty()) say("play: vanilla-only session: mod profile \"%s\" is not loaded", settings_profile().c_str());
+  const std::string profile_card = direct || vanilla_only ? std::string() : mods_configure(net_on ? std::string() : settings_profile());
   config.card_dir = !profile_card.empty() ? profile_card : !options.card_dir.empty() ? options.card_dir : options.out_dir + "/card-play";
-  if (options.app && profile_card.empty() && !direct) app_backup_card();   // the earlier app's card, copied once before it is used
+  if (options.app && profile_card.empty() && !direct && !vanilla_only) app_backup_card();   // the earlier app's card, copied once before it is used
+  if (vanilla_only) {
+    mkdir(config.card_dir.c_str(), 0777);
+    config.card_dir += "/VanillaOnly";
+    say("play: vanilla-only session: retail gameplay, memory card folder %s", config.card_dir.c_str());
+  }
   config.max_frames = options.frames;                     // 0: until the player stops it
   // The frontend paces the retrace; with netplay the host does (its clock is what the netplay host moves).
   config.pace = net_on;
@@ -278,6 +298,12 @@ int play_main() {
   if (options.app) settings_app_defaults(!options.offline && netplay_bridge::has_services());
   settings_boot_to_css(!direct && options.auto_vs && !options.auto_menus);
   settings_load(options.settings.empty() ? options.out_dir + "/settings.ini" : options.settings);
+  for (const auto& arg : options.rest) if (arg == "--vanilla-only") settings_force_vanilla_only();
+  if (settings_vanilla_only() && !direct && !retail_disc(options.iso)) {
+    say("play: a vanilla-only session needs an unmodified NTSC 1.02 Melee disc (GALE01 revision 2): %s is not one", options.iso.c_str());
+    log_close();
+    return 2;
+  }
   if (options.app) app_after_settings();
   if (direct) settings_deactivate();                        // only the online delay is taken from the file
   else if (settings_widescreen()) options.stretch = true;   // the 16:9 code draws for the whole screen

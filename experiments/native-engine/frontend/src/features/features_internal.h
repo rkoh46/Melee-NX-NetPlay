@@ -19,7 +19,7 @@ void register_netoverlay();
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
-bool vanilla();                      // settings.ini `vanilla 1`: the retail game, no offline extras
+bool vanilla();                      // settings.ini `vanilla 1` or a vanilla-only session: no offline extras
 uint32_t retrace();
 uint32_t scene_major();
 uint32_t scene_minor();
