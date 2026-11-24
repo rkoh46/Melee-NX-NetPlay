@@ -333,6 +333,7 @@ int play_main() {
     say("play: online: this program has no online services (the services program has): the Online Play page will show Log-in");
   }
   if (direct || menu_online) {
+    net_host::set_speed_hook(io_game_speed);
     if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); screens_stop(); log_close(); return code; }
     net_on = true;
     // Tests (input suggestions): MU_NET_CONTROLLERS=1 lets the controllers, or the controller script, play a direct match

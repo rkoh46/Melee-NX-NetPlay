@@ -67,6 +67,7 @@ void io_stop();                      // run end: closes the sound output, prints
 uint64_t io_last_pad_ns();           // when the game last read the controllers (0: never)
 void io_retrace(uint32_t retrace, uint32_t scene_major, uint32_t scene_minor, bool fighting);   // once per retrace, simulation thread
 double io_take_pad_ms();             // time spent reading controllers since the last call
+void io_game_speed(double speed);    // online time sync's frame rate (net_host::set_speed_hook): the sound output follows it
 // settings.cpp (play mode)
 void settings_load(const std::string& path);
 bool settings_vanilla();

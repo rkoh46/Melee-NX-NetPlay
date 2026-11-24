@@ -11,6 +11,7 @@
 #include "host.h"                // shim
 #if MU_FE_AURORA
 #include "audio.h"
+namespace host { void audio_set_speed(double speed); }   // patches/0108: the build-time copy of audio_sdl.cpp
 #include "window.h"
 #include "jukebox.h"
 #include <dolphin/pad.h>
@@ -165,6 +166,15 @@ void io_stop() {
 #endif
   if (raw_out) { std::fclose(raw_out); raw_out = nullptr; }
   if (auto_vs.phase == AutoVs::Running) auto_vs.finish(AutoVs::Failed, "the run ended first");
+}
+
+// Slippi's time sync runs the game up to 1 % off real time online; the output resamples at that speed (patches/0108).
+void io_game_speed(double speed) {
+#if MU_FE_AURORA
+  host::audio_set_speed(speed);
+#else
+  (void)speed;
+#endif
 }
 
 double io_take_pad_ms() { const double ms = double(pad_ns_frame) * 1e-6; pad_ns_frame = 0; return ms; }

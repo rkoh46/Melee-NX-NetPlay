@@ -1,0 +1,18 @@
+Online time sync frame rate (Melee-NX-NetPlay 0.4.3): Slippi's time sync nudges the emulation speed by -0.5 to +1 %
+around a 16683 us frame (59.94 Hz, a console and Dolphin). The native engine's host frame is exactly 1/60 s, so during
+a match the speed it is given is scaled by 16667/16683, as melee-unlocked's own host does (its slippi_online.cpp). The
+speed reaches the host's pacing and the sound output through runner/netplay_bridge.cpp. Applied by ../net_sources.sh
+after net-0002; port/ is unchanged.
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -460,7 +460,9 @@
+     if (offset > -250 && offset < 8000) deviation = 0;
+     else if (offset < 0) deviation = std::min(-offset / (3 * 16683.0f), 1.0f) * 0.01f;
+     else deviation = std::min(offset / (3 * 16683.0f), 1.0f) * -0.005f;
+-    host::set_emulation_speed(1.0 + deviation);
++    // The native engine's host runs a frame in exactly 1/60 s; Slippi's time sync (and a Dolphin peer) counts
++    // 16683 us per frame: run at that rate during the match, nudged as Slippi nudges it (melee-unlocked does the same).
++    host::set_emulation_speed(16667.0 / 16683.0 * (1.0 + deviation));
+     const int32_t frame_time = 16683, t1 = 10000, t2 = frame_time + t1;
+     g_fall_behind += offset < -t1 ? 1 : 0;
+     g_fall_far_behind += offset < -t2 ? 1 : 0;

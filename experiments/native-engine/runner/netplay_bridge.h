@@ -32,6 +32,9 @@ struct Setup {
   bool fake_user = false;         // tests against a local mock service only: write a made-up user.json
   std::string iso_path;           // for the game report's disc hash
   bool delay_auto = false;        // the app's automatic delay: 2..5 frames from the opponent's ping at each game's start
+  // Slippi's time sync asks for a frame rate against real time (about 0.995..1.01, 1.0 outside a match); called on
+  // the game thread when the value changes. The host paces its frames and its sound by it.
+  void (*set_speed)(double speed) = nullptr;
 };
 NETPLAY_API bool start(const Setup& setup, std::string* error);
 NETPLAY_API void shutdown();
@@ -47,6 +50,8 @@ NETPLAY_API uint64_t rollbacks_seen_by_device();
 // The round trip to the opponent as the app's device last measured it from the game's own pad acknowledgements
 // (every acknowledged frame of an online game), in ms; -1 before the first one.
 NETPLAY_API int ping_ms();
+// The speed Slippi's time sync last asked for (1.0: normal).
+NETPLAY_API double emulation_speed();
 // The input delay from the next game on: `frames` 1..9, or automatic (2..5 from the round trip at each game's start).
 NETPLAY_API void set_delay(int frames, bool automatic);
 }

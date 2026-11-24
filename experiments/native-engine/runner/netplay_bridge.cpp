@@ -19,7 +19,9 @@
 #include <sys/stat.h>
 
 namespace {
-uint32_t (*g_retrace_count)() = nullptr; void (*g_log_time)(uint64_t) = nullptr;
+uint32_t (*g_retrace_count)() = nullptr; void (*g_log_time)(uint64_t) = nullptr; void (*g_set_speed)(double) = nullptr;
+// Slippi's time sync: the emulation speed it last asked for (game thread; read by the host's pacing and the sound output).
+std::atomic<double> g_speed{1.0};
 // Set by the netplay thread (each pad acknowledgement) and the game thread, read by the game, render (HUD) and netplay threads.
 std::atomic<int> g_ping_ms{0}; std::atomic<bool> g_ping_seen{false};
 }
@@ -43,7 +45,10 @@ uint32_t rd32(uint32_t) { return 0; }
 uint32_t retrace_count() { return g_retrace_count ? g_retrace_count() : 0; }
 double now_seconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void sim_cost_add(int, double) {}
-void set_emulation_speed(double) {}       // Slippi's time sync nudges the frame rate; the test runs at a fixed rate
+// Slippi's time sync nudges the frame rate (and sound follows it); the host paces by it (Setup::set_speed).
+void set_emulation_speed(double speed) {
+  if (g_speed.exchange(speed, std::memory_order_relaxed) != speed && g_set_speed) g_set_speed(speed);
+}
 void set_online_ping_ms(int ms) { g_ping_ms.store(ms, std::memory_order_relaxed); g_ping_seen.store(true, std::memory_order_relaxed); }
 int online_ping_ms() { return g_ping_ms.load(std::memory_order_relaxed); }
 void input_mark_match_start() {}
@@ -117,7 +122,7 @@ static bool start_services(const Setup& setup, std::string* error) {
 }
 
 bool start(const Setup& setup, std::string* error) {
-  g_retrace_count = setup.retrace_count; g_log_time = setup.log_time;
+  g_retrace_count = setup.retrace_count; g_log_time = setup.log_time; g_set_speed = setup.set_speed;
   if (setup.services) return start_services(setup, error);
   mkdir(setup.user_dir.c_str(), 0777);
   // A made-up identity: the device wants a user.json before it will search. Nothing reads it but
@@ -156,6 +161,7 @@ bool request_match(int mode, const std::string& connect_code, uint8_t character,
   return true;
 }
 uint64_t rollbacks_seen_by_device() { return slippi::online::rollback_count(); }
+double emulation_speed() { return g_speed.load(std::memory_order_relaxed); }
 int ping_ms() { return g_ping_seen.load(std::memory_order_relaxed) ? g_ping_ms.load(std::memory_order_relaxed) : -1; }
 void set_delay(int frames, bool automatic) {
   auto& config = slippi::online::config();

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <map>
 
@@ -77,7 +78,26 @@ struct NetRun {
   bool check = true;
   std::map<int32_t, std::pair<uint32_t, uint32_t>> state_sum;     // frame -> checksum, RNG seed
   uint32_t desync_lines = 0;
+  // Slippi's time sync: the frame rate it asks for (1.0 outside a match; 16667/16683 = 0.99904 in one, nudged).
+  std::atomic<double> speed{1.0};
+  uint64_t speed_changes = 0; double speed_low = 1.0, speed_high = 1.0;
+  uint64_t match_retraces = 0, nudged_retraces = 0, slow_retraces = 0, fast_retraces = 0;
 } net;
+void (*speed_hook)(double) = nullptr;
+constexpr double kMatchRate = 16667.0 / 16683.0;   // patches/net-0003: Slippi's 59.94 Hz frame on the host's 60 Hz one
+// Game thread (inside the netplay device's time sync), only when the value changes.
+void net_set_speed(double speed) {
+  net.speed.store(speed, std::memory_order_relaxed);
+  if (!options.fixed_rate) {
+    linux_host::set_pace_speed(speed * (1.0 + options.clock_skew / 100.0));
+    if (speed_hook) speed_hook(speed);
+  }
+  ++net.speed_changes;
+  if (speed != 1.0) { net.speed_low = std::min(net.speed_low, speed); net.speed_high = std::max(net.speed_high, speed); }
+  if (net.speed_changes <= 12 || net.speed_changes % 100 == 0)
+    say("net: time sync: frame rate x%.5f (%+.3f %% against Slippi's 59.94 Hz) at retrace %u%s", speed, (speed / kMatchRate - 1) * 100,
+        linux_host::counters().retraces, net.speed_changes == 12 ? " (further changes: every 100th)" : "");
+}
 
 uint32_t net_be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
 void net_put32(std::vector<uint8_t>* out, uint32_t v) { out->push_back(uint8_t(v >> 24)); out->push_back(uint8_t(v >> 16)); out->push_back(uint8_t(v >> 8)); out->push_back(uint8_t(v)); }
@@ -262,6 +282,10 @@ void report() {
   std::string depths; char part[32];
   for (int d = 0; d < 16; ++d) if (net.depth_count[d]) { std::snprintf(part, sizeof part, " %d%s:%llu", d, d == 15 ? "+" : "", (unsigned long long)net.depth_count[d]); depths += part; }
   say("net: rollback depth (frames simulated again : how often):%s", depths.empty() ? " none" : depths.c_str());
+  say("net: time sync frame rate: %llu changes, %.5f..%.5f; of %llu match retraces %llu nudged (%llu slower, %llu faster than 59.94 Hz)%s",
+      (unsigned long long)net.speed_changes, net.speed_low, net.speed_high, (unsigned long long)net.match_retraces, (unsigned long long)net.nudged_retraces,
+      (unsigned long long)net.slow_retraces, (unsigned long long)net.fast_retraces,
+      options.clock_skew != 0 ? (" (test: this clock " + std::to_string(options.clock_skew) + " % fast)").c_str() : "");
   report_series("net: save", net.save_ms);
   report_series("net: restore", net.restore_ms);
   report_series("net: online frame without a rollback (work only)", net.first_pass_ms);
@@ -336,12 +360,14 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
   else if (arg == "--selftest") o->selftest = next();
   else if (arg == "--net-store") o->engine_store = next() == "engine";
   else if (arg == "--net-no-check") o->no_check = true;
+  else if (arg == "--net-fixed-rate") o->fixed_rate = true;
+  else if (arg == "--net-clock-skew") o->clock_skew = std::strtod(next().c_str(), nullptr);
   else if (arg == "--track-remap") dirtytrack_set_method(DIRTYTRACK_REMAP);   // Horizon: the other way to make pages read-only (dirtytrack.h)
   else return false;
   return true;
 }
 void usage(Log log) {
-  log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-retry SECONDS] [--net-delay FRAMES|auto] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap]");
+  log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-retry SECONDS] [--net-delay FRAMES|auto] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap] [--net-clock-skew PERCENT] [--net-fixed-rate]");
   log("          [--online unranked|direct:CODE|teams|party] [--user-dir DIR]   (builds with MU_NET_SERVICES=1 only)");
 }
 bool wanted(const Options& o) { return !o.net.empty() || !o.online.empty(); }
@@ -351,6 +377,8 @@ int start(const Options& given, Log log) {
   options = given; say = log;
   net.started = net.last_request = Clock::now();     // a search from the game's own menu has no online_test_match call
   netplay_bridge::Setup setup;
+  setup.set_speed = net_set_speed;
+  if (options.clock_skew != 0) { linux_host::set_pace_speed(1.0 + options.clock_skew / 100.0); say("net: test: this instance's frame clock runs %+.3f %% fast", options.clock_skew); }
   setup.delay_frames = options.delay; setup.delay_auto = options.delay_auto; setup.retrace_count = net_retrace_count; setup.log_time = [](uint64_t ns) {
     if (net.have_sim_thread && pthread_equal(pthread_self(), net.sim_thread)) add_log_time(ns, true);
     else { net.other_log_ns += ns; ++net.other_log_lines; }       // the netplay client's own threads: not inside a frame
@@ -416,6 +444,11 @@ void on_retrace(const char* row, size_t length, bool fighting, double frame_ms) 
   const uint64_t slept = linux_host::slept_nanoseconds();
   if (!net.have_sim_thread) { net.sim_thread = pthread_self(); net.have_sim_thread = true; }
   const uint64_t faults = dirtytrack_faults(), disc = linux_host::counters().disc_reads;
+  if (fighting) {
+    const double speed = net.speed.load(std::memory_order_relaxed);
+    ++net.match_retraces;
+    if (speed != 1.0 && std::fabs(speed - kMatchRate) > 1e-9) { ++net.nudged_retraces; ++(speed < kMatchRate ? net.slow_retraces : net.fast_retraces); }
+  }
   if (frame_ms >= 0 && fighting) {
     const double work = frame_ms - double(slept - net.slept_at_last_frame) / 1e6;
     (net.loads != net.loads_at_last_frame ? net.rollback_frame_ms : net.first_pass_ms).push_back(float(work));
@@ -441,4 +474,5 @@ void stop_tracking() {
   net_engine.end();
 }
 void shutdown() { if (net.on) netplay_bridge::shutdown(); net.on = false; }
+void set_speed_hook(void (*hook)(double)) { speed_hook = hook; }
 } // namespace net_host

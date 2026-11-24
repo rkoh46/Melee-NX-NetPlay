@@ -39,6 +39,8 @@ struct Options {
   bool no_check = false;            // --net-no-check: do not collect the game's per-frame state checksums
   bool engine_store = false;        // --net-store engine: melee-unlocked's own snapshot engine instead of the hot-page store
   std::string selftest;             // --selftest EVERY:DEPTH: the engine's own rollback self-test
+  bool fixed_rate = false;          // --net-fixed-rate: tests: the time sync's frame rate is logged, not applied (the 0.4.2 behaviour)
+  double clock_skew = 0;            // --net-clock-skew PERCENT: tests: this instance's frame clock runs that much fast (negative: slow)
   // Filled in by the caller, not by arguments:
   std::string out_dir;              // where the made-up user of --net and digest-net-confirmed.csv go
   std::string iso_path;             // the disc image (services: the game report's disc hash)
@@ -73,6 +75,9 @@ void stop_tracking();
 // The end-of-run lines, and digest-net-confirmed.csv in out_dir.
 void report();
 void shutdown();
+// Slippi's time sync changes the frame rate (pacing is the host's, patches/0004); a program with its own sound output
+// gets each new speed here too (any thread; 1.0 normal, about 0.995..1.01 in a match).
+void set_speed_hook(void (*hook)(double speed));
 
 // What a rollback snapshot covers right now: the game's ranges minus its exclusions, minus the
 // sound-driver ranges of the embedded image's build (melee_game.snapexcl). Also used by the
