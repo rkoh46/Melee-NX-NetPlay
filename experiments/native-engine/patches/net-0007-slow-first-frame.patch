@@ -1,0 +1,37 @@
+A slow first frame is not a disconnect (patches/net-0007), as melee-unlocked does it (its should_skip_online_frame and
+port/tests/slow_load_start_wiring_test.py): until the other player's first online frame has arrived, the netplay object waits
+30 s for it before dropping that player; after it, Slippi's 7 s as before. A stage load on a slow machine or a slow SD card
+(13 s for one of upstream's players) no longer ends the match before it starts. The rule is local: nothing on the wire
+changes, and a Slippi Dolphin 3.7.0 peer keeps its own limit. Tests only: MELEE_NET_TEST_SLOW_FIRST_FRAME_MS holds this side's
+first online frame that long (tools/net_test.sh). Applied by ../net_sources.sh after net-0006. port/ is unchanged.
+
+diff -ruN a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.cpp
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -439,8 +439,11 @@
+     if (enough) { g_stall_frame_counts[i] = 0; continue; }
+     g_stall_frame_counts[i]++;
+     any_needs_inputs = true;
+-    if (g_stall_frame_counts[i] > 60 * 7) {
+-      host::log("slippi: force-disconnecting player %u after 7 s stall (frame %d, latest %d)", pad->player_idx, frame, latest);
++    // patches/net-0007 (melee-unlocked's slow first frame): before the other player's first frame arrives (a stage load on
++    // a slow machine or from a slow card took 13 s for one of upstream's players) the limit is 30 s; after it Slippi's 7 s.
++    const int stall_limit = latest < 1 ? 60 * 30 : 60 * 7;
++    if (g_stall_frame_counts[i] > stall_limit) {
++      host::log("slippi: force-disconnecting player %u after %d s stall (frame %d, latest %d)", pad->player_idx, stall_limit / 60, frame, latest);
+       g_netplay->ForceDisconnectPlayer(pad->player_idx);
+       g_stall_frame_counts[i] = 0;
+       continue;
+@@ -613,6 +616,12 @@
+   const uint8_t input_port = payload[25];   // the controller port the local inputs come from (input suggestions read it)
+   const bool is_leaving = payload[26] != 0;
+   if (frame == 1) {
++    // patches/net-0007, tests only: MELEE_NET_TEST_SLOW_FIRST_FRAME_MS holds this side's first online frame that long, as a
++    // slow stage load would (the other side must wait for it instead of dropping this player).
++    if (const char* slow = std::getenv("MELEE_NET_TEST_SLOW_FIRST_FRAME_MS")) {
++      const int ms = std::atoi(slow);
++      if (ms > 0 && ms <= 60000) { host::log("slippi: test aid: the first online frame waits %d ms", ms); std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
++    }
+     g_available_savestates.clear();
+     g_active_savestates.clear();
+     for (int i = 0; i < ROLLBACK_MAX_FRAMES; ++i) g_available_savestates.push_back(std::make_unique<Savestate>());
