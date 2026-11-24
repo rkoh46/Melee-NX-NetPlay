@@ -14,6 +14,8 @@ cp -R "$repo/port/runtime/hle" "$stage/port/runtime/hle"
 # Slippi 3.7.0's rules for receiving and using input suggestions, as melee-unlocked has them (header only).
 [ -f "$tree/port/runtime/hle/slippi_input_suggestions.h" ] || { echo "net_sources: $tree is missing: run ./fetch.sh first" >&2; exit 1; }
 cp "$tree/port/runtime/hle/slippi_input_suggestions.h" "$stage/port/runtime/hle/"
+# melee-unlocked's live pick preview bytes (patches/net-0005; header only).
+cp "$tree/port/runtime/abi/mu_pick_preview.h" "$stage/port/runtime/hle/"
 for p in "$here"/patches/net-*.patch; do [ -f "$p" ] && patch -s -p1 -d "$stage" < "$p"; done
 mkdir -p "$out"
 # By content, so a build only sees files that changed.

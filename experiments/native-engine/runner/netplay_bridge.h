@@ -44,6 +44,7 @@ struct OnlinePrefs {
   uint32_t shield_online = 0;        // 0x1000000 | RGB, or 0
   std::string skip[3];               // Unranked: connect codes turned down
   bool as_slippi = false;            // tests: behave as Slippi Dolphin (no build message sent, the other's ignored)
+  bool pick_previews = true;         // live pick previews on the online character select (patches/net-0005; our builds only)
 };
 NETPLAY_API void set_online_prefs(const OnlinePrefs& prefs);
 // Display options bits 28-31 (online port colours) and a slot's online shield colour (0x1000000 | RGB, 0: the port's own);
@@ -66,6 +67,30 @@ NETPLAY_API uint64_t rollbacks_seen_by_device();
 NETPLAY_API int ping_ms();
 // The speed Slippi's time sync last asked for (1.0: normal).
 NETPLAY_API double emulation_speed();
+// Play while you search (patches/net-0005; the frontend's search module): the search as the netplay object sees it, and the kept
+// search, which goes on through the game's own cleanup commands while the player plays offline. Simulation thread.
+struct SearchInfo {
+  int state = -1;                    // 0 idle, 1 initialising, 2 searching, 3 opponent connecting, 4 connected, 5 error; -1 offline
+  int mode = -1;                     // 1 Unranked, 2 Direct, 3 Teams, 4 Party
+  bool locked = false;               // this player's selections are locked in
+  int character = -1, color = 0;     // the locked-in fighter (external id) and costume
+  bool kept = false;
+  bool remote_ready = false;         // connected and every other player locked in
+  uint32_t elapsed_ms = 0;           // since the search started
+  std::string error, opponent;
+};
+NETPLAY_API SearchInfo search_info();
+NETPLAY_API void keep_search(bool kept);
+NETPLAY_API bool search_kept();
+// Quick chat (0 on, 1 Direct only, 2 off: Slippi's and upstream's quickchat) and live pick previews, from now on.
+NETPLAY_API void set_chat(int mode, bool pick_previews);
+// This console's player slot in the current online match (0..3).
+NETPLAY_API int local_slot();
+NETPLAY_API void end_kept_search(const char* why);
+// The last online frame (after its 0xB0): skip 0 none, 1 waiting for the other player's inputs, 2 halted by time sync; advanced
+// by time sync; the time sync offset as last measured (us, above 0: this side is ahead).
+struct FrameTrace { int skip = 0; bool advanced = false; int32_t offset_us = 0; };
+NETPLAY_API FrameTrace frame_trace();
 // The input delay from the next game on: `frames` 1..9, or automatic (2..5 from the round trip at each game's start).
 NETPLAY_API void set_delay(int frames, bool automatic);
 }

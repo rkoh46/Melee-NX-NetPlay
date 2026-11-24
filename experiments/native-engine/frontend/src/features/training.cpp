@@ -225,17 +225,20 @@ void frame_advance(const MuPadStatus pads[4]) {
 // ---- "Go to Training": from anywhere offline into an offline Training match, as upstream's Practice menu does it
 // (native_practice.cpp, TestTraining and the press-through of Training's menus): the picks are set, the game is
 // asked for Training's scene, then the character select is confirmed with Start and the stage is picked at once.
-struct Enter { bool on = false; uint32_t ticks = 0; bool seen_select = false; int stage = 32; } enter;
-void go_training(int character, int cpu_character) {
+struct Enter { bool on = false; uint32_t ticks = 0; bool seen_select = false; int stage = 32; bool from_online = false; } enter;
+bool go_training_from(int character, int costume, int cpu_character, int cpu_costume, bool from_online) {
   MuGameApi* g = game();
-  if (!g || !g->practice || online() || replay_playing()) return;
-  if (character >= 0 && character < 128) { int32_t a[3] = {0, character, 0}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
-  if (cpu_character >= 0 && cpu_character < 26) { int32_t a[3] = {1, cpu_character, 0}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
+  if (!g || !g->practice || (online() && !from_online) || replay_playing()) return false;
+  if (character >= 0 && character < 128) { int32_t a[3] = {0, character, std::max(costume, 0)}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
+  if (cpu_character >= 0 && cpu_character < 26) { int32_t a[3] = {1, cpu_character, std::max(cpu_costume, 0)}; g->practice(MU_PRACTICE_TRAINING_PICK, a, 3); }
   int32_t m[1] = {int32_t(kTrainingMajor)};
   g->practice(MU_PRACTICE_REQUEST_MAJOR, m, 1);
-  enter = Enter{}; enter.on = true;
-  say("training: into Training as character %d (CPU %d) from scene %u/%u", character, cpu_character, scene_major(), scene_minor());
+  enter = Enter{}; enter.on = true; enter.from_online = from_online;
+  say("training: into Training as character %d (CPU %d) from scene %u/%u%s", character, cpu_character, scene_major(), scene_minor(),
+      from_online ? " (from the online screens)" : "");
+  return true;
 }
+void go_training(int character, int cpu_character) { go_training_from(character, 0, cpu_character, 0, false); }
 void enter_tick(MuPadStatus pads[4]) {
   if (!enter.on) return;
   ++enter.ticks;
@@ -243,7 +246,7 @@ void enter_tick(MuPadStatus pads[4]) {
   if (major == kTrainingMajor && minor < 2) enter.seen_select = true;
   const auto neutral = [&] { for (int i = 0; i < 4; ++i) { const int8_t err = pads[i].err; pads[i] = MuPadStatus{}; pads[i].err = err; } };
   if (major == kTrainingMajor && minor >= 2 && enter.seen_select) { enter.on = false; say("training: in the Training match at retrace %u", retrace()); }
-  else if (enter.ticks > 60 * 15 || online() || (major != kTrainingMajor && enter.ticks > 180)) { enter.on = false; say("training: stopped pressing through Training's menus (scene %u/%u)", major, minor); }
+  else if (enter.ticks > 60 * 15 || (online() && !enter.from_online) || (major != kTrainingMajor && enter.ticks > 180)) { enter.on = false; say("training: stopped pressing through Training's menus (scene %u/%u)", major, minor); }
   else if (major == kTrainingMajor && minor == 1 && enter.stage < 0) {
     enter.on = false; say("training: at the stage select; the controller picks");   // --feature-test training:N:-1
   } else if (major == kTrainingMajor && minor == 1) {
@@ -364,6 +367,10 @@ uint32_t training_option_bits() {
   if (t & MU_PC_TOOL_LOOP) te |= MU_GAME_OPTION_LAB_LOOP;
   return te;
 }
+bool training_go(int character, int costume, int cpu_character, int cpu_costume, bool from_online) {
+  return go_training_from(character, costume, cpu_character, cpu_costume, from_online);
+}
+bool training_entering() { return enter.on; }
 void training_pad_hook(MuPadStatus pads[4]) { test_tick(); enter_tick(pads); frame_advance(pads); }
 void training_scene_changed() {
   if (snapshot_store::running() && !replay_playing()) snapshot_store::release("the scene ended");

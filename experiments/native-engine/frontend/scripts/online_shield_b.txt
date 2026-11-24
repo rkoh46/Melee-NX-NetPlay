@@ -1,0 +1,24 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_B): side b of the opponent shield colour test. The menus as
+# online_unranked.txt (one fighter further: Fox), then in the online match (scene 08 02) Fox stands and shields twice for five
+# seconds, so that side a's screen shows Fox's shield in side b's shield_color_online. Back on the select after the match it holds
+# Z (Slippi's "Hold Z to disconnect"), which ends the session for side a too (Training after online, features/search.cpp).
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132 sx=127
+138
+150 A
+156
+240 START
+246
+2400 Z
+2600
+@scene 08 02
+200 R
+500
+700 R
+1000

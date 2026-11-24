@@ -1,0 +1,19 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_A): play while you search (features/search.cpp).
+# From boot to an Unranked search by the game's own menus, then L and R held on Slippi's character select while it searches:
+# the game goes to Training with the locked-in fighter and the search goes on. When the other side (online_keep_search_b.txt,
+# which starts its search about 20 s later) is found, the game comes back to the select by itself and the match is played.
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+# Slippi's character select: Up onto Falco, A, START to search, then L+R held for a little over a second.
+120 sy=127
+132
+150 A
+156
+240 START
+246
+330 L R
+410

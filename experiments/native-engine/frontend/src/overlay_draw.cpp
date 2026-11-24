@@ -338,6 +338,104 @@ void draw_stats(ImDrawList* dl, const overlay::Config& c, const overlay::Snapsho
   }
 }
 
+// ---- the network panel (netoverlay 1), adapted from melee-unlocked's port/runtime/gx/net_overlay.cpp (GPL-2.0-or-later):
+// the last 10 s of online ticks, newest at the right. Frame time (time since the tick before, yellow when late) with the tick's
+// own work inside it (green); a tick that waited for the other player's inputs is a red column; time sync halts (yellow) and
+// advances (blue) are marks at the top; rollbacks below, by depth (top: 7 frames); ping as a line (top: 200 ms); marks from the
+// D-pad (or a long wait) cross both plots.
+void draw_net(ImDrawList* dl, int ww, int wh, float top) {
+  static std::vector<overlay::NetSample> recs;   // render thread only
+  if (!&features::net_overlay_samples || !features::net_overlay_samples(recs) || recs.empty()) return;
+  constexpr size_t kWindow = 600;
+  constexpr float kFrameMs = 16.683f, kTimeScaleMs = 50.0f, kPingScaleMs = 200.0f;
+  constexpr int kDepthScale = 7;
+  const size_t n = std::min(recs.size(), kWindow);
+  const overlay::NetSample* r0 = recs.data() + (recs.size() - n);
+  const float text_h = ImGui::GetTextLineHeight();
+  const float panel_w = std::min(640.0f, float(ww) - 24.0f);
+  const char* const labels[] = {"frame time", "work", "wait", "rollback (top: 7)", "shed", "advanced", "ping (top: 200 ms)", "mark"};
+  int legend_rows = 1; float used = 0;
+  for (const char* label : labels) {
+    const float size = 21.0f + ImGui::CalcTextSize(label).x;
+    if (used > 0 && used + size > panel_w - 16.0f) { ++legend_rows; used = 0; }
+    used += size;
+  }
+  const float panel_h = 3.0f * text_h + 116.0f + float(legend_rows - 1) * (text_h + 3.0f);
+  if (panel_w < 240.0f || float(wh) < panel_h + top + 12.0f) return;
+  const ImVec2 o(float(ww) - panel_w - 12.0f, top);
+  const float plot_x = o.x + 8.0f, plot_w = panel_w - 16.0f;
+  const float time_y = o.y + 8.0f + 2.0f * text_h + 4.0f, time_h = 64.0f;
+  const float roll_y = time_y + time_h + 4.0f, roll_h = 24.0f;
+  const float col_w = plot_w / float(kWindow), bar_w = std::max(1.0f, col_w);
+  const ImU32 back = IM_COL32(10, 12, 18, 175), plot_back = IM_COL32(20, 22, 28, 170);
+  const ImU32 textc = IM_COL32(236, 240, 246, 255), dim = IM_COL32(160, 168, 184, 255);
+  const ImU32 interval_col = IM_COL32(90, 110, 140, 255), work_col = IM_COL32(120, 220, 140, 255);
+  const ImU32 slow_col = IM_COL32(250, 214, 60, 255), wait_col = IM_COL32(230, 70, 70, 220);
+  const ImU32 shed_col = IM_COL32(250, 214, 60, 255), advance_col = IM_COL32(120, 200, 255, 255);
+  const ImU32 roll_col = IM_COL32(255, 150, 60, 255), ping_col = IM_COL32(0, 255, 255, 200), mark_col = IM_COL32(220, 130, 255, 255);
+  dl->AddRectFilled(o, ImVec2(o.x + panel_w, o.y + panel_h), back, 6.0f);
+  dl->AddRectFilled(ImVec2(plot_x, time_y), ImVec2(plot_x + plot_w, time_y + time_h), plot_back);
+  dl->AddRectFilled(ImVec2(plot_x, roll_y), ImVec2(plot_x + plot_w, roll_y + roll_h), plot_back);
+  auto column = [&](size_t i) { return plot_x + col_w * float(kWindow - n + i); };
+  unsigned rollbacks = 0, deepest = 0, waited = 0, shed = 0, advanced = 0, marks = 0;
+  float px0 = 0, py0 = 0;
+  for (size_t i = 0; i < n; ++i) {
+    const overlay::NetSample& r = r0[i];
+    const float x = column(i);
+    if (r.flags & 1) {
+      ++waited;
+      dl->AddRectFilled(ImVec2(x, time_y), ImVec2(x + bar_w, time_y + time_h), wait_col);
+    } else {
+      const float interval = i > 0 ? float((r.wall - r0[i - 1].wall) * 1000.0) : kFrameMs;
+      const float ih = time_h * std::clamp(interval / kTimeScaleMs, 0.0f, 1.0f);
+      const float wh2 = time_h * std::clamp(r.sim_ms / kTimeScaleMs, 0.0f, 1.0f);
+      dl->AddRectFilled(ImVec2(x, time_y + time_h - ih), ImVec2(x + bar_w, time_y + time_h), interval > kFrameMs * 1.5f ? slow_col : interval_col);
+      dl->AddRectFilled(ImVec2(x, time_y + time_h - wh2), ImVec2(x + bar_w, time_y + time_h), work_col);
+    }
+    if (r.flags & (2 | 4)) {
+      const bool is_shed = (r.flags & 2) != 0;
+      ++(is_shed ? shed : advanced);
+      const ImU32 col = is_shed ? shed_col : advance_col;
+      dl->AddRectFilled(ImVec2(x - 1.0f, time_y), ImVec2(x + 2.0f, time_y + 10.0f), col);
+      dl->AddTriangleFilled(ImVec2(x - 4.0f, time_y + 10.0f), ImVec2(x + 5.0f, time_y + 10.0f), ImVec2(x + 0.5f, time_y + 16.0f), col);
+    }
+    if (r.rollbacks) {
+      rollbacks += r.rollbacks;
+      deepest = std::max<unsigned>(deepest, r.depth);
+      const float depth = r.depth ? float(std::min<int>(r.depth, kDepthScale)) : 0.5f;
+      const float rh = roll_h * depth / float(kDepthScale);
+      dl->AddRectFilled(ImVec2(x, roll_y + roll_h - rh), ImVec2(x + std::max(2.0f, bar_w), roll_y + roll_h), roll_col);
+    }
+    const float px = x + bar_w * 0.5f;
+    const float py = time_y + time_h - time_h * std::clamp(float(r.ping_ms) / kPingScaleMs, 0.0f, 1.0f);
+    if (i > 0) dl->AddLine(ImVec2(px0, py0), ImVec2(px, py), ping_col, 1.0f);
+    px0 = px; py0 = py;
+    if (r.flags & (8 | 16 | 32 | 64)) {
+      ++marks;
+      dl->AddLine(ImVec2(x, time_y), ImVec2(x, roll_y + roll_h), mark_col, 1.0f);
+      dl->AddTriangleFilled(ImVec2(x - 3, roll_y + roll_h - 5), ImVec2(x + 3, roll_y + roll_h - 5), ImVec2(x, roll_y + roll_h), mark_col);
+    }
+  }
+  const float guide_y = time_y + time_h - time_h * (kFrameMs / kTimeScaleMs);
+  dl->AddLine(ImVec2(plot_x, guide_y), ImVec2(plot_x + plot_w, guide_y), IM_COL32(210, 215, 225, 90), 1.0f);
+  char line[160];
+  std::snprintf(line, sizeof line, "Network and timing   ping %u ms   rollbacks %u (deepest %u)", unsigned(r0[n - 1].ping_ms), rollbacks, deepest);
+  dl->PushClipRect(o, ImVec2(o.x + panel_w, o.y + panel_h), true);
+  dl->AddText(ImVec2(plot_x, o.y + 6.0f), textc, line);
+  std::snprintf(line, sizeof line, "waited %u ticks   shed %u   advanced %u   marks %u", waited, shed, advanced, marks);
+  dl->AddText(ImVec2(plot_x, o.y + 6.0f + text_h), dim, line);
+  const ImU32 colors[] = {interval_col, work_col, wait_col, roll_col, shed_col, advance_col, ping_col, mark_col};
+  float kx = plot_x, ky = roll_y + roll_h + 4.0f;
+  for (size_t i = 0; i < sizeof labels / sizeof labels[0]; ++i) {
+    const float size = 21.0f + ImGui::CalcTextSize(labels[i]).x;
+    if (kx > plot_x && kx + size > plot_x + plot_w) { kx = plot_x; ky += text_h + 3.0f; }
+    dl->AddRectFilled(ImVec2(kx, ky + 3.0f), ImVec2(kx + 8.0f, ky + text_h - 3.0f), colors[i]);
+    dl->AddText(ImVec2(kx + 11.0f, ky), dim, labels[i]);
+    kx += size;
+  }
+  dl->PopClipRect();
+}
+
 // ---- over the match ----
 float to_x(const Rect& g, float x640) { return g.x0 + x640 / 640.0f * g.w(); }
 float to_y(const Rect& g, float y480) { return g.y0 + y480 / 480.0f * g.h(); }
@@ -586,5 +684,7 @@ void overlay_draw(int ww, int wh) {
   if (s.lab_panel) draw_training(dl, s, g, base);
   else draw_inputs(dl, c, s, g, base);
   draw_stats(dl, c, s, ww, base);
+  // The network panel: top right, below the statistics box when that is on.
+  draw_net(dl, ww, wh, (c.fps || c.graph || c.adapter_rate) ? 8.0f + 150.0f * base : 12.0f);
 }
 }  // namespace fe

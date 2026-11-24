@@ -1,0 +1,15 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_B): the other side of online_keep_search_a.txt. Picks Fox and
+# starts its Unranked search about 20 s after side a, so that side a is in Training, away from its select, when they are matched.
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132 sx=127
+138
+150 A
+156
+1400 START
+1406

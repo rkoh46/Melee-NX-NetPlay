@@ -179,6 +179,7 @@ void writer_main() {
     if (out) { ok = std::fwrite(job.second.data(), 1, job.second.size(), out) == job.second.size(); ok = std::fclose(out) == 0 && ok; }
     if (raw != job.second.size()) say("replay: %s %s (%zu bytes, %zu as .slp)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size(), raw);
     else say("replay: %s %s (%zu bytes)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size());
+    if (ok) net_trace_replay_saved(path);           // an online match's session trace, beside it (netoverlay.cpp)
     lock.lock();
     ++writes_done;
     write_cv.notify_all();

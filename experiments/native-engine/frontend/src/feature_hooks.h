@@ -15,6 +15,7 @@
 //   menu_entries()                the rows the in-game menu shows on the modules' pages
 //   hud_lines()                   short text lines for the overlay, read by the render or menu thread
 //   dispatch_reply(...)           after the netplay host answered a slippi_command (play mode with netplay), read only
+//   dispatch_exchange(...)        the same, with the payload and the result, for every command the netplay host answered
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <climits>
@@ -89,6 +90,13 @@ void add_hud(HudFn fn);
 using ReplyFn = void (*)(uint8_t command, const uint8_t* response, uint32_t size);
 void add_reply(ReplyFn fn);
 
+// Every slippi_command the netplay host answered (the modules did not take it), with its payload and answer, on the simulation
+// thread; `resim`: the game is re-simulating frames for a rollback. Read only (the session trace and the network overlay read
+// 0xB0, the online inputs, and 0xB2, a rollback's state load).
+using ExchangeFn = void (*)(uint8_t command, const uint8_t* payload, uint32_t payload_size, const uint8_t* response, uint32_t response_size,
+                            int32_t result, bool resim);
+void add_exchange(ExchangeFn fn);
+
 // ---- what play mode calls ----
 void dispatch_tables(MuHostApi* host, MuGameApi* game);
 int32_t dispatch_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity,
@@ -97,6 +105,8 @@ void dispatch_retrace(const Retrace& info);
 bool dispatch_setting(const std::string& key, const std::string& value);
 void dispatch_run_end();
 void dispatch_reply(uint8_t command, const uint8_t* response, uint32_t size);
+void dispatch_exchange(uint8_t command, const uint8_t* payload, uint32_t payload_size, const uint8_t* response, uint32_t response_size,
+                       int32_t result, bool resim);
 const std::vector<MenuEntry>& menu_entries();
 std::vector<HudLine> hud_lines();
 // A module asks play mode to start the game again with these arguments added (the replay viewer's "Watch

@@ -1,0 +1,340 @@
+Melee-NX-NetPlay 0.4.4 (patches/net-0005), as melee-unlocked does them (its slippi_online.cpp search_away / kept_search and
+handle of command 0xED, port/runtime/abi/mu_pick_preview.h):
+- Play while you search: a kept search (slippi::online::keep_search) goes on through the game's own cleanup commands while the
+  player plays offline (the frontend's search module decides when; nothing changes unless the player chose it).
+- search_info(): the search's state, mode, the locked-in fighter, whether the others locked in, elapsed time, error and
+  opponent, for that module (and the warm-up room, which keeps a Direct or Teams connection the same way).
+- Live pick previews between two Melee-NX-NetPlay builds: the build message goes to version 2 with flag 0x04 (this build reads
+  pick previews) and NP_MSG_NX_PICK (0xD1) carries melee-unlocked's pick preview bytes; command 0xED answers the game's online
+  character select (op 0 send, op 1 read). Against Slippi Dolphin or melee-unlocked nothing is sent and every slot reads empty.
+- frame_trace(): the last online frame's wait, time sync halt or advance and time sync offset (the session trace and the network
+  overlay).
+Applied by ../net_sources.sh after net-0004; mu_pick_preview.h is copied from the fetched tree there. port/ is unchanged.
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -512,6 +512,7 @@
+       nx.received = true;
+       nx.pause_rule = (flags & 1) != 0;
+       nx.no_pause = nx.pause_rule && (flags & 2) != 0;
++      nx.pick_previews = version >= 2 && (flags & 4) != 0;   // patches/net-0005
+       if ((packet >> has_shield) && has_shield == 1 && (packet >> r >> g >> bl)) nx.shield = 0x1000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | bl;
+       if ((packet >> c1) && (packet >> c2)) {
+         nx.port_colour[0] = c1 >= 1 && c1 <= 4 ? (int8_t)(c1 - 1) : (int8_t)-1;
+@@ -522,6 +523,21 @@
+                 nx.no_pause ? "off" : "on", nx.shield ? "" : "none ", nx.shield & 0xFFFFFFu, nx.port_colour[0], nx.port_colour[1]);
+       break;
+     }
++    case NP_MSG_NX_PICK: {      // patches/net-0005
++      if (!slippi::online::config().nx_build_message) { host::log("slippi: unknown netplay message %u", mid); break; }
++      uint8_t port = 0;
++      if (!(packet >> port) || port > 3 || port == player_idx_) { host::log("slippi: invalid pick preview"); break; }
++      std::vector<uint8_t> wire;
++      uint8_t b = 0;
++      while (wire.size() < 64 && (packet >> b)) wire.push_back(b);
++      std::lock_guard<std::mutex> lk(nx_mutex_);
++      if (!remote_pick_[port].empty() || !wire.empty()) {
++        static int logged = 0;
++        if (logged < 3) { ++logged; host::log("slippi: pick preview from port %u (%zu bytes, fighter %d)", port, wire.size(), wire.size() > 1 ? (int)wire[1] : -1); }
++      }
++      remote_pick_[port] = std::move(wire);
++      break;
++    }
+     default: host::log("slippi: unknown netplay message %u", mid); break;
+   }
+ }
+@@ -884,8 +900,10 @@
+   sent_no_pause_ = !cfg.direct_pause;
+   for (int i = 0; i < 2; ++i) sent_port_colour_[i] = (int8_t)std::clamp(cfg.port_colour[i], -1, 3);
+   auto p = std::make_unique<Packet>();
+-  *p << (uint8_t)NP_MSG_NX_BUILD << (uint8_t)'N' << (uint8_t)'X' << (uint8_t)'B' << (uint8_t)1 << player_idx_
+-     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0));
++  // Version 2 (patches/net-0005): flag 0x04, this build reads live pick previews (NP_MSG_NX_PICK). A version 1 reader
++  // ignores the flag; the layout after the flags is unchanged.
++  *p << (uint8_t)NP_MSG_NX_BUILD << (uint8_t)'N' << (uint8_t)'X' << (uint8_t)'B' << (uint8_t)2 << player_idx_
++     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0) | (cfg.pick_previews ? 4 : 0));
+   const uint32_t shield = cfg.shield_online;
+   if (shield & 0x1000000u) *p << (uint8_t)1 << (uint8_t)(shield >> 16) << (uint8_t)(shield >> 8) << (uint8_t)shield;
+   else *p << (uint8_t)0;
+@@ -907,6 +925,26 @@
+     ++seen;
+   }
+   return seen == remote_player_count_ && off;     // a remote player without the message (Slippi Dolphin): Slippi's rule
++}
++bool NetplayClient::SendPickPreview(const uint8_t* wire, size_t size) {
++  if (GetSlippiConnectStatus() != ConnectStatus::CONNECTED || !slippi::online::config().pick_previews) return false;
++  bool any = false;
++  {
++    std::lock_guard<std::mutex> lk(nx_mutex_);
++    for (int port = 0; port < 4; ++port) if (port != player_idx_ && remote_nx_[port].received && remote_nx_[port].pick_previews) any = true;
++  }
++  if (!any) return false;
++  auto p = std::make_unique<Packet>();
++  *p << (uint8_t)NP_MSG_NX_PICK << player_idx_;
++  for (size_t i = 0; i < size; ++i) *p << wire[i];
++  SendAsync(std::move(p));
++  return true;
++}
++bool NetplayClient::RemotePickPreview(uint8_t port, std::vector<uint8_t>* wire) const {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  if (port > 3 || remote_pick_[port].empty()) return false;
++  *wire = remote_pick_[port];
++  return true;
+ }
+ bool NetplayClient::PortColours(int8_t mine[2], int8_t theirs[2]) const {
+   std::lock_guard<std::mutex> lk(nx_mutex_);
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -44,6 +44,10 @@
+   // (each + 1, 0 none). Sent first on the reliable channel at connection, so it arrives before any selections. Slippi Dolphin
+   // and melee-unlocked log an unknown id and ignore it.
+   NP_MSG_NX_BUILD = 0xD0,
++  // Melee-NX-NetPlay 0.4.4 only (patches/net-0005): the sender's live pick on the online character select: the sender's port,
++  // then melee-unlocked's pick preview bytes (port/runtime/abi/mu_pick_preview.h, MU_PICK_PREVIEW_WIRE). Sent only to a peer
++  // whose build message (version 2 or later) has flag 0x04; display only, never match setup.
++  NP_MSG_NX_PICK = 0xD1,
+ };
+ 
+ // sf::Packet wire format: integers big-endian, bool as one byte, strings as u32 length + bytes.
+@@ -204,13 +208,18 @@
+   MatchInfo GetMatchInfoSnapshot() const { std::lock_guard<std::mutex> lk(match_mutex_); return match_info_; }
+   PlayerSelections GetSlippiRemoteChatMessage(bool chat_enabled);
+   // patches/net-0004: what the other players' builds said (NP_MSG_NX_BUILD), by port 0..3.
+-  struct NxBuild { bool received = false, pause_rule = false, no_pause = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
++  struct NxBuild { bool received = false, pause_rule = false, no_pause = false, pick_previews = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
+   NxBuild RemoteNxBuild(uint8_t port) const { std::lock_guard<std::mutex> lk(nx_mutex_); return port < 4 ? remote_nx_[port] : NxBuild{}; }
+   // Direct pausing is off: every remote player's build reads the rule and this player or one of them turned it off. Both
+   // sides decide from the same bytes: each sent its own once at connection, before its selections.
+   bool PauseOff() const;
+   // An online 1v1 where the other build sent its port colour choices: this side's as sent, theirs.
+   bool PortColours(int8_t mine[2], int8_t theirs[2]) const;
++  // patches/net-0005: live pick previews between Melee-NX-NetPlay builds. SendPickPreview queues this side's pick (the wire
++  // bytes of mu_pick_preview.h) to every connected remote whose build reads them; false when none does.
++  // RemotePickPreview: the newest pick a remote port sent (false: none since connection).
++  bool SendPickPreview(const uint8_t* wire, size_t size);
++  bool RemotePickPreview(uint8_t port, std::vector<uint8_t>* wire) const;
+   uint8_t GetSlippiRemoteSentChatMessage(bool chat_enabled);
+   int32_t CalcTimeOffsetUs();
+   bool IsWaitingForDesyncRecovery();
+@@ -296,6 +305,7 @@
+   NxBuild remote_nx_[4];
+   bool sent_no_pause_ = false;
+   int8_t sent_port_colour_[2] = {-1, -1};
++  std::vector<uint8_t> remote_pick_[4];   // patches/net-0005, under nx_mutex_
+   PlayerSelections remote_chat_message_;
+ };
+ 
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -29,6 +29,10 @@
+ uint8_t local_player_slot() { return 0; }
+ uint32_t port_colour_bits() { return 0; }
+ uint32_t shield_color(int) { return 0; }
++SearchInfo search_info() { return {}; }
++void keep_search(bool) {}
++void end_kept_search(const char*) {}
++void frame_trace(int* skip, bool* advanced, int32_t* offset_us) { *skip = 0; *advanced = false; *offset_us = 0; }
+ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vector<uint8_t>& q) {
+   if (!g_initialized) init();
+   return offline::handle(cmd, payload, payload_len, q);
+@@ -36,6 +40,7 @@
+ }  // namespace slippi::online
+ #else
+ #include "slippi_net.h"
++#include "mu_pick_preview.h"           // patches/net-0005: melee-unlocked's pick preview bytes (the fetched tree's copy, build time)
+ #include "slippi_input_suggestions.h"   // Slippi 3.7.0's rules for input suggestions (the fetched tree's copy, build time)
+ #include <atomic>
+ #include <chrono>
+@@ -198,6 +203,11 @@
+ bool g_currently_skipping = false, g_currently_advancing = false;
+ std::mt19937 g_rng((uint32_t)time_ms());
+ std::atomic<uint32_t> g_port_colour_bits{0};   // patches/net-0004: update_port_colours
++// patches/net-0005: the kept search, the search's start, the last online frame's time sync (the session trace), pick previews.
++bool g_search_kept = false;
++uint64_t g_search_started_ms = 0;
++int g_trace_skip = 0; bool g_trace_advanced = false; int32_t g_trace_offset_us = 0;
++uint8_t g_pick_last[16] = {}; uint32_t g_pick_last_frame = 0; bool g_pick_sent = false;
+ uint64_t g_rollbacks = 0;
+ std::atomic<int32_t> g_current_online_frame{0};   // for the rollback log line; net_diag reads it on the netplay thread
+ bool g_in_online_match = false;
+@@ -370,7 +380,9 @@
+ }
+ 
+ void cleanup_connection() {
+-  host::log("slippi: connection cleanup");
++  host::log("slippi: connection cleanup%s", g_search_kept ? " (the kept search ends)" : "");
++  g_search_kept = false;     // patches/net-0005
++  g_pick_sent = false;
+   suggest::stop("connection cleanup");
+   if (g_matchmaking || g_netplay) {
+     std::thread([mm = std::move(g_matchmaking), nc = std::move(g_netplay)]() mutable { mm.reset(); nc.reset(); }).detach();
+@@ -438,6 +450,7 @@
+   const int32_t frame_time = 16683, t1 = 10000, t2 = 2 * frame_time + t1;
+   if (frame % ONLINE_LOCKSTEP_INTERVAL == 0 && !g_currently_skipping && frame <= 120) {
+     int32_t offset = g_netplay->CalcTimeOffsetUs();
++    g_trace_offset_us = offset;   // patches/net-0005
+     if (offset > (frame <= 120 ? t1 : t2)) {
+       g_currently_skipping = true;
+       int max_skip = frame <= 120 ? 5 : 1;
+@@ -460,6 +473,7 @@
+   if (opponent_runahead()) return false;
+   if (frame % ONLINE_LOCKSTEP_INTERVAL == 0) {
+     int32_t offset = g_netplay->CalcTimeOffsetUs();
++    g_trace_offset_us = offset;   // patches/net-0005
+     float deviation = 0;
+     if (offset > -250 && offset < 8000) deviation = 0;
+     else if (offset < 0) deviation = std::min(-offset / (3 * 16683.0f), 1.0f) * 0.01f;
+@@ -643,6 +657,7 @@
+     suggest::note_sent(frame + delay, inputs);
+   }
+   const bool advancing = prepare_opponent_inputs(frame, skip, q);
++  g_trace_skip = skip_reason == OnlineFrameSkip::STALL ? 1 : skip ? 2 : 0; g_trace_advanced = advancing;   // patches/net-0005
+   suggest::note_frame_done(skip, advancing, inputs);
+ }
+ 
+@@ -684,6 +699,7 @@
+   else if (search.mode == Matchmaking::TEAMS) g_teams_codes->AddOrUpdateCode(shiftjis_to_utf8(sj));
+   search.connect_code = sj;
+   g_last_search = search;
++  g_search_started_ms = time_ms();   // patches/net-0005
+   if (Matchmaking::IsFixedRulesMode(search.mode)) {
+     if (g_local_selections.character_id >= 26) { g_forced_error = "The character you selected is not allowed in this mode"; return; }
+     if (g_local_selections.is_stage_selected && std::find(g_allowed_stages.begin(), g_allowed_stages.end(), g_local_selections.stage_id) == g_allowed_stages.end()) {
+@@ -1144,6 +1160,42 @@
+ int32_t current_online_frame() { return g_current_online_frame.load(std::memory_order_relaxed); }
+ bool is_online_match() { return g_in_online_match; }
+ uint32_t port_colour_bits() { return g_netplay ? g_port_colour_bits.load(std::memory_order_relaxed) : 0u; }
++// patches/net-0005
++SearchInfo search_info() {
++  SearchInfo out;
++  if (g_offline || !g_matchmaking) return out;
++  out.state = !g_forced_error.empty() ? (int)Matchmaking::ERROR_ENCOUNTERED : (int)g_matchmaking->GetMatchmakeState();
++  out.mode = (int)g_last_search.mode;
++  out.locked = g_local_selections.is_character_selected;
++  out.character = out.locked ? (int)g_local_selections.character_id : -1;
++  out.color = g_local_selections.character_color;
++  out.kept = g_search_kept;
++  if (out.state == (int)Matchmaking::CONNECTION_SUCCESS && g_netplay && g_netplay->GetSlippiConnectStatus() == NetplayClient::ConnectStatus::CONNECTED) {
++    const MatchInfo mi = g_netplay->GetMatchInfoSnapshot();
++    const int remotes = (int)g_matchmaking->RemotePlayerCount();
++    out.remote_ready = remotes > 0;
++    for (int i = 0; i < remotes && i < REMOTE_PLAYER_MAX; ++i) if (!mi.remote[i].is_character_selected) out.remote_ready = false;
++  }
++  out.elapsed_ms = g_search_started_ms ? (uint32_t)std::min<uint64_t>(time_ms() - g_search_started_ms, 0xFFFFFFFFu) : 0;
++  if (out.state == (int)Matchmaking::ERROR_ENCOUNTERED) out.error = !g_forced_error.empty() ? g_forced_error : g_matchmaking->GetErrorMessage();
++  if (out.state >= (int)Matchmaking::OPPONENT_CONNECTING) {
++    const std::vector<UserInfo> players = g_matchmaking->GetPlayerInfo();
++    for (int i = 0; i < (int)players.size(); ++i)
++      if (i != g_matchmaking->LocalPlayerIndex()) { if (!out.opponent.empty()) out.opponent += ", "; out.opponent += players[i].display_name; }
++  }
++  return out;
++}
++void keep_search(bool kept) {
++  if (g_search_kept == kept) return;
++  g_search_kept = kept;
++  host::log("slippi: kept search: %s", kept ? "the player left the select; the search goes on" : "back on the select");
++}
++void end_kept_search(const char* why) {
++  host::log("slippi: kept search over: %s", why ? why : "");
++  g_search_kept = false;
++  cleanup_connection();
++}
++void frame_trace(int* skip, bool* advanced, int32_t* offset_us) { *skip = g_trace_skip; *advanced = g_trace_advanced; *offset_us = g_trace_offset_us; }
+ uint32_t shield_color(int slot) {
+   if (slot < 0 || slot > 3 || !g_netplay) return 0;
+   if (slot == g_local_player_index) return g_config.shield_online & 0x1FFFFFFu;
+@@ -1200,6 +1252,43 @@
+   net_diag::match_ended("shutdown");
+ }
+ 
++// patches/net-0005: live pick previews (melee-unlocked's command 0xED, port/runtime/abi/mu_pick_preview.h, which the game's
++// online character select uses: op 0 sends this player's pick every frame, op 1 reads the others'). Only between Melee-NX-NetPlay
++// builds (NP_MSG_NX_PICK, to a peer whose build message says it reads them); against Slippi Dolphin or melee-unlocked nothing
++// is sent and every slot reads empty. Display only: match setup is still the 0x82 selections.
++void handle_pick_preview(const uint8_t* payload, uint32_t size, std::vector<uint8_t>& q) {
++  q.clear();
++  if (size < 1) return;
++  if (payload[0] == MU_PICK_PREVIEW_OP_SEND) {
++    if (size != 1 + MU_PICK_PREVIEW_WIRE || !g_netplay || !g_config.pick_previews) return;
++    MuPickPreview check;
++    if (!mu_pick_preview_decode(payload + 1, MU_PICK_PREVIEW_WIRE, &check)) return;
++    // melee-unlocked's sender rule: on change, at most one per MU_PICK_PREVIEW_INTERVAL frames, at once on lock-in.
++    static MuPickPreviewSender sender;
++    if (!g_pick_sent) { sender = MuPickPreviewSender{}; g_pick_sent = true; }
++    if (!mu_pick_preview_due(&sender, payload + 1, host::retrace_count(), check.locked && !sender.last[MU_PICK_PREVIEW_WIRE - 1])) return;
++    // Nobody reads it yet (no build message from a reader so far): forget it, so the same pick goes out once one does.
++    if (!g_netplay->SendPickPreview(payload + 1, MU_PICK_PREVIEW_WIRE)) sender = MuPickPreviewSender{};
++    return;
++  }
++  if (payload[0] != MU_PICK_PREVIEW_OP_READ) return;
++  MuPickPreviewSlot slots[MU_PICK_PREVIEW_REMOTES] = {};
++  if (g_netplay && g_config.pick_previews && g_netplay->GetSlippiConnectStatus() == NetplayClient::ConnectStatus::CONNECTED) {
++    int index = 0;
++    const uint8_t local = g_netplay->LocalPlayerPort();
++    for (uint8_t port = 0; port < 4 && index < MU_PICK_PREVIEW_REMOTES; ++port) {
++      if (port == local) continue;
++      std::vector<uint8_t> wire;
++      if (g_netplay->RemotePickPreview(port, &wire) && mu_pick_preview_decode(wire.data(), wire.size(), &slots[index].pick)) {
++        slots[index].valid = 1; slots[index].port = port;
++      }
++      ++index;
++    }
++  }
++  q.resize(MU_PICK_PREVIEW_REPLY);
++  q.resize(mu_pick_preview_reply_encode(slots, q.data(), q.size()));
++}
++
+ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vector<uint8_t>& q) {
+   if (!g_initialized) init();
+   if (g_offline) return offline::handle(cmd, payload, payload_len, q);
+@@ -1216,7 +1305,11 @@
+     case CMD_LOGOUT: g_user->LogOut(); return true;
+     case CMD_UPDATE: host::log("slippi: update requested by the game (ignored)"); return true;
+     case CMD_GET_ONLINE_STATUS: prepare_online_status(q); return true;
+-    case CMD_CLEANUP_CONNECTION: cleanup_connection(); return true;
++    case CMD_CLEANUP_CONNECTION:
++      // patches/net-0005: a kept search goes on through the game's own cleanups (the main menu sends one when it comes up).
++      if (g_search_kept) { host::log("slippi: kept search: the game's cleanup is skipped (the search goes on)"); return true; }
++      cleanup_connection(); return true;
++    case 0xED: handle_pick_preview(payload, payload_len, q); return true;   // patches/net-0005 (MU_PICK_PREVIEW_COMMAND)
+     case CMD_SEND_CHAT_MESSAGE: if (chat_enabled() && g_netplay) g_netplay->SendChatMessage(payload[0]); return true;
+     case CMD_GET_NEW_SEED: q.clear(); append_u32(q, g_rng() % 0xFFFFFFFFu); return true;
+     case CMD_REPORT_GAME: handle_report_game(payload); return true;
+--- a/port/runtime/hle/slippi_online.h
++++ b/port/runtime/hle/slippi_online.h
+@@ -25,6 +25,8 @@
+   uint32_t shield_online = 0;        // this player's shield colour online, 0x1000000 | RGB (0: the port's own)
+   std::string blocked_codes[3];      // Unranked: matches with these connect codes are turned down (a new search starts)
+   bool nx_build_message = true;      // tests: false behaves as Slippi Dolphin (sends no build message, ignores the other's)
++  // Melee-NX-NetPlay 0.4.4 (patches/net-0005): live pick previews on the online character select, between two of its builds.
++  bool pick_previews = true;
+ };
+ Config& config();
+ // The input delay the next game uses: config().delay, or the automatic choice from the measured ping.
+@@ -47,5 +49,27 @@
+ uint32_t port_colour_bits();
+ uint32_t shield_color(int slot);
+ uint8_t local_player_slot();
++// patches/net-0005. Play while you search (melee-unlocked's kept search, its slippi_online.cpp search_away): the player left the
++// character select with an Unranked search running and plays offline meanwhile. While the search is kept the game's cleanup
++// commands (the main menu sends one when it comes up) leave it running; the game itself sees no session (it asks for nothing
++// online off the online screens), so whatever is played meanwhile is plain offline play. The warm-up room (melee-unlocked's
++// warmup_park: Direct or Teams, connected, not locked in) keeps the connection the same way.
++struct SearchInfo {
++  int state = -1;                // Matchmaking::ProcessState (0 idle .. 4 connected, 5 error), -1 offline
++  int mode = -1;                 // the last search's mode (1 Unranked, 2 Direct, 3 Teams, 4 Party)
++  bool locked = false;           // this player's selections are locked in
++  int character = -1, color = 0; // the locked-in fighter (external id) and costume
++  bool kept = false;
++  bool remote_ready = false;     // connected and every other player locked in (the warm-up room goes back then)
++  uint32_t elapsed_ms = 0;       // since the search started
++  std::string error, opponent;
++};
++SearchInfo search_info();
++void keep_search(bool kept);
++// A kept search that cannot go on (it stopped, or the player could not be brought back): the connection is cleaned up.
++void end_kept_search(const char* why);
++// The last online frame's time sync and wait: skip 0 none, 1 waiting for the other player's inputs, 2 time sync halt; advanced:
++// the frame was advanced for time sync; offset_us: the time sync offset as last measured (above 0: this side is ahead).
++void frame_trace(int* skip, bool* advanced, int32_t* offset_us);
+ 
+ }  // namespace slippi::online

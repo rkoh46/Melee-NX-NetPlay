@@ -20,12 +20,13 @@ struct Registry {
   std::vector<MenuEntry> menu;
   std::vector<HudFn> huds;
   std::vector<ReplyFn> replies;
+  std::vector<ExchangeFn> exchanges;
 };
 Registry& registry() { static Registry r; return r; }
 void ensure() {
   static std::once_flag once;
   std::call_once(once, [] {
-    register_options(); register_training(); register_replays(); register_overlays(); register_spectator(); register_netoverlay();
+    register_options(); register_training(); register_replays(); register_overlays(); register_spectator(); register_netoverlay(); register_search();
     if (present::linked()) { present::register_settings(); present::configure_from_arguments(options.rest); }
   });
 }
@@ -39,6 +40,7 @@ void add_run_end(RunEndFn fn) { registry().run_ends.push_back(fn); }
 void add_menu_entry(const MenuEntry& entry) { registry().menu.push_back(entry); }
 void add_hud(HudFn fn) { registry().huds.push_back(fn); }
 void add_reply(ReplyFn fn) { registry().replies.push_back(fn); }
+void add_exchange(ExchangeFn fn) { registry().exchanges.push_back(fn); }
 
 void dispatch_tables(MuHostApi* host, MuGameApi* game) {
   ensure();
@@ -83,6 +85,12 @@ void dispatch_run_end() {
 void dispatch_reply(uint8_t command, const uint8_t* response, uint32_t size) {
   ensure();
   for (ReplyFn fn : registry().replies) fn(command, response, size);
+}
+
+void dispatch_exchange(uint8_t command, const uint8_t* payload, uint32_t payload_size, const uint8_t* response, uint32_t response_size,
+                       int32_t result, bool resim) {
+  ensure();
+  for (ExchangeFn fn : registry().exchanges) fn(command, payload, payload_size, response, response_size, result, resim);
 }
 
 const std::vector<MenuEntry>& menu_entries() { ensure(); return registry().menu; }
