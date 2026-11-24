@@ -15,6 +15,11 @@
 #                          those connection attempts fails after 8 s and the side searches again (the console's
 #                          failed-connection-then-search-again path), then the two sides are paired
 #   MU_SANITIZE=address|thread   run the sanitizer build (build.sh with MU_SANITIZE): its reports go to {a,b}/san.*
+#   MU_MOCK_ARGS           more options for the matchmaking stand-in (--dead-lan, --chat, --ranks: ../tools/mock_matchmaking.py)
+#   MU_HTTP=1              also the stand-in for Slippi's HTTP services (../tools/mock_slippi_http.py: profile refresh, game
+#                          reports, replay uploads, saved to uploads/); MU_HTTP_ARGS more options for it (--no-upload)
+#   MU_USER_A, MU_USER_B   a folder whose files go into that side's Slippi user folder first (direct-codes.json, teams-codes.json)
+#   MU_ENV_A, MU_ENV_B     environment for one side ("NAME=value ...", test aids such as MELEE_NET_TEST_CHECKSUM)
 #   MU_VARIANT=null        the program without a graphics device (no picture, no controllers: pass MU_ARGS_A and MU_ARGS_B
 #                          "--online unranked"; the match is played by generated inputs). ThreadSanitizer runs use it: the
 #                          sanitizer's runtime can hang inside Mesa's software driver
@@ -43,6 +48,8 @@ for side, period, stick, given in (("a", 47, 80, sys.argv[3]), ("b", 61, -80, sy
     open(f"{sys.argv[2]}/{side}/pads.txt", "w").write(head + rearm + "\n".join(lines) + "\n@scene" + gates)
 PY
 for side in a b; do
+  user="MU_USER_$(echo $side | tr a-z A-Z)"
+  if [ -n "${!user:-}" ]; then mkdir -p "$run/$side/user"; cp -R "${!user}"/. "$run/$side/user/"; fi
   ini="MU_INI_$(echo $side | tr a-z A-Z)"
   if [ -n "${!ini:-}" ]; then cp "${!ini}" "$run/$side/settings.ini"; else echo "slippi_menus 1" > "$run/$side/settings.ini"; fi
 done
@@ -53,10 +60,11 @@ case "${MU_SANITIZE:-}" in
   thread) bin=$bin-tsan; san_env="TSAN_OPTIONS=handle_segv=0:history_size=4:second_deadlock_stack=1:suppressions=/t/tsan_graphics.supp:log_path=san" ;;
   *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
 esac
-mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FIRST"
+mock_args="${MU_MOCK_ARGS:-}"; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="$mock_args --dead-first $MU_DEAD_FIRST"
 timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-test}-online-$$" --network none -e SLIPPI_MM_URL=ws://127.0.0.1:8765 -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -v "$disc:/iso:ro" -v "$work/out:/b:ro" \
   -v "$here/../tools:/t:ro" -v "$run:/out" -e FRAMES="$frames" -e EXTRA="$*" -e ARGS_A="${MU_ARGS_A:-}" -e ARGS_B="${MU_ARGS_B:-}" -e ONLY_A="${MU_ONLY_A:-0}" \
-  -e EVERY="${MU_SHOT_EVERY:-5}" -e TWO="${MU_TWO_SCREENS:-0}" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+  -e EVERY="${MU_SHOT_EVERY:-5}" -e TWO="${MU_TWO_SCREENS:-0}" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e HTTP="${MU_HTTP:-0}" -e HTTP_ARGS="${MU_HTTP_ARGS:-}" -e ENV_A="${MU_ENV_A:-}" -e ENV_B="${MU_ENV_B:-}" \
+  -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
     for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
@@ -64,11 +72,12 @@ timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-te
     if [ "$TWO" = 1 ]; then Xvfb :98 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb-b.log 2>&1 & display_b=:98
       for i in $(seq 100); do xwd -display :98 -root -silent >/dev/null 2>&1 && break; sleep 0.1; done; fi
     [ "$ONLY_A" = 1 ] || { (while true; do python3 /t/mock_matchmaking.py 8765 $MOCK_ARGS; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!; sleep 1; }
+    [ "$HTTP" != 1 ] || { python3 /t/mock_slippi_http.py 8766 --save /out/uploads $HTTP_ARGS > /out/mock-http.txt 2>&1 & http=$!; sleep 0.5; }
     common="--play --iso /iso/GALE01.iso --frames $FRAMES --novsync --window 640x480 --fake-user $EXTRA"
     [ -z "$SAN_ENV" ] || export "$SAN_ENV"
-    cd /out/a && /b/$BIN $common --out /out/a --settings /out/a/settings.ini --play-script /out/a/pads.txt --net-inputs 1 $ARGS_A >/out/a/console.log 2>&1 & a=$!
+    cd /out/a && env $ENV_A /b/$BIN $common --out /out/a --settings /out/a/settings.ini --play-script /out/a/pads.txt --net-inputs 1 $ARGS_A >/out/a/console.log 2>&1 & a=$!
     b=$a
-    [ "$ONLY_A" = 1 ] || { cd /out/b && DISPLAY=$display_b /b/$BIN $common --out /out/b --settings /out/b/settings.ini --play-script /out/b/pads.txt --net-inputs 2 $ARGS_B >/out/b/console.log 2>&1 & b=$!; }
+    [ "$ONLY_A" = 1 ] || { cd /out/b && env DISPLAY=$display_b $ENV_B /b/$BIN $common --out /out/b --settings /out/b/settings.ini --play-script /out/b/pads.txt --net-inputs 2 $ARGS_B >/out/b/console.log 2>&1 & b=$!; }
     n=0
     while kill -0 $a 2>/dev/null || kill -0 $b 2>/dev/null; do
       sleep "$EVERY"; n=$((n+1))
@@ -77,8 +86,10 @@ timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-te
     done
     wait $a; ra=$?; rb=0; [ "$ONLY_A" = 1 ] || { wait $b; rb=$?; }
     [ -n "${mock:-}" ] && kill $mock 2>/dev/null
+    [ -n "${http:-}" ] && kill $http 2>/dev/null
     echo "instance exit codes: a=$ra b=$rb"' || echo "test-online-linux: container ended with $?"
 [ -f "$run/mock.txt" ] && cat "$run/mock.txt"
+[ -f "$run/mock-http.txt" ] && cat "$run/mock-http.txt"
 # Only the rows of the online match scene (8/2): after a match the game is back on Slippi's character select with the
 # last match frame still in its state and a menu RNG that the two sides do not share, which would read as "different".
 if [ -f "$run/b/digest-net-confirmed.csv" ]; then

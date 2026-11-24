@@ -84,6 +84,7 @@ struct NetRun {
   uint64_t match_retraces = 0, nudged_retraces = 0, slow_retraces = 0, fast_retraces = 0;
 } net;
 void (*speed_hook)(double) = nullptr;
+std::string (*replay_path_hook)() = nullptr;
 constexpr double kMatchRate = 16667.0 / 16683.0;   // patches/net-0003: Slippi's 59.94 Hz frame on the host's 60 Hz one
 // Game thread (inside the netplay device's time sync), only when the value changes.
 void net_set_speed(double speed) {
@@ -390,6 +391,7 @@ int start(const Options& given, Log log) {
   net.started = net.last_request = Clock::now();     // a search from the game's own menu has no online_test_match call
   netplay_bridge::Setup setup;
   setup.set_speed = net_set_speed;
+  setup.replay_path = replay_path_hook;
   {
     netplay_bridge::OnlinePrefs prefs;
     prefs.direct_pause = options.direct_pause; prefs.port_colour[0] = options.port_colour[0]; prefs.port_colour[1] = options.port_colour[1];
@@ -498,5 +500,6 @@ void stop_tracking() {
 }
 void shutdown() { if (net.on) netplay_bridge::shutdown(); net.on = false; }
 void set_speed_hook(void (*hook)(double)) { speed_hook = hook; }
+void set_replay_path_hook(std::string (*hook)()) { replay_path_hook = hook; }
 uint64_t rollbacks() { return net.loads; }
 } // namespace net_host

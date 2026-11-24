@@ -1,0 +1,84 @@
+Native engine app (experiments/native-engine/frontend): which controller drives the in-game menu, after melee-unlocked's
+host/settings_nav.h (GPL-2.0-or-later): the menu follows the pad that last went from rest to active (the L + R + Start
+pad when that opened it), so a drifting second pad cannot take the menu; after it closes the game reads neutral pads
+until every button is up and the driving pad is at rest (one second at most). After patches/0104 and 0111. Applied to a
+build-time copy only.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/host/game_menu.cpp
++++ b/port/runtime/host/game_menu.cpp
+@@ -88,6 +88,9 @@
+ int g_step = 0, g_step_frames = 0;
+ bool g_step_armed = false;
+ int g_combo_frames = 0;
++int g_nav_port = 0;                   // the pad that drives the menu (patches/0114)
++bool g_nav_rest[4] = {true, true, true, true}, g_nav_was_open = false;
++int g_nav_closed_frames = 60;
+ uint16_t g_prev_buttons = 0;
+ int g_prev_dir = 0, g_repeat = 0;
+ bool g_touch_visible = false;
+@@ -427,12 +430,13 @@
+     // and pressing A during the hold cancels it until the buttons are let go.
+     static bool g_combo_blocked = false;
+     bool combo = false, any_held = false;
++    int combo_port = -1;
+     for (int i = 0; i < 4; ++i) {
+       if (pads[i].err != 0) continue;
+       const uint32_t b = pads[i].button;
+       if ((b & (BTN_L | BTN_R | BTN_START)) == (BTN_L | BTN_R | BTN_START)) {
+         any_held = true;
+-        if (b & BTN_A) g_combo_blocked = true; else combo = true;
++        if (b & BTN_A) g_combo_blocked = true; else { combo = true; if (combo_port < 0) combo_port = i; }
+       }
+     }
+     if (!any_held) g_combo_blocked = false;
+@@ -441,7 +445,35 @@
+     if (g_combo_frames == 1) log("menu: L+R+Start held");
+     // One hold toggles once: the buttons must be let go before the next toggle (a long hold
+     // used to open and close the menu every half second).
+-    if (g_combo_frames == 30) { set_open(!g_open.load()); g_combo_blocked = true; }
++    if (g_combo_frames == 30) { set_open(!g_open.load()); g_combo_blocked = true; if (combo_port >= 0) g_nav_port = combo_port; }
++    // Which controller drives the menu, and when the game gets its controllers back (patches/0114, after melee-unlocked's
++    // host/settings_nav.h, GPL-2.0-or-later): the menu follows the pad that went from rest to active last, so a second pad
++    // that never rests (a drifting stick, a trigger resting on the desk) cannot take the menu from the player's hands;
++    // after the menu closes the game reads neutral pads until every button is up and the driving pad is at rest, at most
++    // a second, so the press that closed the menu does not reach the game and a drifting pad cannot hold the game back.
++    {
++      const auto active = [&](int i) {
++        return pads[i].err == 0 && (pads[i].button || std::abs(pads[i].stick_x) >= 30 || std::abs(pads[i].stick_y) >= 30);
++      };
++      bool moved = false;
++      for (int i = 0; i < 4; ++i) {
++        const bool now = active(i);
++        if (g_open.load() && !moved && now && g_nav_rest[i]) { g_nav_port = i; moved = true; }
++        g_nav_rest[i] = pads[i].err == 0 && !now;
++      }
++      if (g_nav_port < 0 || g_nav_port > 3 || pads[g_nav_port].err != 0)
++        for (int i = 0; i < 4; ++i) if (pads[i].err == 0) { g_nav_port = i; break; }
++      if (!g_open.load()) {
++        if (g_nav_was_open) { g_nav_closed_frames = 0; g_nav_was_open = false; }
++        if (g_nav_closed_frames < 60) {
++          ++g_nav_closed_frames;
++          bool hold = false;
++          for (int i = 0; i < 4; ++i) if (pads[i].err == 0 && (pads[i].button || (i == g_nav_port && active(i)))) hold = true;
++          if (hold) for (int i = 0; i < 4; ++i) { const int8_t err = pads[i].err; pads[i] = {}; pads[i].err = err; }
++          else g_nav_closed_frames = 60;
++        }
++      } else g_nav_was_open = true;
++    }
+     if (!g_open.load()) { g_prev_buttons = 0; return; }
+ 
+     if (g_page == Page::Remap) {
+@@ -465,10 +497,10 @@
+       }
+       g_prev_buttons = 0; g_prev_dir = 0;
+     } else {
+-      // Navigation from whichever pad is active (the keyboard maps onto port 1's pad).
++      // Navigation from the pad that drives the menu (above; the keyboard maps onto port 1's pad).
+       uint16_t buttons = 0; int dir_y = 0, dir_x = 0;
+       for (int i = 0; i < 4; ++i) {
+-        if (pads[i].err != 0) continue;
++        if (pads[i].err != 0 || i != g_nav_port) continue;
+         buttons |= pads[i].button;
+         if (pads[i].stick_y > 64 || (pads[i].button & BTN_UP)) dir_y = -1; else if (pads[i].stick_y < -64 || (pads[i].button & BTN_DOWN)) dir_y = 1;
+         if (pads[i].stick_x > 64 || (pads[i].button & BTN_RIGHT)) dir_x = 1; else if (pads[i].stick_x < -64 || (pads[i].button & BTN_LEFT)) dir_x = -1;

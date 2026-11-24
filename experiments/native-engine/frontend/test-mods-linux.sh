@@ -16,6 +16,15 @@
 #   vanilla-refuse  --vanilla-only with a disc that is not GALE01 revision 2 (an 8-byte stand-in made here): refused
 #   install         the app's Mods page with a controller script: rogueMelee's .xdelta in mods/Downloads, Install, "Play it at
 #                   the next start"; then play mode with that settings.ini starts Rogue Mode as the rogue case does
+#   squad           offline Squad Strike (patches/0006): --auto-vs-menus through the VS character select twice, settings.ini
+#                   squad_strike 0 (the default) and 1, Z pressed on the hovered fighter before the coin goes down
+#                   (MU_AUTO_VS_Z): only the second makes a squad ("squad: P1 ..." at the match start)
+#   practice-cpu    Training with the Practice CPU on and every Practice CPU row of the in-game menu stepped once to the right
+#                   through the rows' own code (--feature-test practice-rows): the game's 0xF6 request gets those values
+#                   ("training: practice CPU sent to the game: ...")
+#   dsp             settings.ini dsp_lowpass 1 with no User/GC/dsp_coef.bin: the free table written to Sys/GC and read by the
+#                   mixer (its Adler-32 in the log), then a player's own file in User/GC taking priority
+# MU_DOCKER_NAME: container name prefix (default mnx-mods).
 # MU_MODS_DIR: a folder with mod profiles (mounted as <out>/mods) for vanilla-only. Output:
 # build/native-engine-gfx/run-mods-test/<case>/ (console.log, host.log, settings.ini, shots/). MU_TEST_LIMIT: time limit in s.
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -23,16 +32,20 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; shift
+# No case named: every case (a run that names none must not pass by running nothing).
+[ $# -gt 0 ] || set -- training-menu frozen vanilla-only vanilla-refuse mex rogue install squad practice-cpu dsp
+# The mod discs: MU_MODS_DIR, else the disc folder's mods/ when it has one.
+[ -n "${MU_MODS_DIR:-}" ] || { [ -d "$disc/mods" ] && export MU_MODS_DIR="$disc/mods"; } || true
 work="$repo/build/native-engine-gfx"; root="$work/run-mods-test"
 mkdir -p "$root"
 
 # $1 case folder, $2 frames, $3 seconds between screenshots, $4 extra play-mode arguments, $5 disc file in /iso or /out.
 run() {
   local dir=$1 frames=$2 every=$3 extra=$4 iso=${5:-/iso/GALE01.iso} name
-  name="mnx-mods-$(basename "$dir")"
+  name="${MU_DOCKER_NAME:-mnx-mods}-$(basename "$dir")"
   local mods=(); [ -n "${MU_MODS_DIR:-}" ] && mods=(-v "$MU_MODS_DIR:/out/mods:ro")
   timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "$name" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
-    ${mods[@]+"${mods[@]}"} -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$extra" -e ISO="$iso" -e SDL_AUDIODRIVER=dummy \
+    ${mods[@]+"${mods[@]}"} ${MU_RUN_ENV:-} -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$extra" -e ISO="$iso" -e SDL_AUDIODRIVER=dummy \
     "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
@@ -81,7 +94,7 @@ open(sys.argv[1], "w").write("\n".join(lines) + "\n")
 PY
     printf '%s\n' "iso=/iso/GALE01.iso" "frames=3600" "script=/out/script.txt" > "$dir/melee-nx-netplay/launcher.ini"
     printf '{"uid":"mock-test-1","playKey":"mock-test-only","connectCode":"MOCK#001","displayName":"Mock 1"}\n' > "$dir/melee-nx-netplay/User/Slippi/user.json"
-    timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name mnx-mods-training-menu --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
+    timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-mods}-training-menu" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
       -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
         Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
         export DISPLAY=:99
@@ -191,6 +204,31 @@ PY
     printf '%s\n' "130 A" "140" "400 START" "410" "520 A" "524" "600 A" "604" "660 sy=-127" "664" "690 sy=-127" "694" "740 A" "744" \
       "1000 sy=127" "1010" "1030 A" "1034" "1100 START" "1104" "1200 START" "1204" "1400 A" "1404" "1500 A" "1504" > "$dir/script.txt"
     MU_MODS_DIR="$app/mods" run "$dir" 3000 3 ""
+    ;;
+  squad)
+    for on in 0 1; do
+      dir="$root/squad-$on"; fresh "$dir"
+      printf '%s\n' "squad_strike $on" > "$dir/settings.ini"
+      MU_RUN_ENV="-e MU_AUTO_VS_Z=1" run "$dir" 1500 5 "--auto-vs-menus"
+      echo "squad_strike $on: $(grep -h 'offline Squad Strike' "$dir/console.log" | head -1); the match's lineup: $(grep -h 'squad: P[12] ' "$dir/console.log" | tr '\n' ';')"
+      report "$dir"
+    done
+    continue
+    ;;
+  dsp)
+    fresh "$dir"
+    printf '%s\n' "dsp_lowpass 1" > "$dir/settings.ini"
+    run "$dir" 400 5 "--auto-vs"
+    grep -h "low-pass\|DSP coefficient" "$dir/console.log" "$dir/host.log" 2>/dev/null | cut -c1-200
+    mkdir -p "$dir/User/GC"; cp "$dir/Sys/GC/dsp_coef.bin" "$dir/User/GC/dsp_coef.bin"
+    run "$dir" 400 5 "--auto-vs"
+    grep -h "low-pass\|DSP coefficient" "$dir/console.log" "$dir/host.log" 2>/dev/null | cut -c1-200
+    continue
+    ;;
+  practice-cpu)
+    fresh "$dir"
+    printf '%s\n' "practicecpu_on 1" > "$dir/settings.ini"
+    run "$dir" 1200 3 "--feature-test training --feature-test practice-rows"
     ;;
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac

@@ -1,0 +1,20 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_A, with online_training_after 1 and MU_ARGS_A="--feature-test
+# unranked-as-direct"): search again (features/search.cpp). The menus and the first match as online_unranked.txt; side b
+# (online_again_b.txt) ends the session after it, this side goes into Training against the last opponent's fighter, and once the
+# Training match runs "Search Unranked again?" is offered: D-pad Up searches again (the search kept from the start), and when side b
+# searches too the game comes back to the select by itself for the second match.
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132
+150 A
+156
+240 START
+246
+@scene 1C 02
+240 DU
+246

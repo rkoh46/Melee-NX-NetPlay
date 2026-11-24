@@ -18,11 +18,31 @@ struct MenuView {
   bool hint = false;          // settings.ini matchmakinghint
   uint32_t unlocked = 0xFFFFFFFFu;   // characters the memory card has
   int style = 0;              // settings.ini practicestyle (0..3)
+  int port = 0;               // the controller that opened it
 };
 // Render thread, once per drawn frame.
 MenuView menu_view();
 // Render thread, after practice_menu::frame: what the menu asked for.
 void menu_result(bool close, bool changed, bool stronger_changed);
+
+// The Practice menu's Search page (features/search.cpp; upstream native_practice.cpp start_search and its snapshot): a Slippi
+// search started from an offline Training match, which goes on while the player keeps training (the kept search).
+struct SearchView {
+  bool available = false;     // the page can be used here: the services program, an offline Training match, or a search running
+  bool can_start = false;     // nothing running: Unranked, Direct and Teams can start
+  bool searching = false;     // a search runs (started here or kept from the select)
+  const char* mode = "";      // "Unranked", "Direct", "Teams"
+  uint32_t elapsed_ms = 0;
+  int state = 0;              // the netplay object's search state (0 idle .. 4 connected, 5 error)
+  char opponent[40] = {};
+  char code[24] = {};
+  char note[96] = {};         // why the last start was refused (shown once in the menu's description box)
+};
+SearchView search_view();     // render thread
+// Render thread: start a search (1 Unranked, 2 Direct with `code`, 3 Teams with `code`), or stop the one running; acted on at
+// the next retrace on the simulation thread. `port` is the controller that drives the menu.
+void search_ask(int mode, const char* code, int port);
+void search_stop();
 
 }  // namespace fe::proai
 

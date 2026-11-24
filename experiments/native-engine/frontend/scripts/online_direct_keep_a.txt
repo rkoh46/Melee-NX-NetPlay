@@ -1,0 +1,24 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_A): Slippi Direct by a remembered connect code, and play while
+# searching for it (features/search.cpp). The online menu: down one row to Direct, A. Slippi's character select: Falco,
+# A, START opens the connect-code entry, which offers the last code used (command 0xBE, direct-codes.json from MU_USER_A); Z takes
+# it and START confirms, and the Direct search starts. Then L and R held: Training while the code is searched for. Side b
+# (online_direct_b.txt) starts its search about 25 s later; this side comes back to the select by itself and the match is played.
+@scene 01 00
+# The online menu is up with Unranked highlighted: down one row to Direct, A.
+170 sy=-127
+176
+230 A
+236
+@scene 08 00
+120 sy=127
+132
+150 A
+156
+240 START
+246
+330 Z
+336
+380 START
+386
+520 L R
+600

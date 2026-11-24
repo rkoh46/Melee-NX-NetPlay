@@ -35,6 +35,9 @@ struct Setup {
   // Slippi's time sync asks for a frame rate against real time (about 0.995..1.01, 1.0 outside a match); called on
   // the game thread when the value changes. The host paces its frames and its sound by it.
   void (*set_speed)(double speed) = nullptr;
+  // The replay of the game just reported, for Slippi's upload request (patches/net-0008: asked on the reporter's thread when the
+  // service's reply carries uploadUrl; may wait for the host's replay writer). Empty: none. Null: no uploads.
+  std::string (*replay_path)() = nullptr;
 };
 // Choices exchanged with another Melee-NX-NetPlay build (patches/net-0004; against anyone else they change nothing but this
 // player's own shield colour on this screen) and the Unranked skip list. From the next connection on.
@@ -78,6 +81,8 @@ struct SearchInfo {
   bool remote_ready = false;         // connected and every other player locked in
   uint32_t elapsed_ms = 0;           // since the search started
   std::string error, opponent;
+  std::string code;                  // the connect code searched for (Direct, Teams), patches/net-0010
+  int remote_character = -1, remote_color = 0;   // the first other player's pick once locked in (external id), patches/net-0010
 };
 NETPLAY_API SearchInfo search_info();
 NETPLAY_API void keep_search(bool kept);

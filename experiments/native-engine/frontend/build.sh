@@ -72,7 +72,7 @@ sync_tree() {
   # The runner this frontend was last brought up against. Play mode needs the runner's automatic input delay
   # (--net-delay auto, netplay_bridge::Setup::delay_auto), which is newer than 1c556fc and not committed yet: until
   # it is, the files on disk are used. Pin this to the commit that contains them (MU_SYNC_REF=<commit> meanwhile).
-  local ref="${MU_SYNC_REF:-3ea3dc6}" stage="$work/sync-stage"
+  local ref="${MU_SYNC_REF:-eb9eabc}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
@@ -143,6 +143,7 @@ sync_tree() {
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0104-game-menu-host-pages.patch"
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0105-switch-signin-off-console.patch"
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0111-game-menu-open-page.patch"   # menu_open_extra (the Start + D-pad Up + Z chord)
+  patch -s -p1 -d "$gen/appsrc" < "$here/patches/0114-game-menu-driving-pad.patch"   # the pad that drives the menu (settings_nav)
   for f in game_menu.cpp game_menu.h switch_signin.cpp; do cmp -s "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f" || cp "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f"; done
   rm -rf "$gen/appsrc"
   # Aurora (build/sdk/aurora, the Switch-patched source both picture variants compile) with this frontend's Aurora
@@ -266,7 +267,9 @@ WEAKEN_LINUX="for v in obj-linux obj-linux-services obj-linux-services$SAN_SFX; 
 # every other symbol local. Its service address is the loopback stand-in's, compiled in. Made here because the test
 # needs one that matches the synced bridge header. The netplay sources are ../net_sources.sh's patched copy.
 NET_INC="-I$W/runner -I$W/netsrc/port/runtime/hle -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app"
-NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DMU_NET_SERVICES'
+# Slippi's HTTP services (user profile, game reports, replay upload) go to the loopback stand-in too (patches/net-0008,
+# ../tools/mock_slippi_http.py).
+NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DSLIPPI_PIN_SERVICES_URL=\"http://127.0.0.1:8766\" -DMU_NET_SERVICES'
 NET_CXX='slippi_online slippi_net slippi_offline slippi_net_diag slippi_match_quality slippi_text slippi_version slippi_matchmaking_ws slippi_report slippi_http_curl slippi_login'
 build_net_services_linux() {
   local o="$W/net/obj-linux-services$SAN_SFX" stamp

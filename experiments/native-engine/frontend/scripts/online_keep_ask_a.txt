@@ -1,0 +1,20 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_A): the keep-search question (features/search.cpp, settings.ini
+# keep_search 0, the default). From boot to an Unranked search as online_unranked.txt; then B on Slippi's character select while it
+# searches: "Keep searching while you play?"; A keeps the search and the game goes to the menus. When the other side
+# (online_keep_search_b.txt, about 20 s later) is found, the game comes back to the select by itself and the match is played.
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132
+150 A
+156
+240 START
+246
+330 B
+336
+420 A
+426

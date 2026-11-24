@@ -13,6 +13,9 @@
 #             back to watching; the frames compared outside the takeover must not differ
 #   practice  --feature-test replay-practice: the next tip jumped to, taken over there, with a try that ends when the combo
 #             drops (settings: replay_try_length 0), the result, the retry
+#   legacy    replay.slp with its stored code list removed (../tools/slp_strip_codes.py), as replays from before Slippi stored one:
+#             the playback must say it uses Slippi's legacy list and which codes that is (the post-frame check may differ: the
+#             recording was made with the current codes)
 #   analyze   --feature-test replay-analyze: the whole replay run once unseen from where it is, then back
 #   library   --feature-test replay-library in the app (--app): the in-game menu opened on its Replays page, the list, the
 #             shown replay's stats (both copies), delete (A twice) of one copy, then Watch it on the other
@@ -88,6 +91,9 @@ PY
   takeover) fresh "$dir"; need_replay "$dir"; playback "$dir" 2400 replay-takeover ;;
   practice) fresh "$dir"; need_replay "$dir"; printf '%s\n' "replay_try_length 0" > "$dir/settings.ini"; playback "$dir" 2400 replay-practice ;;
   analyze)  fresh "$dir"; need_replay "$dir"; playback "$dir" 2400 replay-analyze ;;
+  legacy)   fresh "$dir"; need_replay "$dir"
+            python3 -I "$here/../tools/slp_strip_codes.py" "$root/replay.slp" "$dir/Replays/Game_20261124T120000.slp"
+            playback "$dir" 600 "" ;;
   library)
     # The app (--app, its folder /out/app as on the SD card): two copies of the replay, the menu opened on the Replays
     # page, the stats of both, the second deleted, then Watch it on the first (the app starts the game again with it).

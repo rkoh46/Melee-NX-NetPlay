@@ -314,6 +314,7 @@ MenuView menu_view() {
   v.hint = hint;
   v.unlocked = menu.unlocked;
   v.style = style;
+  v.port = menu.port;
   return v;
 }
 void menu_result(bool close, bool changed, bool stronger_changed) {
@@ -431,6 +432,45 @@ namespace ghost_ai {
 bool specialist_available(unsigned pro) { return phillip_ai::available(pro); }
 bool available(unsigned pro) { return phillip_ai::available(pro); }
 }  // namespace ghost_ai
+
+// ---- the warm-up room's sparring partner (search.cpp), upstream's native_practice.cpp pro_for_character and warmup_tick ----
+namespace fe::features {
+namespace {
+bool spar_saved = false;
+MuPcConfig spar_before{};
+}
+int proai_for_character(int character) {
+  static const char* const kNames[] = {"Captain Falcon", "Donkey Kong", "Fox", "Mr. Game & Watch", "Kirby", "Bowser", "Link", "Luigi",
+      "Mario", "Marth", "Mewtwo", "Ness", "Peach", "Pikachu", "Ice Climbers", "Jigglypuff", "Samus", "Yoshi", "Zelda", "Sheik", "Falco",
+      "Young Link", "Dr. Mario", "Roy", "Pichu", "Ganondorf"};
+  if (character < 0 || character >= 26) return -1;
+  constexpr int n = int(sizeof practice_ghosts::kGhosts / sizeof practice_ghosts::kGhosts[0]);
+  // Upstream's rule: when any pro's own AI is installed, only those; else the habit tables that have games.
+  bool neural = false;
+  for (int i = 0; i < n; ++i) if (practice_ghosts::kReleased[i] && ghost_ai::specialist_available(unsigned(i))) neural = true;
+  for (int i = 0; i < n; ++i) {
+    if (!practice_ghosts::kReleased[i]) continue;
+    if (!(neural ? ghost_ai::specialist_available(unsigned(i)) : practice_ghosts::kGhosts[i].games > 0)) continue;
+    if (std::strcmp(practice_ghosts::kGhosts[i].character, kNames[character]) == 0) return i;
+  }
+  return -1;
+}
+bool proai_spar_begin(int pro, std::string* label) {
+  MuPcConfig c = training_pc();
+  if (!spar_saved) { spar_before = c; spar_saved = true; }
+  if (!practice_cpu::ghost(pro, c)) return false;
+  c.enabled = 1;
+  c.tools = spar_before.tools;                 // the player's own tools (frame advance, ...) stay
+  training_pc_set(c);
+  if (label) *label = std::string(practice_ghosts::kGhosts[pro].name) + " AI";   // the player's AI, not the player
+  return true;
+}
+void proai_spar_end() {
+  if (!spar_saved) return;
+  training_pc_set(spar_before);
+  spar_saved = false;
+}
+}  // namespace fe::features
 
 namespace slippi::native_practice {
 void submit_train_against(int character, int costume) {
