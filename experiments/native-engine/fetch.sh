@@ -23,10 +23,14 @@ else
 fi
 # Every patch once: a patch added after the clone (a new decomp-*.patch) is applied to an existing tree too, and one
 # already in it is left alone. A patch that neither applies nor is already applied stops the fetch.
+# Each tree keeps the names of the patches applied to it (.mnx-applied): a later patch that changes the same lines as an
+# earlier one (0004 after 0002) makes the earlier one's reverse check fail, so the record is asked first.
 apply() {   # $1 the git tree, $2 the patch
-  if git -C "$1" apply --reverse --check "$2" 2>/dev/null; then echo "have  $(basename "$2")"
-  elif git -C "$1" apply --check "$2" 2>/dev/null; then git -C "$1" apply "$2"; echo "apply $(basename "$2")"
-  else echo "fetch: $(basename "$2") does not apply to $1" >&2; exit 1; fi
+  local name rec="$1/.mnx-applied"; name="$(basename "$2")"
+  if [ -f "$rec" ] && grep -qxF "$name" "$rec"; then echo "have  $name"
+  elif git -C "$1" apply --reverse --check "$2" 2>/dev/null; then echo "$name" >> "$rec"; echo "have  $name"
+  elif git -C "$1" apply --check "$2" 2>/dev/null; then git -C "$1" apply "$2"; echo "$name" >> "$rec"; echo "apply $name"
+  else echo "fetch: $name does not apply to $1 (if it is already in, add its name to $rec)" >&2; exit 1; fi
 }
 for p in "$here"/patches/0*.patch; do apply "$tree" "$p"; done
 for p in "$here"/patches/decomp-*.patch; do apply "$tree/sourceport/extern/melee" "$p"; done
