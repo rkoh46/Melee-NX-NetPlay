@@ -36,6 +36,7 @@ struct Settings {
   bool cpu_no_taunt = false, cpu_lcancel = false, cpu_no_rapid_jab = false, cpu_no_transform = false;
   int language = 0;                       // 0 the save's, 1 Japanese, 2 English
   bool vanilla = false;                   // ours: the retail game without the always-on code set
+  bool vanilla_only = false;              // upstream's --vanilla-only session: retail gameplay, its own memory card, no mods
   // Picture
   bool widescreen = false, player_tags = false, hide_ko_explosions = false, hide_hud_emblems = false, freeze_fd = false;
   bool low_poly = false, fod_reflections = false, css_background_free = false, training_hud = true;
@@ -113,6 +114,8 @@ const char kTemplate[] =
   "#gamelanguage 0          # 1 Japanese, 2 English\n"
   "#music 100               # 0..100\n"
   "#vanilla 0               # 1: the retail game without the built-in code set (and without the options above that need it)\n"
+  "#vanilla_only 0          # 1: a vanilla-only session (upstream's --vanilla-only): no mod profile, no 20XX, CPU, Stadium\n"
+  "#                        # or Training extras, and its own memory card folder (<card>/VanillaOnly); the built-in codes stay\n"
   "#slippi_menus 0          # 1: Slippi's menu files (the online menu rows on the main menu). With the services program and\n"
   "#                        # a signed-in user file, Online Play works from there; mod profiles are then not loaded.\n"
   "#onlinedelayauto 1       # online input delay chosen from the opponent's ping (2..5 frames)\n"
@@ -163,6 +166,7 @@ void set(const std::string& key, const std::string& value) {
   else if (key == "cssbackgroundfree") s.css_background_free = on;
   else if (key == "training_hud") s.training_hud = value != "0";
   else if (key == "vanilla") s.vanilla = on;
+  else if (key == "vanilla_only") s.vanilla_only = on;
   else if (key == "slippi_menus") s.slippi_menus = on;
   else if (key == "onlinedelay") { if (n >= 1 && n <= 9) s.online_delay = n; }
   else if (key == "onlinedelayauto") s.online_delay_auto = on;
@@ -224,6 +228,7 @@ std::string get(const std::string& key) {
   if (key == "cssbackgroundfree") return bit(s.css_background_free);
   if (key == "training_hud") return bit(s.training_hud);
   if (key == "vanilla") return bit(s.vanilla);
+  if (key == "vanilla_only") return bit(s.vanilla_only);
   if (key == "slippi_menus") return bit(s.slippi_menus);
   if (key == "onlinedelay") return num(s.online_delay);
   if (key == "onlinedelayauto") return bit(s.online_delay_auto);
@@ -286,12 +291,12 @@ uint32_t word_options() {
          (s.vanilla ? MU_GAME_OPTION_VANILLA : 0u) |
          (slippi_menus_on() ? MU_GAME_OPT_SLIPPI_MENUS : 0u) |
          // 20XX TE's own bits only with its save in the profile; with the Hack Pack and no TE save, the pack's share.
-         (s.vanilla || net ? 0u : s.te_options & te_mask1());
+         (s.vanilla || s.vanilla_only || net ? 0u : s.te_options & te_mask1());
   // Not offered: the Training Lab bits.
 }
 uint32_t word_options2() {
   const auto& s = settings;
-  if (s.vanilla || online.load(std::memory_order_relaxed)) return 0;
+  if (s.vanilla || s.vanilla_only || online.load(std::memory_order_relaxed)) return 0;
   return (s.te_options2 & te_mask2() & ~(MU_GAME_OPTION2_STADIUM_FROZEN | MU_GAME_OPTION2_ARCADE_PACK)) |
          (s.cpu_20xx ? MU_GAME_OPTION2_TE_20XX_CPUS : 0u) | (s.stadium_frozen ? MU_GAME_OPTION2_STADIUM_FROZEN : 0u);
 }
@@ -307,7 +312,7 @@ uint32_t cpu_word_of_settings() {
 uint32_t word_options3() {
   const auto& s = settings;
   if (online.load(std::memory_order_relaxed)) return 0;      // a network session has every fighter and stage, and no results screen option
-  return (s.vanilla ? 0u : (cpu_word & MU_GAME_OPTION3_CPU_ALL) | mods_stage_bits()) | (s.unlock_all ? 0u : MU_GAME_OPTION3_LOCKED_CONTENT) |
+  return (s.vanilla || s.vanilla_only ? 0u : (cpu_word & MU_GAME_OPTION3_CPU_ALL) | mods_stage_bits()) | (s.unlock_all ? 0u : MU_GAME_OPTION3_LOCKED_CONTENT) |
          (s.results_screen ? 0u : MU_GAME_OPTION3_SKIP_RESULTS);
 }
 uint32_t word_display() {
@@ -335,6 +340,8 @@ uint32_t word_audio() {
 }  // namespace
 
 bool settings_vanilla() { return settings.vanilla; }
+bool settings_vanilla_only() { return settings.vanilla_only; }
+void settings_force_vanilla_only() { settings.vanilla_only = true; }
 void settings_online(bool on) { online.store(on, std::memory_order_relaxed); }
 void settings_deactivate() { active = false; }
 void settings_net_prefs(bool* direct_pause, int port_colour[2], uint32_t* shield_online, std::string skip[3]) {

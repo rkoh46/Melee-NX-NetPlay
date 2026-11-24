@@ -334,6 +334,12 @@ bool open_replay(const std::string& given) {
   pb.path = path;
   for (int w = 0; w < 3; ++w) pb.words[w] = read_word(bytes, w);
   const std::string profile = read_mod_profile(bytes);
+  // As upstream's set_replay: a vanilla-only session does not play a replay recorded with gameplay mods.
+  if (settings_vanilla_only() && (!profile.empty() || pb.words[0] || pb.words[1] || (pb.words[2] & MU_GAME_OPTION3_CPU_ALL))) {
+    say("replay: %s was recorded with gameplay mods; a vanilla-only session does not play it (open it in a normal session)", path.c_str());
+    pb = Playback{};
+    return false;
+  }
   if (!profile.empty() && profile != mods_fingerprint())
     say("replay: %s was recorded with mod content %.16s; this session has %s: it may not play as recorded", path.c_str(), profile.c_str(),
         mods_fingerprint().empty() ? "the retail game" : mods_fingerprint().substr(0, 16).c_str());
