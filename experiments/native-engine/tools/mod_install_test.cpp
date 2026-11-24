@@ -23,6 +23,7 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <sys/stat.h>
 #include <unistd.h>
 
 using namespace modinstall;
@@ -56,10 +57,12 @@ bool link_or_copy(const std::string& from, const std::string& to) {
   ok &= std::fclose(out) == 0;
   return ok;
 }
+// Never follows a symbolic link (mods/Downloads is one, to the download cache): the link itself is removed.
 void remove_tree(const std::string& dir) {
   for (const auto& name : list_dir(dir)) {
     const std::string p = join(dir, name);
-    if (dir_exists(p)) remove_tree(p); else remove_file(p);
+    struct stat st{};
+    if (lstat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) remove_tree(p); else unlink(p.c_str());
   }
   rmdir(dir.c_str());
 }
