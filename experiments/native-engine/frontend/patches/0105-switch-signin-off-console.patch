@@ -1,0 +1,54 @@
+Native engine app (experiments/native-engine/frontend): the sign-in and notice screens built off the console too (no
+software keyboard there), and their controllers read through the host's input path. Applied to a build-time copy only.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/host/switch_signin.cpp
++++ b/port/runtime/host/switch_signin.cpp
+@@ -8,7 +8,9 @@
+ #include <aurora/aurora.h>
+ #include <dolphin/pad.h>
+ #include <imgui.h>
++#ifdef __SWITCH__
+ #include <switch.h>
++#endif
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -20,6 +22,9 @@
+ #include <thread>
+ 
+ namespace host {
++// Native engine (experiments/native-engine/frontend/patches/0105): the screens read the controllers through the
++// host's own input path (GameCube adapter, SDL gamepads through Aurora's PAD, the test pad file), not PADRead alone.
++void signin_pad_read(PADStatus status[4]);
+ namespace {
+ // Melee's own grammar: dark blue field, one yellow header, white type. One accent, spent once.
+ constexpr ImVec4 kField{0.043f, 0.075f, 0.196f, 1.0f};        // the character-select blue
+@@ -48,6 +53,10 @@
+ };
+ 
+ bool keyboard(const char* header, const char* guide, bool password, std::string& value) {
++#ifndef __SWITCH__
++  (void)header; (void)guide; (void)password; (void)value;
++  return false;   // off the console there is no software keyboard: the row stays as it was
++#else
+   SwkbdConfig config;
+   if (R_FAILED(swkbdCreate(&config, 0))) return false;
+   if (password) swkbdConfigMakePresetPassword(&config);
+@@ -62,6 +71,7 @@
+   if (R_FAILED(rc)) return false;   // cancelled
+   value = out;
+   return true;
++#endif
+ }
+ 
+ void start_sign_in(State& st, const std::string& user_dir) {
+@@ -93,7 +103,7 @@
+ Edges read_edges(uint16_t& last_buttons, int8_t& last_y) {
+   PADStatus status[4];
+   std::memset(status, 0, sizeof status);
+-  PADRead(status);
++  signin_pad_read(status);
+   uint16_t buttons = 0; int8_t y = 0;
+   for (int port = 0; port < 4; ++port) {
+     if (status[port].err != 0) continue;

@@ -36,6 +36,18 @@ struct Options {
   bool sync_net = false;      // --gfx-sync-net: with netplay, decode inside the game's flush (the earlier way; for comparison)
   bool log_direct = false;    // --log-direct: every line written where it is made (the earlier way; for comparison)
   int layout = 0;             // what fixedmap_startup said at the top of main (0: the game's fixed ranges are free)
+  // The app (no arguments, or --app): play mode with the app's folders, launcher.ini, sign-in, in-game menu, HUD
+  // and self-update (app.cpp). Paths below are filled by app_configure().
+  bool app = false;
+  std::string base_dir;       // sdmc:/switch/melee-nx-netplay (--base DIR off the console)
+  std::string log_path;       // empty: <out>/picture.log
+  std::string card_dir;       // empty: <out>/card-play
+  std::string host_log_path;  // empty: <out>/host.log
+  std::string net_dir;        // where the netplay host writes its end-of-run file (empty: <out>)
+  std::string user_dir;       // Slippi user folder (empty: the netplay host's default)
+  std::string self_path;      // this program's file (the self-update target)
+  bool offline = false;       // launcher.ini offline=1: no online services in this session
+  int online_delay = -1;      // launcher.ini online_delay: 0 automatic, 1..9 frames, -1 not given
 };
 extern Options options;
 void say(const char* format, ...);   // stdout (nxlink) and <out>/picture.log; through the log thread while play mode's game runs
@@ -81,8 +93,63 @@ void slippi_files_build();
 std::vector<std::string> slippi_files_publish();
 int slippi_file_read(uint64_t offset, void* out, size_t bytes);
 bool slippi_menus_on();
+// settings.cpp: the in-game menu's view of settings.ini (app_menu.cpp)
+std::string settings_get(const std::string& key);                    // the current value as settings.ini writes it
+bool settings_change(const std::string& key, const std::string& value);   // sets it and writes settings.ini; false: unknown key
+void settings_app_defaults(bool online_possible);                    // the app's defaults before settings.ini is read
+bool settings_online_now();                                          // the online rules are in force (simulation thread's view)
+bool settings_given(const std::string& key);                         // the key was in settings.ini
+void settings_set_quiet(const std::string& key, const std::string& value);   // sets it without writing the file
+const std::string& settings_path();
 // play_main.cpp
 int play_main();
+bool session_online();               // the session is online now (Slippi's online flow, a search or a match)
+uint32_t online_delay_frames();      // the input delay in use (0: automatic, not yet chosen)
+
+// ---- the app (app.cpp, app_menu.cpp, app_services.cpp) ----
+bool app_wanted(int argc, char** argv);        // no arguments but the app's own: start as the app
+void app_configure();                          // folders and launcher.ini; before log_open
+void app_after_settings();                     // launcher.ini values that override settings.ini
+void app_report();                             // the log lines saying what the app read
+std::string app_ini(const std::string& key, const std::string& fallback);
+void app_ini_set(const std::string& key, const std::string& value);   // and writes launcher.ini
+void app_backup_card();                        // the first session of this app copies the memory card once
+void app_pad_postprocess(void* pads4);         // simulation thread: remapping, deadzones (host::PadState[4])
+bool app_rumble_allowed(int port);
+void app_retrace(uint32_t retrace, bool fighting, bool online);   // simulation thread, once per retrace
+void app_menu_setup();                         // the in-game menu's settings and pages (Aurora builds)
+void hud_frame(double work_ms);                // simulation thread: the frame time the HUD shows
+void hud_log_line(const char* line);           // every queued log line: the ping and the input delay come from them
+// The screens before the game (layout failure, disc missing, update, sign-in). Services program only for the
+// update and sign-in; false when the screen could not be shown (no picture).
+bool app_layout_screen(const char* reason);
+bool app_message_screen(const std::string& headline, const std::vector<std::string>& lines);
+enum class AppStart { Play, PlayOffline, Quit };
+// app_services.cpp in the services program with a picture; null (weak) in the others. The update check against
+// launcher.ini's update_host (prompt, download, swap), then the sign-in screen when `need_signin`.
+__attribute__((weak)) AppStart app_services_run(bool check_update, bool need_signin, const std::string& user_dir);
+__attribute__((weak)) bool app_notice_run(const std::string& headline, const std::vector<std::string>& lines);
+
+// ---- frontend.cpp: the render thread before the game (app mode) ----
+// The render thread starts early, owns Aurora and runs screen jobs on itself, then draws the game.
+bool screens_start();                          // false: no picture (null build, --headless, the renderer failed)
+bool screens_running();
+// Runs `job` on the render thread (which owns Aurora); returns when it is done. The argument is the render
+// thread's host::MetalFrontend (switch_signin.h's screens take it). False when the screens are not running.
+bool screens_run(void (*job)(void* frontend, void* user), void* user);
+void screens_stop();                           // the game will not start: Aurora shuts down
+void window_size(int* w, int* h);              // the presented window's size (1280x720 before Aurora reports one)
+// Presentation pacing (render thread). The simulation stays at 60 Hz; by default the render thread presents each
+// finished game frame once (vsync paces it). A sub-frame presenter (for example melee-unlocked's Predict/Interpolate
+// for 120 Hz displays) sets this before the game starts: after a frame has been drawn, present_again(backend, frame, i)
+// is called for i = 1 .. presents_per_frame()-1 while no newer frame is waiting. `backend` is the gx::Backend
+// (gx::AuroraBackend with a picture), `frame` the gx::Frame just drawn. Return false to stop early.
+struct PresentHook {
+  int (*presents_per_frame)() = nullptr;
+  bool (*present_again)(void* backend, const void* frame, int index) = nullptr;
+};
+void set_present_hook(const PresentHook& hook);
+double display_refresh_hz();                   // the display's refresh rate as SDL reports it (60 until known)
 // services_check.cpp, linked into the services program only (null in the other): curl and TLS set-up, nothing contacted
 __attribute__((weak)) bool services_self_check();
 // frontend.cpp

@@ -30,8 +30,12 @@
 #include "hostprof.h"                // the runner's host service profiler (--profile)
 #if MU_FE_AURORA
 #include "gx_aurora.h"
+#include "metal_frontend.h"          // the screens before the game take the app's MetalFrontend (switch_signin.h)
+#include "overlay.h"
+#include "overlay_imgui.h"
 #include <aurora/aurora.h>
 #include <aurora/event.h>
+#include <SDL3/SDL_video.h>
 #include <dolphin/types.h>
 #include <dolphin/vi.h>
 namespace aurora::window { void set_frame_buffer_aspect(float aspect); }   // aurora lib/window.cpp
@@ -83,7 +87,7 @@ void log_open() {
   std::lock_guard<std::mutex> lock(log_mutex);
   if (log_file) return;
   mkdir(options.out_dir.c_str(), 0777);
-  log_file = std::fopen((options.out_dir + "/picture.log").c_str(), "a");
+  log_file = std::fopen((options.log_path.empty() ? options.out_dir + "/picture.log" : options.log_path).c_str(), "a");
   if (log_file) std::setvbuf(log_file, nullptr, _IOFBF, 1u << 16);
 }
 void log_close() {
@@ -214,6 +218,11 @@ struct State {
   bool clocks_changed = false;
   SwitchClockResult clocks_before{};
 #endif
+  // The render thread started before the game (app mode: screens_start). Guarded by mutex.
+  bool early = false, early_ready = false, screens_ok = false, go = false, quit = false;
+  void (*job)(void*, void*) = nullptr;
+  void* job_user = nullptr;
+  std::atomic<int> win_w{1280}, win_h{720};
 } st;
 
 void decoder_stopped(const char* reason) {
@@ -276,6 +285,7 @@ void retrace_sink(void*) {
   const uint64_t slept = linux_host::slept_nanoseconds(), lines = log_queue_lines(), disc = linux_host::counters().disc_reads;
   if (st.have_resumed) {
     const double work = ms(entered - st.resumed) - ms(slept - st.last_slept);
+    hud_frame(work);
     st.work_all.add(work); st.wait_all.add(ms(waited)); st.decode_all.add(ms(decode - st.last_decode)); st.padcost_all.add(pad_ms);
     if (vs_match) {
       st.work_match.add(work); st.feed_match.add(ms(st.feed_ns_frame)); st.wait_match.add(ms(waited)); st.padcost_match.add(pad_ms);
@@ -353,6 +363,8 @@ void render_one(gx::Backend& backend, const gx::Frame& frame) {
   r.most_draws = std::max(r.most_draws, frame.draws.size());
 }
 
+PresentHook present_hook;
+std::atomic<double> refresh_hz{60.0};
 void render_loop(gx::Backend& backend, bool pump) {
   auto& queue = st.queue->queue;
   gx::Frame frame;
@@ -361,6 +373,7 @@ void render_loop(gx::Backend& backend, bool pump) {
     if (pump)
       for (auto* event = aurora_update(); event && event->type != AURORA_NONE; ++event)
         if (event->type == AURORA_EXIT) linux_host::request_stop(0);
+        else if (event->type == AURORA_WINDOW_RESIZED || event->type == AURORA_DISPLAY_SCALE_CHANGED) { st.win_w = int(event->windowSize.width); st.win_h = int(event->windowSize.height); }
 #else
     (void)pump;
 #endif
@@ -377,10 +390,68 @@ void render_loop(gx::Backend& backend, bool pump) {
       ++st.render.stale;
     }
     render_one(backend, frame);
+    // A sub-frame presenter (present_hook: display-rate features) may present this frame again before the next
+    // finished one, as long as no newer frame is waiting. Without one: one present per finished game frame.
+    if (present_hook.presents_per_frame && present_hook.present_again) {
+      const int n = present_hook.presents_per_frame();
+      for (int i = 1; i < n && queue.size() == 0 && !st.render.failed; ++i)
+        if (!present_hook.present_again(&backend, &frame, i)) break;
+    }
     queue.recycle(std::move(frame));
     frame = gx::Frame{};
   }
 }
+
+#if MU_FE_AURORA
+// The screens before the game (app mode) use the app's own drawing code (switch_signin.cpp), which takes a
+// host::MetalFrontend: one made here over Aurora as this thread already runs it, drawing no game frames.
+class ScreenHost final : public host::MetalNativeHost {
+public:
+  host::MetalNativeEvents pump_events() override {
+    host::MetalNativeEvents result;
+    for (auto* event = aurora_update(); event && event->type != AURORA_NONE; ++event) {
+      ++result.events;
+      if (event->type == AURORA_EXIT) result.close_requested = true;
+      if (event->type == AURORA_WINDOW_RESIZED || event->type == AURORA_DISPLAY_SCALE_CHANGED) {
+        st.win_w = int(event->windowSize.width); st.win_h = int(event->windowSize.height); ++result.resize_events;
+      }
+    }
+    return result;
+  }
+  void resize(uint32_t, uint32_t) override {}
+  host::MetalWindowSize window_size() const noexcept override {
+    const uint32_t w = uint32_t(st.win_w.load()), h = uint32_t(st.win_h.load());
+    return {w, h, w, h};
+  }
+  void shutdown() noexcept override {}   // Aurora stays up: the game is drawn next on this thread
+};
+class NoFrames final : public gx::Backend {
+public:
+  void submit_frame(const gx::Frame&) override {}
+};
+// Runs screen jobs until attach() (go) or screens_stop() (quit).
+void screens_loop() {
+  auto frontend = std::make_unique<host::MetalFrontend>(std::make_unique<ScreenHost>(), std::make_unique<NoFrames>());
+  {
+    std::lock_guard<std::mutex> lock(st.mutex);
+    st.early_ready = true; st.screens_ok = true;
+  }
+  st.changed.notify_all();
+  for (;;) {
+    std::unique_lock<std::mutex> lock(st.mutex);
+    st.changed.wait(lock, [] { return st.job || st.go || st.quit; });
+    if (!st.job) break;
+    auto job = st.job; void* user = st.job_user;
+    lock.unlock();
+    try { job(frontend.get(), user); } catch (const std::exception& e) { say("picture: a screen stopped: %s", e.what()); } catch (...) { say("picture: a screen stopped"); }
+    lock.lock();
+    st.job = nullptr;
+    lock.unlock();
+    st.changed.notify_all();
+  }
+  frontend.reset();
+}
+#endif
 
 void* render_main(void*) {
 #ifdef __SWITCH__
@@ -411,6 +482,9 @@ void* render_main(void*) {
 #endif
       config.logCallback = log_aurora;
       config.logLevel = options.verbose ? LOG_INFO : LOG_WARNING;
+      // The app's launcher.ini msaa and anisotropy (app.cpp sets these; fixed when the device is created).
+      if (const char* m = std::getenv("MELEE_MSAA")) config.msaa = uint32_t(std::max(1, std::atoi(m)));
+      if (const char* a = std::getenv("MELEE_ANISOTROPY")) config.maxTextureAnisotropy = uint16_t(std::max(1, std::atoi(a)));
       config.mem1Size = 0; config.mem2Size = 0;   // the game owns its memory; Aurora draws only
       // As the app (port/app/main_switch.cpp): the shader compilers never use the game's core, and the
       // pipelines this device has drawn with before are compiled at launch, before the game runs.
@@ -423,19 +497,33 @@ void* render_main(void*) {
       if (info.backend != BACKEND_VULKAN) throw std::runtime_error(std::string("Aurora selected the ") + backend_label(info.backend) + " backend, not Vulkan");
       say("picture: Aurora on %s, window %ux%u, framebuffer %ux%u", backend_label(info.backend), info.windowSize.width, info.windowSize.height,
           info.windowSize.native_fb_width, info.windowSize.native_fb_height);
+      st.win_w = int(info.windowSize.width); st.win_h = int(info.windowSize.height);
+      if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay()); mode && mode->refresh_rate > 1.0f) refresh_hz = double(mode->refresh_rate);
+      say("picture: display refresh %.2f Hz (the simulation stays at 60 Hz)", refresh_hz.load());
       VIConfigure(nullptr);   // the 640x480 logical framebuffer gx::AuroraBackend expects
-      if (!options.stretch) aurora::window::set_frame_buffer_aspect(4.0f / 3.0f);   // the game draws for 4:3 (no widescreen code is on)
+      if (const char* f = std::getenv("MU_APP_FILTER")) {   // launcher.ini filter (the app's screen filter)
+        const int filter = std::atoi(f);
+        aurora_set_resampler(filter == 1 ? SAMPLER_AREA : filter == 2 ? SAMPLER_CRT : filter == 3 ? SAMPLER_VIBRANT : SAMPLER_BILINEAR);
+      }
       {
         const uint64_t t0 = now_ns();
         aurora_warm_pipelines();   // returns at once when nothing is cached yet (first run)
         say("picture: pipeline warm-up took %.1f s%s", ms(now_ns() - t0) / 1000.0, options.warm_all ? " (--warm-all: every pipeline in the cache)" : "");
       }
+      if (st.early) {
+        screens_loop();                // the app's screens before the game, until attach() or screens_stop()
+        if (st.quit) throw std::runtime_error("the game was not started");
+      }
+      // Settled only now: in the app the 16:9 setting is known once settings.ini has been read.
+      if (!options.stretch) aurora::window::set_frame_buffer_aspect(4.0f / 3.0f);   // the game draws for 4:3 (no widescreen code is on)
       auto aurora_backend = std::make_unique<gx::AuroraBackend>(gx::AuroraOptions{.logical_width = 640, .logical_height = 480, .reset_clear_color = 0, .reset_clear_z = 0xffffff});
       // Diagnosis: MU_GFX_DRAW_DUMP=MAJOR:MINOR:N writes the draw state of the N-th frame drawn in that scene to <out>/draws.txt.
       if (const char* dump = std::getenv("MU_GFX_DRAW_DUMP")) {
         unsigned major = 0, minor = 0, after = 1;
         if (std::sscanf(dump, "%u:%u:%u", &major, &minor, &after) == 3) aurora_backend->set_draw_dump(options.out_dir + "/draws.txt", uint8_t(major), uint8_t(minor), after);
       }
+      // The app's in-game menu and HUD (game_menu.cpp, drawn through Aurora's ImGui pass as the app draws them).
+      if (options.app) aurora_backend->set_overlay([] { host::OverlayFrame overlay; if (host::game_overlay(overlay)) host::overlay_imgui_draw(overlay); });
       backend = std::move(aurora_backend);
       st.backend_name = "Aurora/Vulkan";
     }
@@ -445,6 +533,20 @@ void* render_main(void*) {
     error = e.what();
   } catch (...) {
     error = "unknown exception";
+  }
+  if (st.early) {
+    // Aurora did not come up (or there is none in this build): no screens; wait for the game or the end.
+    std::unique_lock<std::mutex> lock(st.mutex);
+    if (!st.early_ready) { st.early_ready = true; st.screens_ok = false; lock.unlock(); st.changed.notify_all(); lock.lock(); }
+    st.changed.wait(lock, [] { return st.go || st.quit; });
+    if (st.quit) {
+      lock.unlock();
+      backend.reset();
+#if MU_FE_AURORA
+      if (aurora_up) { aurora_flush_caches(); aurora_shutdown(); }
+#endif
+      return nullptr;
+    }
   }
   {
     std::lock_guard<std::mutex> lock(st.mutex);
@@ -505,10 +607,16 @@ void attach() {
 #endif
   st.queue = std::make_unique<QueueBackend>();
   st.stop.store(false); st.ready = false; st.start_error.clear();
-  pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
-  if (pthread_create(&st.thread, &attr, render_main, nullptr) != 0) { pthread_attr_destroy(&attr); say("picture: cannot create the render thread; running without a picture"); return; }
-  pthread_attr_destroy(&attr);
-  st.thread_started = true;
+  if (st.early && st.thread_started) {
+    // The render thread has been running the screens before the game (screens_start): it draws the game now.
+    { std::lock_guard<std::mutex> lock(st.mutex); st.go = true; }
+    st.changed.notify_all();
+  } else {
+    pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
+    if (pthread_create(&st.thread, &attr, render_main, nullptr) != 0) { pthread_attr_destroy(&attr); say("picture: cannot create the render thread; running without a picture"); return; }
+    pthread_attr_destroy(&attr);
+    st.thread_started = true;
+  }
   {
     std::unique_lock<std::mutex> lock(st.mutex);
     st.changed.wait(lock, [] { return st.ready; });
@@ -532,6 +640,7 @@ void detach() {
   try { gx::init(nullptr); } catch (...) {}      // drains and joins the decoder thread
   st.stop.store(true);
   if (st.thread_started) { pthread_join(st.thread, nullptr); st.thread_started = false; }
+  st.early = false; st.early_ready = false; st.screens_ok = false; st.go = false; st.quit = false;
 #ifdef __SWITCH__
   switch_set_pthread_cores(-1, 0);
   svcSetThreadPriority(CUR_THREAD_HANDLE, st.sim_priority_before);
@@ -635,6 +744,51 @@ void decoder_sync() {
   ++st.sync_calls;
   try { gx::gpu_sync_all(); } catch (...) {}
 }
+}  // namespace fe
+
+namespace fe {
+bool screens_start() {
+  if (!options.picture || options.null_backend) return false;
+#if !MU_FE_AURORA
+  return false;
+#else
+  if (st.thread_started) return st.early && st.screens_ok;
+#ifdef __SWITCH__
+  switch_set_pthread_cores(0, 0x3);   // Aurora's workers stay off the game's core 2, as attach() arranges it
+#endif
+  st.early = true; st.early_ready = false; st.go = false; st.quit = false;
+  pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
+  const int rc = pthread_create(&st.thread, &attr, render_main, nullptr);
+  pthread_attr_destroy(&attr);
+  if (rc != 0) { st.early = false; say("picture: cannot create the render thread for the screens"); return false; }
+  st.thread_started = true;
+  std::unique_lock<std::mutex> lock(st.mutex);
+  st.changed.wait(lock, [] { return st.early_ready; });
+  return st.screens_ok;
+#endif
+}
+bool screens_running() { return st.early && st.screens_ok && !st.go && !st.quit; }
+bool screens_run(void (*job)(void*, void*), void* user) {
+  if (!screens_running()) return false;
+  std::unique_lock<std::mutex> lock(st.mutex);
+  st.job = job; st.job_user = user;
+  st.changed.notify_all();
+  st.changed.wait(lock, [] { return st.job == nullptr; });
+  return true;
+}
+void screens_stop() {
+  if (!st.early || !st.thread_started || st.go) return;
+  { std::lock_guard<std::mutex> lock(st.mutex); st.quit = true; }
+  st.changed.notify_all();
+  pthread_join(st.thread, nullptr);
+  st.thread_started = false; st.early = false; st.early_ready = false; st.screens_ok = false; st.quit = false;
+#ifdef __SWITCH__
+  switch_set_pthread_cores(-1, 0);
+#endif
+}
+void window_size(int* w, int* h) { *w = st.win_w.load(); *h = st.win_h.load(); }
+void set_present_hook(const PresentHook& hook) { present_hook = hook; }   // before the game starts
+double display_refresh_hz() { return refresh_hz.load(); }
 }  // namespace fe
 
 extern "C" void mu_frontend_attach(int on) {

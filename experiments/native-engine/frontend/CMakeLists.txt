@@ -8,6 +8,7 @@ cmake_minimum_required(VERSION 3.25)
 project(mu_native_gfx LANGUAGES C CXX ASM)
 
 set(MU_FE_VARIANT "null" CACHE STRING "null, linux or switch")
+option(MU_FE_FEATURES "Link the feature modules (src/features/, runner/features/; feature_hooks.h)" ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -19,6 +20,11 @@ set(RUN "${GFX}/runner")         # snapshot of experiments/native-engine/runner 
 set(GEN "${GFX}/gen")            # embedded.S, embedded_tables.cpp, the patched gx_core.cpp
 set(FE "${CMAKE_CURRENT_LIST_DIR}/src")
 set(GXSRC "${REPO}/port/runtime/gx")
+set(APPSRC "${REPO}/port/runtime/host")
+# The app's version (Melee-NX-NetPlay 0.4.0: the NACP, the self-update's comparison, the menu's title bar) and the
+# Slippi release the netplay object implements (../build.sh NET_DEF: SLIPPI_PIN_VERSION 3.7.0).
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/VERSION" MU_APP_VERSION LIMIT_COUNT 1)
+set(MU_SLIPPI_VERSION "3.7.0")
 foreach(_needed "${MU}/port/linux/host_services.cpp" "${RUN}/runner_main.cpp" "${GEN}/embedded.S" "${GEN}/gx_core.cpp")
   if(NOT EXISTS "${_needed}")
     message(FATAL_ERROR "missing ${_needed}: run frontend/build.sh sync first")
@@ -112,7 +118,11 @@ target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}
   "${MU}/port/linux" "${MU}/port/runtime/abi"
   "${MU}/port/runtime/host")   # last: only for hackpack_source.h (settings.cpp); every other name is found before it
 target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle")   # slippi_hsd_link.h, jukebox.h
+target_include_directories(mu_gx PRIVATE "${GEN}")   # app/game_menu.h: the build-time copy with patches/0104
 target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+# The app (app.cpp: folders, launcher.ini, controllers, HUD; app_menu.cpp: the in-game menu) and the feature hooks' calls.
+target_sources(mu_gx PRIVATE "${FE}/app.cpp")
+target_compile_definitions(mu_gx PRIVATE MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
 if(MU_FE_VARIANT STREQUAL "null")
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=0)
 else()
@@ -120,6 +130,20 @@ else()
   # compiled from the verbatim copies build.sh sync makes in ${GEN}/app (see there).
   target_sources(mu_gx PRIVATE "${GXSRC}/gx_aurora.cpp"
     "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
+  # The app's in-game menu and HUD (game_menu.cpp with patches/0104, drawn by overlay_imgui.cpp through Aurora's ImGui
+  # pass), the controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
+  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
+    "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
+  # game_menu.cpp's menu_frame becomes app_menu_frame (play_io.cpp's menu_frame calls it in app mode). Off the console
+  # it lays its rows out as on the console (MU_MENU_CONSOLE), so the Linux test sees the console's menu.
+  set(_menu_defs "menu_frame=app_menu_frame;MELEE_PORT_VERSION=\"${MU_APP_VERSION}\"")
+  if(NOT MU_FE_VARIANT STREQUAL "switch")
+    list(APPEND _menu_defs MU_MENU_CONSOLE)
+  endif()
+  set_source_files_properties("${GEN}/app/game_menu.cpp" PROPERTIES COMPILE_DEFINITIONS "${_menu_defs}")
+  # overlay_imgui.cpp's empty controller list stands aside for app.cpp's (the SDL gamepads Aurora opened).
+  set_source_files_properties("${GEN}/app/overlay_imgui.cpp" PROPERTIES COMPILE_DEFINITIONS
+    "window_list_controllers=overlay_unused_list_controllers;window_capture_input=overlay_unused_capture_input;window_test_rumble=overlay_unused_test_rumble")
   if(MU_FE_VARIANT STREQUAL "switch")
     target_sources(mu_gx PRIVATE "${GEN}/app/gc_adapter_usbhs.cpp")   # the GameCube adapter over usb:hs
     # Its poll is called through play_io.cpp, which stops it searching for an adapter every two seconds.
@@ -133,12 +157,56 @@ else()
     absl::flat_hash_map absl::btree SDL3::SDL3-static)
 endif()
 
+# The feature modules (feature_hooks.h): every .cpp of src/features/ and runner/features/, linked as objects so that
+# play mode's weak references (feature_calls.h) find them. MU_FE_FEATURES=OFF leaves them out (play mode then runs
+# without them).
+# runner/features is taken from the working tree (build.sh sync copies the runner from a pinned commit).
+get_filename_component(RUN_TREE "${CMAKE_CURRENT_LIST_DIR}/../runner" ABSOLUTE)
+file(GLOB MU_FEATURE_SOURCES CONFIGURE_DEPENDS "${FE}/features/*.cpp" "${RUN_TREE}/features/*.cpp")
+if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
+  add_library(mu_features OBJECT ${MU_FEATURE_SOURCES})
+  set_target_properties(mu_features PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
+  target_include_directories(mu_features PRIVATE "${FE}" "${FE}/features" "${RUN}" "${RUN_TREE}" "${RUN_TREE}/features" "${MU}/port/linux" "${MU}/port/runtime/abi" "${MU}/port/runtime/hle"
+    "${MU}/port/runtime/host" "${MU}/port/runtime/ppc" "${MU}/port/runtime/gx" "${MU}/native")
+  target_compile_definitions(mu_features PRIVATE MU_FOREIGN_ELF MU_SQUAD=1 MELEE_NO_SLIPPI MELEE_PORT_VERSION="mu-native")
+  target_compile_options(mu_features PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_features SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+  message(STATUS "feature modules: ${MU_FEATURE_SOURCES}")
+else()
+  message(STATUS "feature modules: none linked")
+endif()
+
+# The app's screens before the game, for the services program with a picture: the self-update from the player's build
+# computer (self_update*.cpp) and the Slippi sign-in (switch_signin.cpp with patches/0105, slippi_login.cpp, HTTPS
+# through libcurl). The netplay object has its own copies of the last two, local to it.
+if(NOT MU_FE_VARIANT STREQUAL "null")
+  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${GEN}/app/switch_signin.cpp"
+    "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp")
+  target_include_directories(mu_app_services PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${APPSRC}"
+    "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi")
+  target_compile_definitions(mu_app_services PRIVATE MU_FE_AURORA=1 MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
+  target_compile_options(mu_app_services PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+  target_link_libraries(mu_app_services PRIVATE aurora::core aurora::gx aurora::pad SDL3::SDL3-static)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_app_services SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+    target_include_directories(mu_app_services PRIVATE "${REPO}/switch/src")
+  endif()
+endif()
+
 # The program, twice: with the netplay object of ../build.sh (copied by build.sh sync: everything behind net_host,
 # its other symbols local), and with the services variant of that object when there is one.
 function(mu_program target netplay_object suffix)
   add_executable(${target} "${FE}/frontend_main.cpp" "${FE}/log_queue.cpp")
   if(suffix)
     target_sources(${target} PRIVATE "${FE}/services_check.cpp")   # the services program's start-up self-check
+    if(TARGET mu_app_services)
+      target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_app_services>)   # the app's update and sign-in screens
+    endif()
+  endif()
+  if(TARGET mu_features)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_features>)
   endif()
   target_include_directories(${target} PRIVATE "${FE}" "${RUN}")
   target_link_libraries(${target} PRIVATE mu_gx mu_host mu_gx "${netplay_object}")
@@ -171,8 +239,18 @@ function(mu_program target netplay_object suffix)
       # The runner's text console would take the display: see frontend_main.cpp.
       -Wl,--wrap=consoleInit -Wl,--wrap=consoleUpdate -Wl,--wrap=consoleExit)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME mu-native-gfx${suffix})
-    nx_generate_nacp(mu-native-gfx${suffix}.nacp NAME "mu-native-gfx${suffix}" AUTHOR "Melee-NX-NetPlay" VERSION "0.1")
-    nx_create_nro(${target} NACP mu-native-gfx${suffix}.nacp ICON "${REPO}/switch/icon.jpg")
+    # The services program is the app: Melee-NX-NetPlay with the app's icon (build/icon.jpg when the app's build drew one,
+    # as port/CMakeLists.txt chooses it; the unbranded switch/icon.jpg otherwise).
+    set(_icon "${REPO}/switch/icon.jpg")
+    if(suffix AND EXISTS "${REPO}/build/icon.jpg")
+      set(_icon "${REPO}/build/icon.jpg")
+    endif()
+    if(suffix)
+      nx_generate_nacp(mu-native-gfx${suffix}.nacp NAME "Melee-NX-NetPlay" AUTHOR "Melee-NX-NetPlay" VERSION "${MU_APP_VERSION}")
+    else()
+      nx_generate_nacp(mu-native-gfx${suffix}.nacp NAME "mu-native-gfx" AUTHOR "Melee-NX-NetPlay" VERSION "${MU_APP_VERSION}")
+    endif()
+    nx_create_nro(${target} NACP mu-native-gfx${suffix}.nacp ICON "${_icon}")
   else()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME mu-native-gfx-${MU_FE_VARIANT}${suffix})
     # A position-independent executable keeps the host away from the fixed game addresses.

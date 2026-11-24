@@ -86,9 +86,17 @@ sync_tree() {
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
   mkdir -p "$gen/app"
-  for f in input_sdl.cpp input_script.cpp audio_sdl.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp; do
+  for f in input_sdl.cpp input_script.cpp audio_sdl.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
     cmp -s "$repo/port/runtime/host/$f" "$gen/app/$f" || cp "$repo/port/runtime/host/$f" "$gen/app/$f"
   done
+  # The app's in-game menu (patches/0104: pages a host adds, greyed rows, the Quit action, a HUD extra) and its sign-in
+  # and notice screens (patches/0105: built off the console too, controllers through the host's input path).
+  rm -rf "$gen/appsrc"; mkdir -p "$gen/appsrc/port/runtime/host"
+  for f in game_menu.cpp game_menu.h switch_signin.cpp; do cp "$repo/port/runtime/host/$f" "$gen/appsrc/port/runtime/host/$f"; done
+  patch -s -p1 -d "$gen/appsrc" < "$here/patches/0104-game-menu-host-pages.patch"
+  patch -s -p1 -d "$gen/appsrc" < "$here/patches/0105-switch-signin-off-console.patch"
+  for f in game_menu.cpp game_menu.h switch_signin.cpp; do cmp -s "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f" || cp "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f"; done
+  rm -rf "$gen/appsrc"
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"
@@ -199,7 +207,7 @@ build_null() {
   dock 900 "$LINUX_IMG" "
     $WEAKEN_LINUX
     cmake -S experiments/native-engine/frontend -B $W/null -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=null \
-      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ >/dev/null
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} >/dev/null
     cmake --build $W/null --parallel $jobs > $W/null-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/null-build.log | head -60; exit 1; }
     bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/null/mu-native-gfx-null
     bash $L check-dynamic '' $W/net/obj-linux-services/netplay.o $W/null/mu-native-gfx-null-services
@@ -214,7 +222,7 @@ build_linux() {
   dock 2400 "$GFX_IMG" "
     $WEAKEN_LINUX
     cmake -S experiments/native-engine/frontend -B $W/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=linux \
-      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ $DEPS_ARGS >$W/linux-configure.log 2>&1 || { tail -30 $W/linux-configure.log; exit 1; }
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} $DEPS_ARGS >$W/linux-configure.log 2>&1 || { tail -30 $W/linux-configure.log; exit 1; }
     cmake --build $W/linux --target mu_native_gfx mu_native_gfx_services --parallel $jobs > $W/linux-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux-build.log | head -60; exit 1; }
     bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/linux/mu-native-gfx-linux
     bash $L check-dynamic '' $W/net/obj-linux-services/netplay.o $W/linux/mu-native-gfx-linux-services
@@ -229,11 +237,13 @@ build_nro() {
     export PATH=/opt/devkitpro/devkitA64/bin:\$PATH
     for v in obj-nx obj-nx-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o -a $W/net/\$v/netplay-weak.o -nt $L ] || bash $L weaken aarch64-none-elf- $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done
     cmake -S experiments/native-engine/frontend -B $W/nx -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=switch \
-      -DCMAKE_TOOLCHAIN_FILE=/w/switch/cmake/SwitchGCC.cmake -DMELEE_NX_SDK_DIR=/w/build/sdk $DEPS_ARGS >$W/nx-configure.log 2>&1 || { tail -30 $W/nx-configure.log; exit 1; }
+      -DCMAKE_TOOLCHAIN_FILE=/w/switch/cmake/SwitchGCC.cmake -DMELEE_NX_SDK_DIR=/w/build/sdk -DMU_FE_FEATURES=${MU_FE_FEATURES:-ON} $DEPS_ARGS >$W/nx-configure.log 2>&1 || { tail -30 $W/nx-configure.log; exit 1; }
     cmake --build $W/nx --parallel $jobs > $W/nx-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/nx-build.log | head -60; exit 1; }
     bash $L check aarch64-none-elf- $W/net/obj-nx/netplay.o $W/nx/mu-native-gfx.elf
     [ ! -f $W/nx/mu-native-gfx-services.elf ] || bash $L check aarch64-none-elf- $W/net/obj-nx-services/netplay.o $W/nx/mu-native-gfx-services.elf
     cp $W/nx/mu-native-gfx*.nro $W/out/
+    # The app: the services program under the name the Homebrew Menu, the self-update and the forwarders use.
+    [ ! -f $W/out/mu-native-gfx-services.nro ] || cp $W/out/mu-native-gfx-services.nro $W/out/melee-nx-netplay.nro
     ls -l $W/out/*.nro"
   echo "built $out/mu-native-gfx.nro$([ -f "$out/mu-native-gfx-services.nro" ] && echo ' and mu-native-gfx-services.nro')"
 }

@@ -48,6 +48,14 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/slippi_files.cpp` | Slippi's menu files (`slippi_menus 1`), built from this repository's vendored patches and the player's disc. |
 | `src/shim/` | The few host functions the decoder and the app's input and sound sources need, on melee-unlocked's host services. |
 | `src/switch_glue.cpp` | Two symbols the app's Switch layer expects. |
+| `src/app.cpp` | The app (no arguments): the app's folders, `launcher.ini`, the memory card's one-time backup, controller configuration (remapping, deadzones, rumble), the HUD's numbers, the window queries of the app's menu code, the layout and disc screens. |
+| `src/app_menu.cpp` | The app's in-game menu (`port/runtime/host/game_menu.cpp`) wired to this engine: the app's rows, four `settings.ini` pages, the feature modules' pages. |
+| `src/app_services.cpp` | Services program only: the update from the player's build computer and the Slippi sign-in screen, drawn on the render thread before the game. |
+| `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
+| `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
+| `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
+| `test-app-linux.sh` | The app without a console: boot, menu, sign-in, update, online cases. |
+| `app-build.sh`, `update-host-native.patch`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
@@ -309,6 +317,88 @@ before them, the netplay device, log lines queued, disc reads, stream bytes from
 is answered with that result), prints the layout line, restarts the title with `--relaunch` as the runner does, and
 ends with `play: cannot start: ...` otherwise.
 
+## The app: Melee-NX-NetPlay 0.4.0
+
+`out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" 0.4.0, the app's icon: `build/icon.jpg` when
+the app's build drew one, else `switch/icon.jpg`) replaces the recompiled app. Started with no arguments (the Homebrew
+Menu, a forwarder that adds only `--relaunch`) it is the app; with arguments it is the test program described above.
+Off the console `--app [--base DIR]` gives the same (default folder `./melee-nx-netplay`).
+
+**From launch to an online match**: the update prompt when the build computer has a newer build; the Slippi sign-in
+screen when `User/Slippi/user.json` is missing (A on the rows uses the console's keyboard; B or Play offline starts
+offline; + quits); then the game boots to Slippi's Online Play page (Unranked, Direct, Teams, Party). Picking a row
+and starting the search on Slippi's character select finds a match through the app's matchmaking client; the
+player's controllers (GameCube adapter, Pro Controller, Joy-Con) play it, rumble included. L + R + Start held for
+half a second opens the in-game menu at any time; with `hud=1` the HUD line shows frame time, late frames and, online,
+the input delay and ping.
+
+**Folders** (`sdmc:/switch/melee-nx-netplay`, the earlier app's): `GALE01.iso` (or `iso=`), `User/Slippi` (sign-in),
+`User/GC/CardA` (memory card), `Replays`, `Cache` (Aurora's pipelines, shared with the earlier app: the same renderer),
+`Logs/latest.log` (the one before: `previous.log`; `host.log`; `digest-net-confirmed.csv`), `launcher.ini`, `settings.ini`.
+The memory card is the earlier app's `User/GC/CardA`: both engines keep slot A as a Dolphin-style folder of GCI files
+and read every `.gci` in it, the native host keeps a loaded file's name when it saves, and the save data is the same
+game's. So names, rules, records and unlocks carry over. The first session copies the folder once to
+`User/GC/CardA-before-0.4` before anything writes to it, so 0.3.x can always go back to the card as it was.
+
+**launcher.ini keys honoured**: `iso`, `volume` (default 100), `hud`, `online_delay` (`auto` or 1..9; wins over
+settings.ini), `offline=1` (no online services, no sign-in, no update check), `widescreen` (16:9 code when settings.ini
+does not set `widescreen`; default 1 as in the app), `filter` (live), `msaa`, `anisotropy` (at start), `trigger_range`,
+`stick_range` (console), `update_host`, `overclock=0`, `shader_warmup=0`, `shader_warmup_all=1`, `script`, `frames`,
+`menu_open`, `menu_page` (the app's test aids). New: `pad.<SDL GUID>=<port>;<map>` and `keyboard=<map>` (the menu's
+Controls page writes them, `input_config.h` format). Not used here: `scale`, `render_skip`, `draw_dump`, the app's
+diagnosis keys. Every `settings.ini` key above is honoured; the app's default for `slippi_menus` is 1.
+
+**In-game menu** (the app's, `patches/0104`): Texture filtering \*, Aspect ratio \*, Screen filter, Antialiasing \*,
+Volume, Online input delay \*, Light shield range, GameCube stick range, then the pages *Game options* (results screen,
+everything unlocked, language, music, mute voices, faster sound effects, frozen Stadium and Final Destination, retail
+game, Slippi menus), *Picture and HUD* (PAL stock icons, screen shake, HUD sizes, player tags, KO explosions, HUD
+emblems, hitboxes, 2D camera, grid), *Community codes* (each bit), *Computer players* (20XX CPUs and the CPU options),
+the feature modules' pages, Controls (each SDL controller: remap, deadzones, trigger press point, swap sticks,
+rumble, test rumble), Performance HUD, Resume, Quit. Changes are written to `settings.ini` (keeping its comments) or
+`launcher.ini` at once; controller pages when the menu closes. Rows upstream only allows offline are greyed while the
+session is online ("Locked during online play"). \* = at the next start (the online delay too: the netplay object
+takes it when it starts, and has no call to change it later). Quit stops the game cleanly and closes the application
+(HOME Menu), as the app's Quit does; returning to the Homebrew Menu is not offered because the graphics stack leaves
+threads behind in the process (see Run).
+
+**Launch reliability**: when the address layout cannot hold the game (about one launch in 70, `fixedmap.h`) the app
+restarts itself if `--relaunch` was given (a forwarder), otherwise it shows "PLEASE START THE APP AGAIN" with the reason
+(services program; the other program logs it). A missing disc shows "DISC NOT FOUND" with the path.
+
+**Self-update**: as the app: `update_host=http://address:port` in launcher.ini, the same `latest.json` (schema 1, the
+`game` entry), prompt (A install, B later, + quit), download beside the NRO, size and SHA-256 check, rename into place,
+`.bak` kept. The target is the NRO the app was started from (`argv[0]`), else `sdmc:/switch/melee-nx-netplay/melee-nx-netplay.nro`.
+This program has no RomFS holding its file open, so the swap happens right after the download; a swap left waiting
+is finished at the next start. The comparison is `0.4.0` / Slippi `3.7.0` (the netplay object's pin).
+
+**Feature modules**: the other modules plug in through `src/feature_hooks.h` (their interface): play mode calls
+`dispatch_tables` first in its tables hook, `dispatch_command` first in `mu_frontend_command`, `dispatch_retrace` each
+retrace, `dispatch_setting` for unknown settings.ini keys, `dispatch_run_end`, `menu_entries` (menu pages) and
+`hud_lines` (appended to the HUD). The calls are weak (`feature_calls.h`): `MU_FE_FEATURES=OFF ./build.sh ...` builds
+without the modules. Presentation pacing for sub-frame presenters: `fe::set_present_hook` (frontend.h; presents per
+game frame and a callback per extra present, render thread) and `fe::display_refresh_hz()` (SDL's display mode).
+
+### Publishing (the build computer)
+
+`app-build.sh` builds this NRO into `dist/sd/switch/melee-nx-netplay/melee-nx-netplay.nro`. What it needs beyond
+the current builder: Docker images `mu-arm-gcc15` (built by the script from `../linux-gcc15.Dockerfile` if missing) and
+`melee-nx-netplay-build`; `build/sdk` and `build/switch-aurora/_deps` (both left by one `install.sh` run); one network
+fetch of melee-unlocked v1.0.5 (`../fetch.sh`, pinned to `67868aa`; `MU_SOURCE=file://...` works offline); then
+`../build.sh game`, `../build.sh linux`, `../build.sh nro`, `MU_NET_SERVICES=1 ../build.sh nro`, `./build.sh sync`,
+`./build.sh nro`. `update-host-native.patch` (not applied here) makes `tools/update-host.py` publish only the `game`
+entry (`MELEE_NX_UPDATE_NROS=game`) with the version from `VERSION` (`MELEE_NX_UPDATE_VERSION_FILE`), and names the
+three `Environment=` lines for `builder/systemd/melee-nx-update.service` (the build command is the existing
+`MELEE_NX_UPDATE_BUILD`). 0.3.x consoles then offer 0.4.0 and install it in place of their NRO.
+
+### A HOME Menu icon (forwarder)
+
+Not built here. A forwarder is an NSP whose program is nx-hbloader set to load one fixed NRO path (with arguments it
+passes along, for this app `--relaunch`); tools that make them: hacBrewPack (packs the NCA/NSP), NTON and Nro2Nsp on a
+computer, Switch-NSP-Forwarder and sphaira on the console. All need the console's own keys (`prod.keys`, from
+Lockpick_RCM: `header_key`, `key_area_key_application_*`), the NSP is installed to the console (a title install), and it
+only boots under custom firmware with signature patches, since it cannot carry Nintendo's signature. The path is fixed
+when it is built. Unverified here: how each tool passes extra arguments.
+
 ## Verified
 
 On aarch64 Linux in a container (Apple M5 Ultra), with the same game image as the headless runner, runner and
@@ -366,6 +456,27 @@ Online play mode on Linux (runner and patches from the working tree after `1c556
 | Logs | 238 to 259 lines per online run went through the log thread, none dropped, nothing written to the file during the match; the netplay host measures 0.000 ms of log writing per frame |
 | Services link fix (`netplay_link.sh`), Linux services program | `services check: libcurl 8.14.1 with OpenSSL/3.5.9: global set-up and a request handle OK`; the app's report path runs its `call_once` and curl (`[net] slippi http: GET ... failed: Could not resolve host`, no network in the container), the matchmaking client likewise; matched, played, identical. Console ELF: `ensure_global`'s lambda now branches to `curl_global_init` (it was a `nop` and a zero word); a copy weakened the old way is refused by the check |
 | `test-net-linux.sh` without delay, scripted `parity_vs_onett` with a picture (9000 retraces) after all of this | final state identical; digest IDENTICAL |
+
+The app on Linux (`test-app-linux.sh`, the Linux services program, runner `d53f7e7`, game image `6be32fe9...`, feature
+modules not linked: `MU_FE_FEATURES=OFF`), one container each, loopback only:
+
+| Case | Result |
+|---|---|
+| `boot`: no arguments at all, a made-up user.json | the app's folder made (User/GC/CardA, User/Slippi, Replays, Cache, Logs), launcher.ini read (iso, frames), settings.ini template written, card backup line, services check, online on; the game boots to Slippi's Online Play page in 16:9 (screenshot) |
+| `menu`: a controller script through the app's input code holds L + R + Start on the main menu | the menu opens (screenshot: the console's rows, v0.4.0); Volume 100 -> 70 and Performance HUD on are in launcher.ini (`volume=70`, `hud=1`), Music 100 -> 80 on Game options is in settings.ini (`music 80`, replacing its template line); Start closes it and the HUD line shows (screenshot); a second start reads them back (`launcher.ini: ... hud=1 ... volume=70`, `music 80%`) |
+| `signin`: no user.json | `the sign-in screen comes first`; the app's sign-in screen (screenshot); B through the test pad file: `sign-in: playing offline`, `online is off for this session`, the game boots with Log-in on Online Play (screenshot). Nothing is contacted |
+| `update`: a fake build computer (`python3 -m http.server` on 127.0.0.1) with latest.json 0.4.1 and a 3 MB file | the prompt (screenshot), A: downloaded, size and SHA-256 checked, swapped in (the installed file now has the published hash, `.bak` holds the dummy), "UPDATE INSTALLED" (screenshot), A: the app closes before the game; with 0.4.0 published: no prompt, the game starts |
+| `online`: two apps, made-up users, the matchmaking stand-in, each player's controller script (no `--net-inputs`, no generated inputs) through Online Play > Unranked | both search from the menu, matched, connected, played the match; confirmed states of the match scene identical on both sides (final frame IDENTICAL, 0 or 1 shown frame differing as in the earlier runs); 0 desync messages; the HUD in the match shows `sim`, `late 0`, `delay 2` (screenshot) |
+| After all of this: scripted `parity_vs_onett`, 9000 retraces, no graphics device and with a picture | digest IDENTICAL |
+| `test-online-linux.sh`, `test-net-linux.sh` | as before: final state identical on both sides |
+| NRO (`./build.sh nro`) | `melee-nx-netplay.nro` links; NACP name Melee-NX-NetPlay, version 0.4.0 |
+
+Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
+over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble
+of SDL controllers, the shared pipeline cache, the card carried over from 0.3.x); a real Slippi match from the app;
+the feature modules linked into the app (they did not build at the time: `snapshot_store.h` is reached through
+runner/features of the working tree, which CMake now adds, and `present.cpp` needs `port/runtime/gx/subframe.cpp`
+and its dependencies).
 
 Not looked at: the Hack Pack's debug menu, hidden characters, playlists and stage variants beyond the first pick;
 TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
@@ -437,7 +548,11 @@ why is not known. The same costume's portrait on the character select screen is 
   (`--cache-dir sdmc:/switch/melee-nx-netplay/Cache` would share it; not tried).
 - The app's adapter code looks for a GameCube adapter every two seconds from the simulation thread for as long as
   there is none; here it gets three looks and then one a minute until an adapter has answered once.
-- No in-game menu or HUD overlay, no controller remapping, no volume control while running, no Slippi music player.
+- Plain `--play` has no in-game menu or HUD (the app has them); no Slippi music player.
+- The HUD's ping comes from the netplay object's log line `slippi: ping N ms` (every 600 frames, and only on the side
+  whose opponent is in port index 0): one side of a match shows it, the other does not. `netplay_bridge` keeps the
+  ping (`g_ping_ms`) but has no call that returns it; one `NETPLAY_API int ping_ms()` there (and one to change the input
+  delay) would fix both gaps.
 
 ## Licensing
 

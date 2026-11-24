@@ -13,6 +13,7 @@
 #include "audio.h"
 #include "window.h"
 #include "jukebox.h"
+#include <dolphin/pad.h>
 #endif
 
 #include <atomic>
@@ -235,6 +236,7 @@ extern "C" int mu_frontend_pad_read(MuPadStatus out[4]) {
   if (!fe::auto_vs.step(out)) {
     host::PadState pads[4];
     host::input_poll(pads);
+    if (fe::options.app) fe::app_pad_postprocess(pads);   // the player's remapping, deadzones (launcher.ini pad.<guid>)
     static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
     std::memcpy(out, pads, sizeof pads);
   }
@@ -244,7 +246,11 @@ extern "C" int mu_frontend_pad_read(MuPadStatus out[4]) {
   return 1;
 }
 extern "C" void mu_frontend_pad_rumble(int32_t port, int32_t on) {
-  if (fe::options.play && fe::running.load(std::memory_order_relaxed) && port >= 0 && port < 4) host::gcadapter_rumble(port, on != 0);
+  if (!fe::options.play || !fe::running.load(std::memory_order_relaxed) || port < 0 || port >= 4) return;
+  host::gcadapter_rumble(port, on != 0);
+  // A controller Aurora's PAD put on the port (Pro Controller, Joy-Con, a pad seen through SDL), unless its
+  // saved configuration turned rumble off. The adapter's ports are rumbled by the adapter code above.
+  if (on == 0 || fe::app_rumble_allowed(port)) host::gamepad_rumble(port, on != 0);
 }
 
 // ---- what the app's sources expect from the rest of the app ----
@@ -252,10 +258,13 @@ namespace host {
 uint32_t retrace_count() { return linux_host::counters().retraces; }
 void audio_session_report() {}
 void window_gamepad_rumble(int port, bool on) { gamepad_rumble(port, on); }
-// The app's in-game menu sits here (input_poll calls it with every source merged). This program has no
-// menu; it keeps the menu's way out: L + R + Start held, without A (Melee's own L + R + A + Start is left
-// alone), here for a second and a half, ends the run.
+// game_menu.cpp's menu_frame, compiled under this name (CMakeLists.txt): the app's in-game menu.
+void app_menu_frame(PadState pads[4]);
+// input_poll calls this with every source merged. The app (app mode): the app's in-game menu, opened with
+// L + R + Start held for half a second, while the game runs. Plain play mode keeps the earlier way out:
+// L + R + Start held, without A (Melee's own L + R + A + Start is left alone), for a second and a half, ends the run.
 void menu_frame(PadState pads[4]) {
+  if (fe::options.app) { if (fe::running.load(std::memory_order_relaxed)) app_menu_frame(pads); return; }
   bool held = false;
   for (int i = 0; i < 4; ++i) {
     if (pads[i].err != 0) continue;
@@ -288,4 +297,21 @@ uint32_t gcadapter_poll(PadState out[4]) {
 #endif
 }  // namespace host
 namespace slippi::jukebox { void mix(int16_t*, size_t, int) {} }   // the Slippi music player is not part of this program
+
+// The screens before the game (switch_signin.cpp with patches/0105) read the controllers here: the app's whole
+// input path (GameCube adapter, SDL gamepads through Aurora's PAD, the MELEE_PAD_FILE test file), as PADStatus.
+namespace host {
+void signin_pad_read(PADStatus status[4]) {
+  PadState pads[4];
+  input_poll(pads);
+  for (int i = 0; i < 4; ++i) {
+    status[i] = {};
+    status[i].err = pads[i].err == 0 ? PAD_ERR_NONE : PAD_ERR_NO_CONTROLLER;
+    status[i].button = pads[i].button;
+    status[i].stickX = pads[i].stick_x; status[i].stickY = pads[i].stick_y;
+    status[i].substickX = pads[i].sub_x; status[i].substickY = pads[i].sub_y;
+    status[i].triggerLeft = pads[i].trig_l; status[i].triggerRight = pads[i].trig_r;
+  }
+}
+}  // namespace host
 #endif

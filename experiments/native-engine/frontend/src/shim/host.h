@@ -41,4 +41,9 @@ void gcadapter_shutdown();
 void gamepad_rumble(int port, bool on);
 uint32_t retrace_count();
 void audio_session_report();
+// ---- what the app's in-game menu and HUD ask (game_menu.cpp; app.cpp answers) ----
+double last_sim_frame_ms();            // simulation-thread work of the last frame, ms (the 60 Hz wait excluded)
+uint64_t late_frame_count();           // frames whose work took longer than one 60 Hz period
+int online_ping_ms();                  // -1 when not online
+const char* latency_warning();
 }  // namespace host

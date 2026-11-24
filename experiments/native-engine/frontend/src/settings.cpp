@@ -11,13 +11,18 @@
 
 #include "mu_host.h"
 #include "hackpack_source.h"     // melee-unlocked (fetched tree): the Hack Pack's saved choices
+#include "feature_calls.h"       // the feature modules' settings keys (src/features/)
 
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <mutex>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace fe {
 namespace {
@@ -56,7 +61,10 @@ std::atomic<bool> online{false};
 bool active = false, boot_to_css = false;
 uint32_t cpu_word = 0;                    // option word 3's CPU bits: from the cpu_* keys, then the Hack Pack's menu
 bool cpu_word_from_menu = false;
-std::string state_path;
+std::string state_path, file_path;
+std::set<std::string> given;              // keys settings.ini set
+std::mutex file_mutex;                    // settings.ini is written from the menu (simulation thread) only, but keep it simple
+bool app_slippi_default = false;          // the app's default for slippi_menus (settings_app_defaults)
 
 uint32_t cpu_word_of_settings();
 
@@ -157,7 +165,89 @@ void set(const std::string& key, const std::string& value) {
   else if (key == "te_menu_music") s.te_menu_music = n;
   else if (key == "hp_settings") source_port::hackpack::settings_parse(value);
   else if (key == "cpu_word") { cpu_word = uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & MU_GAME_OPTION3_CPU_ALL; cpu_word_from_menu = true; }
+  else if (features::call_setting(key, value)) {}   // a feature module's key
   else say("play: settings: unknown key \"%s\"", key.c_str());
+}
+std::string hex(uint32_t v) { char b[16]; std::snprintf(b, sizeof b, "%X", v); return b; }
+std::string num(int v) { return std::to_string(v); }
+std::string bit(bool v) { return v ? "1" : "0"; }
+// The value settings.ini would hold for `key` (as set() reads it); empty for a key this file does not know.
+std::string get(const std::string& key) {
+  const auto& s = settings;
+  if (key == "unlock_all") return bit(s.unlock_all);
+  if (key == "results_screen") return bit(s.results_screen);
+  if (key == "palstockicons") return bit(s.pal_stock_icons);
+  if (key == "noscreenshake") return bit(s.no_screen_shake);
+  if (key == "screenshake") return num(s.screen_shake);
+  if (key == "stockhudscale") return num(s.stock_hud_scale);
+  if (key == "damagehudscale") return num(s.damage_hud_scale);
+  if (key == "playertags") return bit(s.player_tags);
+  if (key == "hide_ko_explosions") return bit(s.hide_ko_explosions);
+  if (key == "hide_hud_emblems") return bit(s.hide_hud_emblems);
+  if (key == "community_codes") return hex(s.community_codes);
+  if (key == "stadium_frozen") return bit(s.stadium_frozen);
+  if (key == "freeze_fd") return bit(s.freeze_fd);
+  if (key == "widescreen") return bit(s.widescreen);
+  if (key == "arcade_hitboxes") return bit(s.arcade_hitboxes);
+  if (key == "arcade_projectile_hitboxes") return bit(s.arcade_projectile_hitboxes);
+  if (key == "arcade_hitboxes_behind") return bit(s.arcade_hitboxes_behind);
+  if (key == "arcade_camera_2d") return bit(s.arcade_camera_2d);
+  if (key == "arcade_backdrop") return num(s.arcade_backdrop);
+  if (key == "arcade_grid_rgb") return hex(s.arcade_grid_rgb);
+  if (key == "cpu_20xx") return bit(s.cpu_20xx);
+  if (key == "cpu_tech") return num(s.cpu_tech);
+  if (key == "cpu_getup") return num(s.cpu_getup);
+  if (key == "cpu_di") return num(s.cpu_di);
+  if (key == "cpu_sdi") return num(s.cpu_sdi);
+  if (key == "cpu_notaunt") return bit(s.cpu_no_taunt);
+  if (key == "cpu_lcancel") return bit(s.cpu_lcancel);
+  if (key == "cpu_nojab") return bit(s.cpu_no_rapid_jab);
+  if (key == "cpu_notransform") return bit(s.cpu_no_transform);
+  if (key == "mute_voices") return bit(s.mute_voices);
+  if (key == "audio_early_keyon") return bit(s.audio_early_keyon);
+  if (key == "gamelanguage") return num(s.language);
+  if (key == "music") return num(s.music);
+  if (key == "lowpoly") return bit(s.low_poly);
+  if (key == "fodreflections") return bit(s.fod_reflections);
+  if (key == "cssbackgroundfree") return bit(s.css_background_free);
+  if (key == "training_hud") return bit(s.training_hud);
+  if (key == "vanilla") return bit(s.vanilla);
+  if (key == "slippi_menus") return bit(s.slippi_menus);
+  if (key == "onlinedelay") return num(s.online_delay);
+  if (key == "onlinedelayauto") return bit(s.online_delay_auto);
+  if (key == "mod_profile") return s.mod_profile;
+  if (key == "mod_te_enabled") return bit(s.mod_te_enabled);
+  return std::string();
+}
+// Writes `key value` into settings.ini, keeping every other line and comment: an existing line for the key is
+// replaced, else its commented template line, else the line is added at the end.
+void save(const std::string& key, const std::string& value) {
+  std::lock_guard<std::mutex> lock(file_mutex);
+  if (file_path.empty()) return;
+  std::vector<std::string> lines;
+  { std::ifstream in(file_path); std::string line; while (std::getline(in, line)) lines.push_back(line); }
+  const std::string wanted = key + " " + value;
+  const auto first_word = [](const std::string& line, size_t from) {
+    size_t a = line.find_first_not_of(" \t", from); if (a == std::string::npos) return std::string();
+    size_t b = line.find_first_of(" \t#", a); return line.substr(a, b == std::string::npos ? std::string::npos : b - a);
+  };
+  bool done = false;
+  for (auto& line : lines) {
+    const size_t start = line.find_first_not_of(" \t");
+    if (start != std::string::npos && line[start] != '#' && first_word(line, start) == key) { line = wanted; done = true; }
+  }
+  if (!done)
+    for (auto& line : lines)
+      if (!line.empty() && line[0] == '#' && first_word(line, 1) == key) { line = wanted; done = true; break; }
+  if (!done) lines.push_back(wanted);
+  const std::string temporary = file_path + ".tmp";
+  {
+    std::ofstream out(temporary, std::ios::trunc);
+    if (!out) return;
+    for (const auto& line : lines) out << line << '\n';
+  }
+  std::remove(file_path.c_str());
+  if (std::rename(temporary.c_str(), file_path.c_str()) != 0) std::remove(temporary.c_str());
 }
 
 // As source_host.cpp's te_words_mask1/2 and kHpTeOptions/2.
@@ -253,16 +343,22 @@ void settings_boot_to_css(bool on) { boot_to_css = on; }
 
 void settings_load(const std::string& path) {
   active = true;
+  file_path = path;
   FILE* in = std::fopen(path.c_str(), "r");
   if (!in) {
-    if (FILE* out = std::fopen(path.c_str(), "w")) { std::fputs(kTemplate, out); std::fclose(out); say("play: settings: %s written with every line commented out (the defaults)", path.c_str()); }
+    std::string text = kTemplate;
+    if (app_slippi_default) {   // the app's default: Slippi's menus (Online Play on the main menu)
+      const size_t at = text.find("#slippi_menus 0 ");
+      if (at != std::string::npos) text.replace(at, 16, "#slippi_menus 1 ");
+    }
+    if (FILE* out = std::fopen(path.c_str(), "w")) { std::fputs(text.c_str(), out); std::fclose(out); say("play: settings: %s written with every line commented out (the defaults)", path.c_str()); }
     else say("play: settings: no %s; defaults", path.c_str());
   } else {
     char line[512]; int count = 0;
     while (std::fgets(line, sizeof line, in)) {
       if (char* hash = std::strchr(line, '#')) *hash = 0;
       char key[64], value[256];
-      if (std::sscanf(line, " %63s %255s", key, value) == 2) { set(key, value); ++count; }
+      if (std::sscanf(line, " %63s %255s", key, value) == 2) { set(key, value); given.insert(key); ++count; }
     }
     std::fclose(in);
     say("play: settings: %d lines read from %s", count, path.c_str());
@@ -279,6 +375,21 @@ void settings_load(const std::string& path) {
     std::fclose(state);
   }
 }
+
+std::string settings_get(const std::string& key) { return get(key); }
+bool settings_given(const std::string& key) { return given.count(key) != 0; }
+void settings_set_quiet(const std::string& key, const std::string& value) { set(key, value); }
+bool settings_change(const std::string& key, const std::string& value) {
+  if (get(key).empty() && key != "mod_profile") return false;
+  set(key, value);
+  if (key.rfind("cpu_", 0) == 0 && key != "cpu_20xx") cpu_word = cpu_word_of_settings();   // the CPU rows feed option word 3
+  save(key, get(key));
+  say("play: settings: %s %s (written to %s)", key.c_str(), get(key).c_str(), file_path.c_str());
+  return true;
+}
+void settings_app_defaults(bool online_possible) { app_slippi_default = online_possible; settings.slippi_menus = online_possible; }
+bool settings_online_now() { return online.load(std::memory_order_relaxed); }
+const std::string& settings_path() { return file_path; }
 
 // After the host has started (the profile's layers are known): what the game will be told.
 void settings_report() {

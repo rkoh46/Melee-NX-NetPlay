@@ -40,6 +40,8 @@ int main(int argc, char** argv) {
 #else
   fe::options.out_dir = "./mu-native-out";
 #endif
+  // No arguments (the Homebrew Menu, a forwarder that adds only --relaunch), or --app: the app (app.cpp).
+  fe::options.app = fe::app_wanted(argc, argv);
   std::vector<char*> rest;
   for (int i = 0; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -65,6 +67,8 @@ int main(int argc, char** argv) {
     else if (arg == "--window" && i + 1 < argc) { std::sscanf(argv[++i], "%dx%d", &fe::options.width, &fe::options.height); }
     else if (arg == "--gfx-sync-net") fe::options.sync_net = true;
     else if (arg == "--log-direct") fe::options.log_direct = true;
+    else if (arg == "--app") fe::options.app = true;
+    else if (arg == "--base" && i + 1 < argc) fe::options.base_dir = argv[++i];
     else {
       if (arg == "--out" && i + 1 < argc) fe::options.out_dir = argv[i + 1];
       if (arg == "--no-overclock") fe::options.overclock = false;
@@ -76,6 +80,11 @@ int main(int argc, char** argv) {
   }
   for (size_t i = 1; i < rest.size(); ++i) fe::options.rest.push_back(rest[i]);
   rest.push_back(nullptr);
+  if (fe::options.app) {
+    fe::options.play = true;
+    if (argc > 0 && argv[0]) fe::options.self_path = argv[0];   // the Homebrew Menu and forwarders name the NRO here
+    fe::app_configure();        // the app's folders and launcher.ini (app.cpp)
+  }
 #ifdef __SWITCH__
   if (fe::options.play && fe::options.iso.empty()) fe::options.iso = "sdmc:/switch/melee-nx-netplay/GALE01.iso";   // the runner's default
 #endif

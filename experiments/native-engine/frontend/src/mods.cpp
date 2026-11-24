@@ -21,6 +21,7 @@
 // The scripted runs never get here.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
+#include "feature_calls.h"
 
 #include "host_services.h"
 #include "hackpack_source.h"     // melee-unlocked (fetched tree): the Hack Pack's host side, header only
@@ -34,6 +35,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <functional>
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -244,9 +246,98 @@ void publish(bool retail) {
 void append_be32(std::vector<uint8_t>& out, uint32_t v) { out.push_back(uint8_t(v >> 24)); out.push_back(uint8_t(v >> 16)); out.push_back(uint8_t(v >> 8)); out.push_back(uint8_t(v)); }
 }  // namespace
 
+// ---- the other mod discs melee-unlocked's host recognises (port/app/source_host.cpp, after the layers load) ----
+// Training Mode CE: its /TM/ files feed the game's native TM-CE (MU_GAME_OPTION_TMCE, added to the options word
+// by the feature modules offline); like upstream, not with Akaneia. Akaneia: one disc with the m-ex tables and its
+// fighters' files. rogueMelee: one disc whose id is GALERM (MU_MOD_ROGUE). Melee Maker: one disc whose main.dol
+// carries the supported build id (MU_MOD_MAKER; its bone tables reach the game through command 0xEE, as
+// port/runtime/host/maker_source.h serves them; reimplemented here without that header's dependencies).
+namespace {
+bool tmce = false, akaneia = false, rogue = false, maker = false;
+std::string fingerprint;                         // the replay's modProfile: empty for the retail files
+constexpr char kMakerBuild[] = "1.3.8-1865b7";
+struct MakerDol { std::vector<uint8_t> dol; uint32_t offset[18] = {}, address[18] = {}, size[18] = {}; } maker_dol;
+uint32_t maker_cache_base = 0, maker_cache_size = 0;
+bool maker_cache_tried = false;
+
+bool maker_attach(const std::string& iso) {
+  const int fd = open(iso.c_str(), O_RDONLY);
+  if (fd < 0) return false;
+  uint8_t head[4]{}, hdr[0x100]{};
+  bool ok = read_at(fd, 0x420, head, 4) && read_at(fd, be32(head), hdr, sizeof hdr);
+  uint32_t extent = sizeof hdr;
+  for (int i = 0; ok && i < 18; ++i) {
+    maker_dol.offset[i] = be32(hdr + i * 4); maker_dol.address[i] = be32(hdr + 0x48 + i * 4); maker_dol.size[i] = be32(hdr + 0x90 + i * 4);
+    if (maker_dol.size[i]) extent = std::max(extent, maker_dol.offset[i] + maker_dol.size[i]);
+  }
+  if (ok && extent <= 16u * 1024u * 1024u) { maker_dol.dol.resize(extent); ok = read_at(fd, be32(head), maker_dol.dol.data(), extent); }
+  else ok = false;
+  close(fd);
+  const char* end = kMakerBuild + sizeof kMakerBuild;      // with its terminator
+  if (!ok || std::search(maker_dol.dol.begin(), maker_dol.dol.end(), kMakerBuild, end) == maker_dol.dol.end()) { maker_dol = MakerDol{}; return false; }
+  return true;
+}
+
+// After the layers: which of these the profile is, and its content identity for replays.
+void identify(const std::function<bool(const char*)>& has) {
+  std::vector<const Layer*> isos;
+  for (const auto& layer : layers) if (layer.kind == Layer::Iso) isos.push_back(&layer);
+  const bool one_iso = isos.size() == 1;
+  akaneia = one_iso && has("/mxdt.dat") && has("/plsn.dat") && has("/plts.dat");
+  if (akaneia) say("mods: Akaneia found; its fighters are the game's native ones (offline; online matches get the retail files)");
+  if (has("/tm/eventmenu.dat")) {
+    if (akaneia) say("mods: Training Mode CE files found, but Training Mode CE needs the vanilla game; left off");
+    else { tmce = true; say("mods: Training Mode CE files found; its events run natively (Event Match)"); }
+  }
+  if (one_iso) {
+    char id[6] = {};
+    if (FILE* disc = std::fopen(isos[0]->path.c_str(), "rb")) { if (std::fread(id, 1, sizeof id, disc) != sizeof id) id[0] = 0; std::fclose(disc); }
+    if (std::memcmp(id, "GALERM", sizeof id) == 0) { rogue = true; say("mods: rogueMelee disc found; Rogue Mode runs natively (1-P Mode > Regular Match)"); }
+    else if (maker_attach(isos[0]->path)) { maker = true; say("mods: Melee Maker %s disc found; its builds run natively", kMakerBuild); }
+  }
+  // Content identity (metadata key modProfile): what the layers change, not upstream's whole-disc hash (that
+  // reads every disc in full); the same profile gives the same identity. Saves alone change no disc file.
+  if (std::any_of(files.begin(), files.end(), [](const ModFile& f) { return f.served; })) {
+    std::string text;
+    for (const auto& file : files)
+      if (file.served) text += file.path + "\t" + std::to_string(file.length) + "\t" + base_name(images[size_t(file.image)].path) + "\n";
+    fingerprint = host::memory_sha256(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+  }
+}
+
+// Command 0xEE, Melee Maker's data (maker_source.h): 0x01 addr(4) len(2) main.dol bytes at a console address;
+// 0x02 the build id; 0x03 its loading cache (32 MB right after the game's addressable memory: here nothing is
+// mapped for it, the reply is empty and the game loads its moves into the match heap, as upstream does when
+// the cache cannot be mapped).
+void maker_command(const uint8_t* p, uint32_t n, std::vector<uint8_t>& reply) {
+  if (!maker || n < 1) return;
+  if (p[0] == MU_MAKER_OP_DOL_READ && n == 7) {
+    const uint32_t address = be32(p + 1), size = uint32_t(p[5]) << 8 | p[6];
+    if (!size || size > MU_SLIPPI_RESPONSE_CAPACITY) return;
+    for (int i = 0; i < 18; ++i) {
+      if (!maker_dol.size[i] || address < maker_dol.address[i] || address - maker_dol.address[i] >= maker_dol.size[i] ||
+          size > maker_dol.size[i] - (address - maker_dol.address[i])) continue;
+      const uint8_t* src = maker_dol.dol.data() + maker_dol.offset[i] + (address - maker_dol.address[i]);
+      reply.assign(src, src + size);
+      return;
+    }
+  } else if (p[0] == MU_MAKER_OP_BUILD) {
+    reply.assign(kMakerBuild, kMakerBuild + sizeof kMakerBuild - 1);
+  } else if (p[0] == MU_MAKER_OP_CACHE && n == 1) {
+    if (!maker_cache_tried) { maker_cache_tried = true; say("mods: Melee Maker cache not mapped on this host; its moves load into the match heap"); }
+    if (maker_cache_size) { append_be32(reply, maker_cache_base); append_be32(reply, maker_cache_size); }
+  }
+}
+}  // namespace
+
+bool mods_tmce() { return tmce; }
+std::string mods_fingerprint() { return retail_view ? std::string() : fingerprint; }
 bool mods_te_owned() { return te_owned; }
 bool mods_hackpack() { return pack_loaded; }
-uint32_t mods_flags() { return (std::any_of(files.begin(), files.end(), [](const ModFile& f) { return f.served; }) ? MU_MOD_ASSETS_PRESENT : 0u) | (pack_loaded ? MU_MOD_HACKPACK : 0u); }
+uint32_t mods_flags() {
+  return (std::any_of(files.begin(), files.end(), [](const ModFile& f) { return f.served; }) ? MU_MOD_ASSETS_PRESENT : 0u) | (pack_loaded ? MU_MOD_HACKPACK : 0u) |
+         (rogue ? MU_MOD_ROGUE : 0u) | (maker ? MU_MOD_MAKER : 0u);
+}
 uint32_t mods_stage_bits() { return hackpack::stage_bits(); }
 
 namespace {
@@ -350,6 +441,7 @@ extern "C" void mu_frontend_disc_ready(void) {
     file.served = true;
   }
   publish(false);
+  identify(has);
   if (!layers.empty()) say("mods: %u disc files replaced, %u added%s", replaced, added, kept_retail ? " (the Hack Pack's menu and code files are not served)" : "");
   // Slippi's menus need Slippi's copies: they replace a layer's copy of the same file, in both views (as upstream).
   for (const std::string& path : slippi_files_publish())
@@ -379,6 +471,8 @@ extern "C" int mu_frontend_disc_read(uint64_t offset, void* out, size_t bytes) {
 // slippi_command: the commands of the mod features. Everything here is offline: play mode has no network session.
 extern "C" int32_t mu_frontend_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {
   using namespace fe;
+  // The feature modules first (feature_hooks.h); play mode only, so the scripted runs never reach them.
+  if (options.play) { const int32_t taken = features::call_command(command, payload, size, response, capacity, response_size); if (taken != INT32_MIN) return taken; }
   if (!configured) return INT32_MIN;
   std::vector<uint8_t> reply;
   const auto read32 = [&](uint32_t at) { return be32(payload + at); };
@@ -412,6 +506,8 @@ extern "C" int32_t mu_frontend_command(uint8_t command, const uint8_t* payload, 
       settings_state_changed();
     }
     append_be32(reply, w1); append_be32(reply, w2);
+  } else if (command == MU_MAKER_COMMAND) {                                                // Melee Maker's data
+    maker_command(payload, size, reply);
   } else if (command == 0xF5 && size == 1) {                                               // content view: 0xFF offline, 0xFE asks, else an online mode
     if (payload[0] != 0xFE) {
       const bool retail = payload[0] != 0xFF && std::any_of(files.begin(), files.end(), [](const ModFile& f) { return f.served; });

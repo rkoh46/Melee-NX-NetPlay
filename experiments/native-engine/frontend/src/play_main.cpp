@@ -4,6 +4,7 @@
 // is not involved, so the exactness runs are unchanged.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
+#include "feature_calls.h"
 
 #include "host_services.h"
 #include "mu_elf_bridge.h"
@@ -43,6 +44,7 @@ bool direct = false;          // --net or --online on the command line: straight
 bool menu_online = false;     // the services program with Slippi's menus and a user file: a search starts from the game's own menu
 bool searching = false;       // between the game's "find a match" and its "clean the connection up" (simulation thread)
 bool online_now = false, in_match = false, tracked = false;
+std::atomic<bool> online_flag{false};   // online_now for other threads (the menu and the HUD)
 uint32_t last_match_frame = 0, match_count = 0, scene_major = 0xFFFFFFFF, scene_minor = 0;
 Clock::time_point last_retrace; bool have_last_retrace = false;
 
@@ -73,6 +75,7 @@ void observer(const MuStatePod& state, const linux_host::Counters& counters, voi
   const bool online = net_on && (direct || searching || state.scene_major == 8);
   if (online != online_now) {
     online_now = online;
+    online_flag.store(online, std::memory_order_relaxed);
     if (!direct) {
       settings_online(online);
       say("play: %s at retrace %u (scene %u/%u): the option words are now the %s ones", online ? "online" : "offline again", counters.retraces,
@@ -86,6 +89,14 @@ void observer(const MuStatePod& state, const linux_host::Counters& counters, voi
     say("play: match %u starts at retrace %u (scene %u/%u, %s); the words the game last read: %s", match_count, counters.retraces, state.scene_major, state.scene,
         online ? "online" : "offline", words);
   }
+  // The feature modules (feature_hooks.h) and the app's own per-retrace work (app.cpp).
+  {
+    features::Retrace info;
+    info.retrace = counters.retraces; info.scene_major = state.scene_major; info.scene_minor = state.scene;
+    info.match_frame = state.match_frame; info.fighting = fighting; info.online = online; info.state = &state;
+    features::call_retrace(info);
+  }
+  app_retrace(counters.retraces, fighting, online);
   if (net_on) {
     // The state row the netplay host checks and records, and the frame's wall time (it takes the pacing wait out).
     char row[1400]; int n = 0;
@@ -134,6 +145,7 @@ void resim_phase(int32_t entering) {
   if (resim_original) resim_original(entering);
 }
 void tables_hook(MuHostApi* host, MuGameApi* game) {
+  if (host) features::call_tables(host, game);   // first, before anything below wraps the table (feature_hooks.h)
   if (host) {
     if (net_on) {
       const auto own_test_match = host->online_test_match;
@@ -162,13 +174,14 @@ void* play_thread(void* user) {
   linux_host::Config config;
   config.iso_path = options.iso;
   config.game_path = "(embedded)";
-  config.log_path = options.out_dir + "/host.log";
+  config.log_path = options.host_log_path.empty() ? options.out_dir + "/host.log" : options.host_log_path;
   // Kept between sessions, apart from the scripted runs' card; a mod profile has its own.
   // No mod files in a session that can go online (upstream switches to the retail files for the match; here they are not loaded).
   if (net_on && !direct && !settings_profile().empty())
     say("play: mod profile \"%s\" is not loaded: this session can go online (slippi_menus 0 plays it offline)", settings_profile().c_str());
   const std::string profile_card = direct ? std::string() : mods_configure(net_on ? std::string() : settings_profile());
-  config.card_dir = profile_card.empty() ? options.out_dir + "/card-play" : profile_card;
+  config.card_dir = !profile_card.empty() ? profile_card : !options.card_dir.empty() ? options.card_dir : options.out_dir + "/card-play";
+  if (options.app && profile_card.empty() && !direct) app_backup_card();   // the earlier app's card, copied once before it is used
   config.max_frames = options.frames;                     // 0: until the player stops it
   // The frontend paces the retrace; with netplay the host does (its clock is what the netplay host moves).
   config.pace = net_on;
@@ -198,6 +211,7 @@ void* play_thread(void* user) {
   if (!direct) settings_report();
   linux_host::set_frame_observer(observer, nullptr);       // the frontend attaches here
   run->result = linux_host::run();
+  features::call_run_end();                                // the game stopped; its memory is still mapped
   const auto stats = linux_host::counters();
   linux_host::set_frame_observer(nullptr, nullptr);        // and detaches, before the game is unmapped
   if (net_on) net_host::stop_tracking();                   // tracked pages writable again before they are unmapped
@@ -208,6 +222,8 @@ void* play_thread(void* user) {
 }
 }  // namespace
 
+bool session_online() { return online_flag.load(std::memory_order_relaxed); }
+
 int play_main() {
 #ifdef __SWITCH__
   socketInitializeDefault();
@@ -215,7 +231,8 @@ int play_main() {
 #endif
   mkdir(options.out_dir.c_str(), 0777);
   log_open();
-  say("---- mu-native-gfx --play (native engine, interactive)%s ----", netplay_bridge::has_services() ? ", with online services" : "");
+  say("---- mu-native-gfx --play (native engine, interactive)%s%s ----", netplay_bridge::has_services() ? ", with online services" : "", options.app ? ", as the app" : "");
+  if (options.app) app_report();
   // The process layout, checked at the top of main (frontend_main.cpp), as the runner handles it.
   say("%s", fixedmap_layout());
   if (options.layout > 0) {
@@ -224,9 +241,23 @@ int play_main() {
     fixedmap_relaunch();                                    // does not come back when it works
     log_open();
   }
-  if (options.layout) { say("play: cannot start: %s", fixedmap_error()); log_close(); return 1; }
+  if (options.layout) {
+    say("play: cannot start: %s", fixedmap_error());
+    // The app tells the player in words, not only in the log (a forwarder with --relaunch never gets here).
+    if (options.app) { app_layout_screen(fixedmap_error()); screens_stop(); }
+    log_close();
+    return 1;
+  }
   if (fixedmap_relaunch_count()) say("play: started over %d time(s) to get a usable layout", fixedmap_relaunch_count());
   if (options.iso.empty()) { say("play: --iso PATH is needed"); log_close(); return 2; }
+  if (options.app && !file_exists(options.iso)) {
+    say("play: cannot start: no disc image at %s", options.iso.c_str());
+    app_message_screen("DISC NOT FOUND", {"Melee-NX-NetPlay needs your Super Smash Bros. Melee disc image (NTSC 1.02) at", options.iso, "",
+                                          "Copy it there (or name it with iso= in launcher.ini), then start the app again."});
+    screens_stop();
+    log_close();
+    return 2;
+  }
   // Netplay options (--net, --online, --net-delay, --net-retry, --track-remap, ...: ../runner/net_host.h) among what is left.
   bool delay_given = false;
   for (size_t i = 0; i < options.rest.size(); ++i) {
@@ -235,18 +266,23 @@ int play_main() {
     net_host::parse_option(options.rest[i], next, &net);
   }
   direct = net_host::wanted(net);
+  // The app: Slippi's menus by default when this program can go online (launcher.ini offline=1 says it may not).
+  if (options.app) settings_app_defaults(!options.offline && netplay_bridge::has_services());
   settings_boot_to_css(!direct && options.auto_vs && !options.auto_menus);
   settings_load(options.settings.empty() ? options.out_dir + "/settings.ini" : options.settings);
+  if (options.app) app_after_settings();
   if (direct) settings_deactivate();                        // only the online delay is taken from the file
   else if (settings_widescreen()) options.stretch = true;   // the 16:9 code draws for the whole screen
   // Input delay: --net-delay FRAMES|auto, else the settings file (onlinedelayauto / onlinedelay). Automatic is the
   // app's default: 2 to 5 frames from the round trip to the opponent, chosen by the netplay object at each game's start.
   if (!delay_given) {
-    const int frames = settings_online_delay();
+    // The app: launcher.ini online_delay (auto or 1..9, the in-game menu writes it) wins over settings.ini.
+    const int frames = options.app && options.online_delay >= 0 ? options.online_delay : settings_online_delay();
     net.delay_auto = frames <= 0;
     if (frames > 0) net.delay = frames;
   }
-  net.out_dir = options.out_dir; net.iso_path = options.iso; net.embedded_image = true;
+  net.out_dir = options.net_dir.empty() ? options.out_dir : options.net_dir; net.iso_path = options.iso; net.embedded_image = true;
+  if (net.user_dir.empty() && !options.user_dir.empty()) net.user_dir = options.user_dir;   // the app's User/Slippi
 #ifdef __SWITCH__
   const std::string user_dir = net.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User/Slippi" : net.user_dir;   // the app's sign-in (port/app/main_switch.cpp)
 #else
@@ -254,13 +290,28 @@ int play_main() {
 #endif
   // The services program checks what its first HTTPS request and the matchmaking connection need before anything
   // can use them (nothing is contacted). A failure leaves this session offline with the reason in the log.
+  // The app's screens before the game (render thread, which then draws the game): an update from the player's build
+  // computer, then the Slippi sign-in when there is no user.json yet, as port/app/main_switch.cpp does it.
+  bool offline_chosen = options.offline;
+  if (options.app && !direct) {
+    const bool online_wanted = !options.offline && settings_slippi_menus() && netplay_bridge::has_services();
+    const bool signed_in = net.fake_user || file_exists(user_dir + "/user.json");
+    if (online_wanted && !signed_in) say("app: no %s/user.json: the sign-in screen comes first", user_dir.c_str());
+    if (app_services_run && screens_start()) {
+      const AppStart start = app_services_run(!options.offline, online_wanted && !signed_in, user_dir);
+      if (start == AppStart::Quit) { say("---- done: the player left before the game started ----"); screens_stop(); log_close(); return 0; }
+      if (start == AppStart::PlayOffline && !signed_in) offline_chosen = true;
+    }
+  }
   bool services_ok = true;
-  if (netplay_bridge::has_services() && (!net.online.empty() || settings_slippi_menus())) {
+  if (netplay_bridge::has_services() && (!net.online.empty() || settings_slippi_menus()) && !offline_chosen) {
     services_ok = services_self_check && services_self_check();
     if (!services_ok) say("play: online is off for this session: the services check above failed");
   }
-  if (!services_ok && !net.online.empty()) { log_close(); return 1; }
-  if (!direct && settings_slippi_menus() && netplay_bridge::has_services() && services_ok) {
+  if (!services_ok && !net.online.empty()) { screens_stop(); log_close(); return 1; }
+  if (offline_chosen && !direct) {
+    say("play: online is off for this session (%s): the Online Play page will show Log-in", options.offline ? "launcher.ini offline=1" : "the player chose to play offline");
+  } else if (!direct && settings_slippi_menus() && netplay_bridge::has_services() && services_ok) {
     // The services program with Slippi's menus: the game's Online Play page asks the netplay host, as --online does.
     if (net.fake_user || file_exists(user_dir + "/user.json")) {
       menu_online = true;
@@ -275,7 +326,7 @@ int play_main() {
     say("play: online: this program has no online services (the services program has): the Online Play page will show Log-in");
   }
   if (direct || menu_online) {
-    if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); log_close(); return code; }
+    if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); screens_stop(); log_close(); return code; }
     net_on = true;
     if (options.sync_net) options.sync_decode = true;      // --gfx-sync-net: the earlier way, for comparison
     const std::string delay = net.delay_auto ? std::string("automatic") : std::to_string(net.delay);
@@ -293,6 +344,7 @@ int play_main() {
     say("play: clocks: cpu %u -> %u MHz reported (%s); the core measures %u MHz", before.cpu_hz / 1000000u, now.cpu_hz / 1000000u, now.cpu_ok ? "accepted" : "REFUSED", switch_measure_cpu_mhz());
   }
 #endif
+  if (options.app) app_menu_setup();                       // the app's in-game menu (Aurora builds)
   Run run;
   // The game runs its own main loop and expects a desktop-sized stack.
   pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
@@ -300,6 +352,7 @@ int play_main() {
   if (pthread_create(&thread, &attr, play_thread, &run) == 0) pthread_join(thread, nullptr);
   else say("play: cannot create the simulation thread");
   pthread_attr_destroy(&attr);
+  screens_stop();                                           // the game never attached (it could not start): Aurora shuts down
   fixedmap_release_all();
 #ifdef __SWITCH__
   if (clock_service) {

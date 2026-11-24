@@ -75,6 +75,7 @@ uint64_t log_queue_lines() { return lines.load(std::memory_order_relaxed); }
 
 bool log_queue_push(const char* line) {
   if (!running.load(std::memory_order_relaxed)) return false;
+  if (options.app) hud_log_line(line);     // the HUD's ping and input delay come from the netplay lines (app.cpp)
   const size_t length = std::strlen(line);
   std::lock_guard<std::mutex> lock(mutex);
   if (pending.size() + length + 1 > kMostPending) { ++dropped; return true; }
