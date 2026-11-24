@@ -367,6 +367,11 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
   else if (arg == "--net-store") o->engine_store = next() == "engine";
   else if (arg == "--net-no-check") o->no_check = true;
   else if (arg == "--net-fixed-rate") o->fixed_rate = true;
+  else if (arg == "--net-direct-pause") o->direct_pause = next() != "0";
+  else if (arg == "--net-port-colour") { const std::string v = next(); o->port_colour[1] = -1; std::sscanf(v.c_str(), "%d,%d", &o->port_colour[0], &o->port_colour[1]); }
+  else if (arg == "--net-shield") o->shield_online = 0x1000000u | (uint32_t(std::strtoul(next().c_str(), nullptr, 16)) & 0xFFFFFFu);
+  else if (arg == "--net-skip") { const std::string v = next(); for (auto& s : o->skip) if (s.empty()) { s = v; break; } }
+  else if (arg == "--net-as-slippi") o->as_slippi = true;
   else if (arg == "--net-clock-skew") o->clock_skew = std::strtod(next().c_str(), nullptr);
   else if (arg == "--track-remap") dirtytrack_set_method(DIRTYTRACK_REMAP);   // Horizon: the other way to make pages read-only (dirtytrack.h)
   else return false;
@@ -374,6 +379,7 @@ bool parse_option(const std::string& arg, const std::function<std::string()>& ne
 }
 void usage(Log log) {
   log("          [--net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT] [--net-retry SECONDS] [--net-delay FRAMES|auto] [--net-inputs SEED] [--selftest EVERY:DEPTH] [--track-remap] [--net-clock-skew PERCENT] [--net-fixed-rate]");
+  log("          [--net-direct-pause 0|1] [--net-port-colour FIRST[,SECOND]] [--net-shield RRGGBB] [--net-skip CODE] [--net-as-slippi]");
   log("          [--online unranked|direct:CODE|teams|party] [--user-dir DIR]   (builds with MU_NET_SERVICES=1 only)");
 }
 bool wanted(const Options& o) { return !o.net.empty() || !o.online.empty(); }
@@ -384,6 +390,17 @@ int start(const Options& given, Log log) {
   net.started = net.last_request = Clock::now();     // a search from the game's own menu has no online_test_match call
   netplay_bridge::Setup setup;
   setup.set_speed = net_set_speed;
+  {
+    netplay_bridge::OnlinePrefs prefs;
+    prefs.direct_pause = options.direct_pause; prefs.port_colour[0] = options.port_colour[0]; prefs.port_colour[1] = options.port_colour[1];
+    prefs.shield_online = options.shield_online; prefs.as_slippi = options.as_slippi;
+    for (int i = 0; i < 3; ++i) prefs.skip[i] = options.skip[i];
+    netplay_bridge::set_online_prefs(prefs);
+    if (!options.direct_pause || options.port_colour[0] >= 0 || options.shield_online || !options.skip[0].empty() || options.as_slippi)
+      say("net: Direct pause %s, port colours %d/%d, shield colour %06X, Unranked skip list %s%s%s%s%s%s", options.direct_pause ? "on" : "off",
+          options.port_colour[0], options.port_colour[1], options.shield_online & 0xFFFFFFu, options.skip[0].c_str(), options.skip[1].empty() ? "" : " ",
+          options.skip[1].c_str(), options.skip[2].empty() ? "" : " ", options.skip[2].c_str(), options.as_slippi ? "; test: behaving as Slippi Dolphin" : "");
+  }
   if (options.clock_skew != 0) { linux_host::set_pace_speed(1.0 + options.clock_skew / 100.0); say("net: test: this instance's frame clock runs %+.3f %% fast", options.clock_skew); }
   setup.delay_frames = options.delay; setup.delay_auto = options.delay_auto; setup.retrace_count = net_retrace_count; setup.log_time = [](uint64_t ns) {
     if (net.have_sim_thread && pthread_equal(pthread_self(), net.sim_thread)) add_log_time(ns, true);

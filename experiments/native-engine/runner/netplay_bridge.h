@@ -36,6 +36,20 @@ struct Setup {
   // the game thread when the value changes. The host paces its frames and its sound by it.
   void (*set_speed)(double speed) = nullptr;
 };
+// Choices exchanged with another Melee-NX-NetPlay build (patches/net-0004; against anyone else they change nothing but this
+// player's own shield colour on this screen) and the Unranked skip list. From the next connection on.
+struct OnlinePrefs {
+  bool direct_pause = true;          // Start pauses Direct; false: off when every player's build reads the rule
+  int port_colour[2] = {-1, -1};     // online 1v1 port colour, first and second choice (0 red, 1 blue, 2 yellow, 3 green; -1 none)
+  uint32_t shield_online = 0;        // 0x1000000 | RGB, or 0
+  std::string skip[3];               // Unranked: connect codes turned down
+  bool as_slippi = false;            // tests: behave as Slippi Dolphin (no build message sent, the other's ignored)
+};
+NETPLAY_API void set_online_prefs(const OnlinePrefs& prefs);
+// Display options bits 28-31 (online port colours) and a slot's online shield colour (0x1000000 | RGB, 0: the port's own);
+// both 0 outside an online session.
+NETPLAY_API uint32_t port_colour_bits();
+NETPLAY_API uint32_t shield_color(int slot);
 NETPLAY_API bool start(const Setup& setup, std::string* error);
 NETPLAY_API void shutdown();
 // One command from the game. False when the app's device does not own the command.

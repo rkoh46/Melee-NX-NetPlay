@@ -40,6 +40,13 @@ struct Options {
   bool engine_store = false;        // --net-store engine: melee-unlocked's own snapshot engine instead of the hot-page store
   std::string selftest;             // --selftest EVERY:DEPTH: the engine's own rollback self-test
   bool fixed_rate = false;          // --net-fixed-rate: tests: the time sync's frame rate is logged, not applied (the 0.4.2 behaviour)
+  // Exchanged with another Melee-NX-NetPlay build (patches/net-0004), and the Unranked skip list; play mode fills them from
+  // settings.ini (directpause, portcolour1/2, shield_color_online, blockcode1..3).
+  bool direct_pause = true;         // --net-direct-pause 0|1
+  int port_colour[2] = {-1, -1};    // --net-port-colour FIRST[,SECOND] (0 red, 1 blue, 2 yellow, 3 green)
+  uint32_t shield_online = 0;       // --net-shield RRGGBB
+  std::string skip[3];              // --net-skip CODE (up to three)
+  bool as_slippi = false;           // --net-as-slippi: tests: no build message, as Slippi Dolphin
   double clock_skew = 0;            // --net-clock-skew PERCENT: tests: this instance's frame clock runs that much fast (negative: slow)
   // Filled in by the caller, not by arguments:
   std::string out_dir;              // where the made-up user of --net and digest-net-confirmed.csv go

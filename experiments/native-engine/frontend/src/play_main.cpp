@@ -288,6 +288,9 @@ int play_main() {
     net.delay_auto = frames <= 0;
     if (frames > 0) net.delay = frames;
   }
+  // Between Melee-NX-NetPlay builds (patches/net-0004) and the Unranked skip list: settings.ini, except in a direct run (the
+  // command line's --net-direct-pause, --net-port-colour, --net-shield, --net-skip there).
+  if (!direct) settings_net_prefs(&net.direct_pause, net.port_colour, &net.shield_online, net.skip);
   net.out_dir = options.net_dir.empty() ? options.out_dir : options.net_dir; net.iso_path = options.iso; net.embedded_image = true;
   if (net.user_dir.empty() && !options.user_dir.empty()) net.user_dir = options.user_dir;   // the app's User/Slippi
 #ifdef __SWITCH__

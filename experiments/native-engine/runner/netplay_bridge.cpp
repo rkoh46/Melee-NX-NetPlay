@@ -161,6 +161,16 @@ bool request_match(int mode, const std::string& connect_code, uint8_t character,
   return true;
 }
 uint64_t rollbacks_seen_by_device() { return slippi::online::rollback_count(); }
+void set_online_prefs(const OnlinePrefs& prefs) {
+  auto& config = slippi::online::config();
+  config.direct_pause = prefs.direct_pause;
+  config.port_colour[0] = prefs.port_colour[0]; config.port_colour[1] = prefs.port_colour[1];
+  config.shield_online = prefs.shield_online;
+  for (int i = 0; i < 3; ++i) config.blocked_codes[i] = prefs.skip[i];
+  config.nx_build_message = !prefs.as_slippi;
+}
+uint32_t port_colour_bits() { return slippi::online::port_colour_bits(); }
+uint32_t shield_color(int slot) { return slippi::online::shield_color(slot); }
 double emulation_speed() { return g_speed.load(std::memory_order_relaxed); }
 int ping_ms() { return g_ping_seen.load(std::memory_order_relaxed) ? g_ping_ms.load(std::memory_order_relaxed) : -1; }
 void set_delay(int frames, bool automatic) {

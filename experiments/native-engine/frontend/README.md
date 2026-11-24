@@ -239,6 +239,10 @@ the game runs as upstream runs it: its built-in code set on (UCF and the rest), 
 | `vanilla` | 0 / 1 | ours: the retail game without the built-in code set; the CPU, 20XX and Stadium options are then not given, as upstream's vanilla session does |
 | `onlinedelayauto` | 1 / 0 | online input delay from the round trip (2..5 frames); default 1 |
 | `onlinedelay` | 1..9 | frames, with `onlinedelayauto 0` |
+| `blockcode1..3` | connect code | Unranked turns these opponents down and searches again (upstream's skip list; patches/net-0004) |
+| `directpause` | 1 / 0 | 0: no pausing in Direct, when every player's build is a Melee-NX-NetPlay one (otherwise Slippi's rule: Start pauses Direct) |
+| `portcolour1`, `portcolour2` | -1..3 | online 1v1 port colour, first and second choice (0 red, 1 blue, 2 yellow, 3 green), between Melee-NX-NetPlay builds |
+| `shield_color_online` | RRGGBB | this player's shield online; the opponent's own choice shows when their build is a Melee-NX-NetPlay one |
 
 What upstream sends only outside network play (the offline community codes, the hitboxes, the 2D camera, faster
 sound effects, the CPU options) is sent here offline and cleared online (see Netplay below).
@@ -372,6 +376,18 @@ relay delay is fixed, so one side's suggestions arrive in the useful window in s
 in the first 40 ms run lost two thirds of its re-simulated frames; the other runs show no change). With 60 ms each
 way a suggestion arrives after the frame it is for has been simulated, so it cannot save a rollback. Not yet tried
 against a real Slippi player (real changes come at any time between polls).
+
+### Between two Melee-NX-NetPlay builds (0.4.3)
+
+`../patches/net-0004` adds a build message (id 0xD0) that the netplay object sends first on the reliable channel at every
+connection: the Direct pause rule, the shield colour and the port colour choices. Slippi Dolphin and melee-unlocked log an
+unknown id and ignore it, and a side that never got one keeps Slippi's behaviour, so nothing changes against them. Since a
+side's selections always follow its build message on the same ordered channel, both sides decide the pause rule from the
+same bytes before a match can start (a rule only one side applied would split the game at the first Start press). The
+headless runner takes the same choices as `--net-direct-pause 0|1`, `--net-port-colour A[,B]`, `--net-shield RRGGBB`,
+`--net-skip CODE` and, for tests, `--net-as-slippi` (no build message, the other's ignored). Results: FEATURES.md rows
+"Pause in Direct and Friends", "Online port colours", "Opponent shield colour", "Skip in Unranked". settings.ini comments
+now start at a `#` at the start of a line or after a space, so a connect code keeps its `#`.
 
 ### Quick chat (0.4.3)
 
