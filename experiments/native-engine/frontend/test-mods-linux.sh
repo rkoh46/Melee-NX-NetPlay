@@ -11,7 +11,7 @@
 #   vanilla-only    --vanilla-only with a mod profile and CPU options in settings.ini: no profile loaded, the memory card
 #                   folder <card>/VanillaOnly, the gameplay option words without mods or CPU options; --auto-vs match
 #   mex             the Akaneia disc's profile (MU_MODS_DIR; MU_MEX_PROFILE=ace the ACE disc): its m-ex stage rows and
-#                   stage select, then a Training match on the select's stage id MU_MEX_STAGE
+#                   stage select, then a Training match on an added stage picked on the select's second page
 #   rogue           the rogueMelee disc's profile (MU_MODS_DIR): 1-P Mode > Regular Match > All-Star, which Rogue Mode replaces
 #   vanilla-refuse  --vanilla-only with a disc that is not GALE01 revision 2 (an 8-byte stand-in made here): refused
 # MU_MODS_DIR: a folder with mod profiles (mounted as <out>/mods) for vanilla-only. Output:
@@ -46,7 +46,7 @@ run() {
 }
 report() {
   echo "== $(basename "$1")"
-  grep -hE "^training|^mods|^play: (options|match|stopped|started|vanilla|a vanilla)|\[pc\]|\[mex\] stages|\[rogue\]|\[game\].*(rng|stage)|^replay|exit code|rror" "$1/console.log" "$1/host.log" 2>/dev/null | cut -c1-220 | tail -25 || true
+  grep -hE "^training|^mods|^play: (options|match|stopped|started|vanilla|a vanilla)|\[pc\]|\[mex\] (stages|stage select)|\[rogue\]|\[game\].*(rng|stage)|^replay|exit code|rror" "$1/console.log" "$1/host.log" 2>/dev/null | cut -c1-220 | tail -25 || true
   echo "shots: $(ls "$1/shots" 2>/dev/null | wc -l | tr -d ' ')"
 }
 fresh() { rm -rf "$1"; mkdir -p "$1/shots"; }
@@ -109,11 +109,18 @@ PY
     ;;
   mex)
     # MU_MODS_DIR with the Akaneia disc in akaneia/ (profile "akaneia"; MU_MEX_PROFILE=ace for ace/): the disc's m-ex
-    # stage rows as the game builds them and its stage select, then a Training match on the stage select's id
-    # MU_MEX_STAGE (default 84; --feature-test training:2:STAGE).
+    # stage rows as the game builds them and its stage select, then a Training match on a stage picked on the select's
+    # second page by the script (to the top left corner, then MU_MEX_MOVE / MU_MEX_MOVE_END: the last stick line and its release), or on stage id MU_MEX_STAGE (up to 127).
     dir="$root/mex-${MU_MEX_PROFILE:-akaneia}"; fresh "$dir"
     printf "%s\n" "mod_profile ${MU_MEX_PROFILE:-akaneia}" > "$dir/settings.ini"
-    run "$dir" 1500 3 "--feature-test training:2:${MU_MEX_STAGE:-84}"
+    if [ "${MU_MEX_STAGE:-pick}" = pick ]; then
+      # The stage select left to the script: R turns to the next page (the added stages), the stick moves the cursor
+      # (each hovered icon is logged with its stage), A picks.
+      printf '%s\n' "@scene 1c 01" "60 R" "64" "120 sx=-127" "150" "180 sy=127" "200" "${MU_MEX_MOVE:-210 sx=127}" "${MU_MEX_MOVE_END:-218}" "300 A" "304" > "$dir/script.txt"
+      run "$dir" 1800 2 "--feature-test training:2:-1"
+    else
+      run "$dir" 1500 3 "--feature-test training:2:$MU_MEX_STAGE"
+    fi
     ;;
   rogue)
     # MU_MODS_DIR with the rogueMelee disc in roguemelee/: 1-P Mode > Regular Match > the third row (All-Star, which

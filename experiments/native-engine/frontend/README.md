@@ -722,7 +722,8 @@ start's Training match ran the slot's settings and seeded the game's random numb
 start)`); `frozen`: `[pc] rng seed 8FF3473A (frozen)`. `vanilla-only` with `mod_profile hackpack` and CPU options: the
 profile not loaded, option words 0, a VS match saved to `card-play/VanillaOnly`; `vanilla-refuse`: a disc header that
 is not GALE01 revision 2 ends the start with code 2. `rogue`: Rogue Mode's map and first fight. `mex`: the Akaneia and
-ACE discs' added stages built and shown on the stage select (a match on one not played; see FEATURES.md). With a
+ACE discs' added stages built and shown on the stage select; Delfino Plaza picked on the Akaneia disc's second page and
+a Training match played on it. With a
 `practice_rng 2`, `practicecpu_on 1` settings file on both sides: `test-net-linux.sh` and `test-online-linux.sh` final
 state IDENTICAL, `net check` lines equal, 0 desync messages; `parity_vs_onett` with a picture (`test-linux.sh`) and the five reference scripts headless IDENTICAL after the
 merge with main. Not seen: whether items then come out the same, the replay refusal of a vanilla-only session, any of it

@@ -244,7 +244,9 @@ void enter_tick(MuPadStatus pads[4]) {
   const auto neutral = [&] { for (int i = 0; i < 4; ++i) { const int8_t err = pads[i].err; pads[i] = MuPadStatus{}; pads[i].err = err; } };
   if (major == kTrainingMajor && minor >= 2 && enter.seen_select) { enter.on = false; say("training: in the Training match at retrace %u", retrace()); }
   else if (enter.ticks > 60 * 15 || online() || (major != kTrainingMajor && enter.ticks > 180)) { enter.on = false; say("training: stopped pressing through Training's menus (scene %u/%u)", major, minor); }
-  else if (major == kTrainingMajor && minor == 1) {
+  else if (major == kTrainingMajor && minor == 1 && enter.stage < 0) {
+    enter.on = false; say("training: at the stage select; the controller picks");   // --feature-test training:N:-1
+  } else if (major == kTrainingMajor && minor == 1) {
     neutral();
     if (MuGameApi* g = game(); g && g->practice) { int32_t a[1] = {enter.stage}; g->practice(MU_PRACTICE_TRAINING_STAGE, a, 1); }
   } else if (major == kTrainingMajor) {
@@ -275,8 +277,8 @@ void test_tick() {
     }
   }
   // --feature-test training[:CHARACTER[:STAGE]]: Go to Training once a menu (the title screen or the main menu) has
-  // been up for a second; STAGE is the stage id Training's stage select picks (default 32, Final Destination; on an
-  // m-ex disc the select's ids follow the disc's own table).
+  // been up for a second; STAGE is the stage id Training's stage select picks (default 32, Final Destination; up to
+  // 127), or -1: the stage select is left to the controller (an m-ex disc's added stages have ids above 127).
   std::string value;
   if (test_done || !feature_test("training", &value)) return;
   test_main_menu_ticks = scene_major() == 1 || scene_major() == 24 ? test_main_menu_ticks + 1 : 0;
@@ -284,7 +286,7 @@ void test_tick() {
     test_done = true;
     const size_t colon = value.find(':');
     go_training(value.empty() ? 2 : std::atoi(value.c_str()), -1);
-    if (colon != std::string::npos) enter.stage = std::clamp(std::atoi(value.c_str() + colon + 1), 0, 0x7F);
+    if (colon != std::string::npos) enter.stage = std::clamp(std::atoi(value.c_str() + colon + 1), -1, 0x7F);
   }
 }
 
