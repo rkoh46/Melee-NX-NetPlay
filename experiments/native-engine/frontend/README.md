@@ -418,6 +418,12 @@ on the character select, X randomises a build (Falco with Samus's Charge Shot, N
 Counter) and the match plays those moves; the 20XX Hack Pack's debug menu opens from VS Mode > Tournament Melee, a
 Battlefield variant chosen on its TEXTURES page is saved on B and the match loads that variant's file (`pick: stage 31
 page 1 -> 31, letter '2'`), and D-pad down and up on the stage select change the page (its own icons on page 2).
+Since then (Linux, play mode, controller input through the test pad file): the pack's hidden characters (Z with the coin
+held over Bowser: Giga Bowser, in Training and in VS Melee, and a VS match with him against a CPU), its color overlays
+(hitstun red on the CPU in Training) and its music playlists (the global playlist set to random custom tracks: Final
+Destination plays `AF.hps` / `CE.hps` instead of its single song `30.hps`). In VS stock singles upstream's Squad Strike
+took the Z press (it adds the hovered fighter to a squad); `../patches/0004` leaves Z to the pack on its seven paired
+icons when the pack is loaded.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 
@@ -610,8 +616,8 @@ of SDL controllers, the shared pipeline cache, the card carried over from 0.3.x)
 the Replays page's "Watch it" restart (wired, not run: no replay was recorded in these tests); Training's lines on
 screen (drawn only in Training mode, not looked at); 120 Hz on a display that has it.
 
-Not looked at: the Hack Pack's hidden characters, playlists and random variants (its debug menu, a chosen variant and
-the stage select pages were checked in 0.4.1); TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
+Not looked at: the Hack Pack's random variants (its debug menu, a chosen variant and the stage select pages were checked
+in 0.4.1; hidden characters, training displays and playlists since, see "Mod discs" under Feature modules); TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
 holds beyond what is listed.
 
 On the console, by the session that ran it:

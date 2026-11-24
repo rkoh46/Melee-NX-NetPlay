@@ -1,0 +1,56 @@
+diff --git a/sourceport/game/include/mu_hp.h b/sourceport/game/include/mu_hp.h
+index 90608e5..6eb0be3 100644
+--- a/sourceport/game/include/mu_hp.h
++++ b/sourceport/game/include/mu_hp.h
+@@ -153,6 +153,10 @@ int mu_hp_css_live(void);
+  * icon's character with its hidden one. `icon` is the icon's index in the game's table, `ckind`
+  * the character it shows now; returns the character to write into the icon, -1 for none. */
+ int mu_hp_css_swap(int icon, int ckind);
++/* Z held for the pack: a coin held over one of the seven paired icons, with the pack's character
++ * select live. Squad Strike's Z (add the hovered fighter) stands aside then, so the swap above
++ * gets the press in VS Mode too (experiments/native-engine/patches/0004 in Melee-NX-NetPlay). */
++int mu_hp_css_owns_z(int icon);
+ /* The character an icon goes back to when the screen opens without the pack's features (an
+  * online screen must never offer a hidden fighter): the pair's normal character for the six non
+  * playable ones, `ckind` itself for anything else. Works whatever the mode. */
+diff --git a/sourceport/game/shim/mu_hp_css.c b/sourceport/game/shim/mu_hp_css.c
+index a4be98b..11aeda0 100644
+--- a/sourceport/game/shim/mu_hp_css.c
++++ b/sourceport/game/shim/mu_hp_css.c
+@@ -100,6 +100,20 @@ int mu_hp_css_swap(int icon, int ckind)
+     return -1;
+ }
+ 
++int mu_hp_css_owns_z(int icon)
++{
++    int k;
++    if (!mu_hp_css_live()) {
++        return 0;
++    }
++    for (k = 0; k < HPC_PAIRS; k++) {
++        if (hpc_pairs[k].icon == icon) {
++            return 1;
++        }
++    }
++    return 0;
++}
++
+ int mu_hp_css_base(int ckind)
+ {
+     int k;
+diff --git a/sourceport/game/shim/mu_squad_css.c b/sourceport/game/shim/mu_squad_css.c
+index 5c50e9a..92d8795 100644
+--- a/sourceport/game/shim/mu_squad_css.c
++++ b/sourceport/game/shim/mu_squad_css.c
+@@ -1060,6 +1060,11 @@ static void squad_buttons(int port)
+         return;
+     }
+     if (!(pressed & HSD_PAD_Z)) return;
++#ifdef MU_NATIVE
++    /* 20XX Hack Pack: a coin held over one of its seven paired icons. The press is the pack's
++     * (mu_hp_css_frame swaps in the hidden fighter): left in the pad, no squad member added. */
++    if (cursor->x5 == 1 && target < 4 && mu_hp_css_owns_z(mnCharSel_803F0DFC.doors[target].sel_icon)) return;
++#endif
+     if (squad_on_random(cursor)) {
+         HSD_PadCopyStatus[gmSquad_OnlineChosen() ? mnCharSel_804D6CF0 : port].trigger &= ~HSD_PAD_Z;
+         if (!gmSquad_LobbyChosen() && squad_players() > 2) { lbAudioAx_80024030(3); return; }
