@@ -369,3 +369,12 @@ happened in them: time writing log lines on the simulation thread, time inside t
 write faults and disc reads (`net: slow frame ...`), and counts for all frames of 8 ms or more.
 Log time spent inside the device is part of both numbers.
 
+
+## First real Slippi match (2026-11-23)
+
+Play build with services (`mu-native-gfx-services.nro`, `slippi_menus 1`, automatic delay), on the console,
+Unranked from the game's own Online Play page, against a real Slippi 3.7.0 player on Yoshi's Story. The first
+match found did not connect; the second did (round trip about 126 ms, automatic delay 4 frames). The opponent
+left after 1,230 frames. 143 rollbacks (depth 1 to 7); rollback frame 6.1 ms average, 11.5 ms worst, none
+over 16.67 ms; simulation thread 4.5 ms average in the match; 640 checksum comparisons with the opponent,
+0 mismatched; the game report was sent.
