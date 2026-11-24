@@ -634,6 +634,21 @@ with `../patches/net-0001`), one container per run, no network:
 | Melee Maker, 20XX Hack Pack debug menu and stage variants | see "Mod discs" under Feature modules |
 | NRO | `melee-nx-netplay.nro` links, NACP version 0.4.1; both programs pass the `netplay_link` check
 
+Online and replay features of 0.4.3 on Linux (runner and patches from the working tree, `MU_SYNC_REF=worktree`; game image
+`1ddc3690...`), one container per run, no network:
+
+| Check | Result |
+|---|---|
+| The five reference scripts, headless; `parity_vs_onett` with `mu-native-gfx-null` | all IDENTICAL to the x86-64 references |
+| Time sync frame rate (`../tools/net_test.sh 3600 30 0`, one clock 0.4 % fast) | nudged to x0.998 and x1.001, no frame advance after the start (7 with `--net-fixed-rate`); confirmed states identical, `net check` equal; play mode the same (`test-net-linux.sh`) |
+| `.slpz` (`../tools/slpz_roundtrip.sh`, `compressreplays 1`) | 11 replays round-trip byte-identical; a play-mode recording written as .slpz plays back with 0 of 3302 post-frame records differing |
+| Spectator server (`test-spectator-linux.sh`) | an ENet client got the match from cursor 0, at the start and 25 s late: byte-identical to the .slp's raw element |
+| Quick chat (`test-online-linux.sh`, `scripts/online_unranked_chat.txt`, `MU_TWO_SCREENS=1`) | 0x88 sent after the match, received and shown ("Mock 2: ggs") on the other side |
+| Build message (`net_test.sh`, `test-online-linux.sh`) | Direct pause rule agreed on both sides, Slippi's rule kept against a side acting as Slippi Dolphin; port colours on both screens; `net check` equal in every run |
+| Skip in Unranked (`blockcode1`) | three matches with the listed code turned down, no match played |
+| Network overlay (`netoverlay 1`, `test-net-linux.sh` with delay) | the line on screen during the match |
+| NROs (`../build.sh nro`, `MU_NET_SERVICES=1 ../build.sh nro`, `./build.sh nro`) | link; both programs pass the `netplay_link` check |
+
 Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
 over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble
 of SDL controllers, the shared pipeline cache, the card carried over from 0.3.x); a real Slippi match from the app;
