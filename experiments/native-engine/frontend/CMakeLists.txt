@@ -35,6 +35,8 @@ if(MU_FE_VARIANT STREQUAL "switch")
   # Dawn, SDL3, Aurora and the Mesa/NVK archives, exactly as the app gets them. libnx also before libc, so the
   # netplay object's ENet and curl get libnx's socket-aware fcntl (../README.md, the netplay hand-over). curl and
   # mbedTLS are for the services program; nothing else refers to them.
+  # Aurora from build.sh sync's copy with patches/01xx-aurora-*.patch (Graphics.cmake keeps a value already cached).
+  set(MELEE_AURORA_SOURCE "${GFX}/gen/aurora" CACHE PATH "Aurora source (Switch-patched)" FORCE)
   include("${REPO}/switch/cmake/Graphics.cmake")
   set(CMAKE_CXX_STANDARD_LIBRARIES
     "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
@@ -66,10 +68,11 @@ elseif(MU_FE_VARIANT STREQUAL "linux")
   set(AURORA_ENABLE_GX ON CACHE BOOL "" FORCE)
   set(BUILD_SHARED_LIBS OFF)
   set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)
-  add_subdirectory("${REPO}/build/sdk/aurora" aurora EXCLUDE_FROM_ALL)
+  # build.sh sync's copy of build/sdk/aurora with patches/01xx-aurora-*.patch applied.
+  add_subdirectory("${GFX}/gen/aurora" aurora EXCLUDE_FROM_ALL)
   target_include_directories(aurora_gx PRIVATE "${REPO}/switch/src")
   target_include_directories(aurora_core PRIVATE "${REPO}/switch/src")
-  set(MELEE_AURORA_SOURCE "${REPO}/build/sdk/aurora")
+  set(MELEE_AURORA_SOURCE "${GFX}/gen/aurora")
 elseif(NOT MU_FE_VARIANT STREQUAL "null")
   message(FATAL_ERROR "MU_FE_VARIANT must be null, linux or switch")
 endif()
@@ -132,7 +135,7 @@ else()
     "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
   # The app's in-game menu and HUD (game_menu.cpp with patches/0104, drawn by overlay_imgui.cpp through Aurora's ImGui
   # pass), the controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
-  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
+  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${FE}/overlay_draw.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
     "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
   # game_menu.cpp's menu_frame becomes app_menu_frame (play_io.cpp's menu_frame calls it in app mode). Off the console
   # it lays its rows out as on the console (MU_MENU_CONSOLE), so the Linux test sees the console's menu.

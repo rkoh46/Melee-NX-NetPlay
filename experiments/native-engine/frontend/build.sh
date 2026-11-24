@@ -113,6 +113,18 @@ sync_tree() {
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0105-switch-signin-off-console.patch"
   for f in game_menu.cpp game_menu.h switch_signin.cpp; do cmp -s "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f" || cp "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f"; done
   rm -rf "$gen/appsrc"
+  # Aurora (build/sdk/aurora, the Switch-patched source both picture variants compile) with this frontend's Aurora
+  # patches (patches/01xx-aurora-*.patch), as a build-time copy; build/sdk itself is not changed.
+  if [ -f "$repo/build/sdk/aurora/CMakeLists.txt" ]; then
+    rm -rf "$gen/aurora-stage"; cp -R "$repo/build/sdk/aurora" "$gen/aurora-stage"
+    for p in "$here"/patches/01*-aurora-*.patch; do [ -f "$p" ] && patch -s -p1 -d "$gen/aurora-stage" < "$p"; done
+    rsync -rlpc --delete "$gen/aurora-stage/" "$gen/aurora/"; rm -rf "$gen/aurora-stage"
+  fi
+  # melee-unlocked's Training overlay names the fighters' common actions (port/runtime/gx/training_overlay.cpp): the table
+  # is taken from the fetched tree at build time for the Training panel (src/overlay_draw.cpp).
+  sed -n '/^const char\* const kActionNames\[\] = {/,/^};/p' "$work/mu/port/runtime/gx/training_overlay.cpp" > "$gen/action_names.inc.new" 2>/dev/null || true
+  [ -s "$gen/action_names.inc.new" ] || echo 'const char* const kActionNames[] = {""};' > "$gen/action_names.inc.new"
+  if cmp -s "$gen/action_names.inc.new" "$gen/action_names.inc"; then rm -f "$gen/action_names.inc.new"; else mv "$gen/action_names.inc.new" "$gen/action_names.inc"; fi
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"

@@ -535,9 +535,10 @@ void* render_main(void*) {
       // The app's in-game menu and HUD (game_menu.cpp, drawn through Aurora's ImGui pass as the app draws them).
       // The feature modules' lines (frame advantage...) in every play session, the menu and HUD in the app.
       if (options.play) aurora_backend->set_overlay([] {
+        int w = 1280, h = 720; window_size(&w, &h);
+        overlay_draw(w, h);   // the overlays and picture options (overlay_draw.cpp), under the menu and HUD
         host::OverlayFrame overlay;
         if (options.app) host::game_overlay(overlay);
-        int w = 1280, h = 720; window_size(&w, &h);
         feature_overlay(&overlay, w, h);
         if (!overlay.shapes.empty() || !overlay.texts.empty()) host::overlay_imgui_draw(overlay);
       });

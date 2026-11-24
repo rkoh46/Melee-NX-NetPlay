@@ -12,6 +12,7 @@ __attribute__((weak)) int32_t dispatch_command(uint8_t command, const uint8_t* p
 __attribute__((weak)) void dispatch_retrace(const Retrace& info);
 __attribute__((weak)) bool dispatch_setting(const std::string& key, const std::string& value);
 __attribute__((weak)) void dispatch_run_end();
+__attribute__((weak)) void dispatch_reply(uint8_t command, const uint8_t* response, uint32_t size);
 __attribute__((weak)) const std::vector<MenuEntry>& menu_entries();
 __attribute__((weak)) std::vector<HudLine> hud_lines();
 __attribute__((weak)) bool take_restart_request(std::vector<std::string>* extra_args);   // replays.cpp: "Watch it"
@@ -25,6 +26,7 @@ inline int32_t call_command(uint8_t command, const uint8_t* payload, uint32_t si
 inline void call_retrace(const Retrace& info) { if (&dispatch_retrace) dispatch_retrace(info); }
 inline bool call_setting(const std::string& key, const std::string& value) { return &dispatch_setting && dispatch_setting(key, value); }
 inline void call_run_end() { if (&dispatch_run_end) dispatch_run_end(); }
+inline void call_reply(uint8_t command, const uint8_t* response, uint32_t size) { if (&dispatch_reply) dispatch_reply(command, response, size); }
 inline std::vector<MenuEntry> call_menu_entries() { return &menu_entries ? menu_entries() : std::vector<MenuEntry>{}; }
 inline std::vector<HudLine> call_hud_lines() { return &hud_lines ? hud_lines() : std::vector<HudLine>{}; }
 inline bool call_take_restart(std::vector<std::string>* extra) { return &take_restart_request && take_restart_request(extra); }

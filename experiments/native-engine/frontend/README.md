@@ -51,6 +51,8 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/app.cpp` | The app (no arguments): the app's folders, `launcher.ini`, the memory card's one-time backup, controller configuration (remapping, deadzones, rumble), the HUD's numbers, the window queries of the app's menu code, the layout and disc screens. |
 | `src/app_menu.cpp` | The app's in-game menu (`port/runtime/host/game_menu.cpp`) wired to this engine: the app's rows, four `settings.ini` pages, the feature modules' pages. |
 | `src/app_services.cpp` | Services program only: the update from the player's build computer and the Slippi sign-in screen, drawn on the render thread before the game. |
+| `src/features/overlays.cpp`, `src/overlay_state.h`, `src/overlay_draw.cpp` | The on-screen overlays and picture options (see "Overlays and picture options"): settings, menu rows and what the game reports on the simulation thread; the drawing on the render thread through Aurora's ImGui pass. |
+| `test-overlays-linux.sh` | The overlays and picture options in play mode with controller scripts and screenshots. |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
@@ -58,6 +60,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `app-build.sh`, `update-host-native.patch`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
+| `patches/0108-aurora-imgui-draw-list-delete.patch`, `patches/0109-aurora-picture-options.patch` | Against a build-time copy of Aurora (`build/sdk/aurora` -> `build/native-engine-gfx/gen/aurora`, which both picture variants compile): ImGui's frozen draw lists are freed with `IM_DELETE` (they were made with `IM_NEW` and freed with `operator delete`: AddressSanitizer's alloc/dealloc mismatch, now on in the sanitizer runs); `aurora_set_picture` (brightness, contrast, vibrance, sharpening, the CRT looks) in the present pass. `build/sdk` is not changed. |
 | `patches/0107-gx-core-array-pool-fence.patch` | After 0102: the decoder reuses a vertex-array buffer the render thread let go of only after an acquire fence (0.4.2; ThreadSanitizer). |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
 | `CMakeLists.txt`, `build.sh` | Three variants: `null` (Linux, no graphics device), `linux` (Aurora on Vulkan, test build), `switch` (NRO). |
@@ -242,9 +245,42 @@ the game runs as upstream runs it: its built-in code set on (UCF and the rest), 
 What upstream sends only outside network play (the offline community codes, the hitboxes, the 2D camera, faster
 sound effects, the CPU options) is sent here offline and cleared online (see Netplay below).
 Left for later, because they need more than a word: the Training Lab bits, shield colours, True 16:9 (a renderer
-feature), hiding the scenery behind the grid and the Arcade look's plain backdrop and combo counter (renderer and
-overlay), the input display and frame-data overlay, m-ex discs, Training Mode CE, Akaneia, rogueMelee and Melee
+feature), hiding the scenery behind the grid and the Arcade look's plain backdrop (renderer), m-ex discs, Training Mode CE, Akaneia, rogueMelee and Melee
 Maker (their layers load as files; what the host does for each beyond that is not written).
+
+### Overlays and picture options
+
+`src/features/overlays.cpp` (settings, menu rows, the simulation-thread half) and `src/overlay_draw.cpp` (render thread,
+Aurora's ImGui pass, under the app's menu and HUD). The overlays only read what the game hands its host anyway: the pads
+it got, `MuHostApi.hud_player`/`hud_combo` (read-only on the game's side), `MuGameApi.lcancel_view`, the state snapshot,
+Training's 0xF4, the netplay host's 0xB3 answer (names) and the option word 2 the game reads; nothing is written into the
+game, so a session with overlays plays exactly as one without (online: `net check` equal with names and the frame counter
+on). Play mode and the app; settings.ini keys (upstream's names), also on the menu's **Overlays** and **Picture** pages:
+
+| settings.ini | |
+|---|---|
+| `inputoverlay 1`, `inputoverlayports BITS` (1 = P1), `inputoverlayvalues 1`, `inputoverlaystick 1..10` (size), `inputoverlayhideborder 1` | a GameCube pad per port along the top of the picture |
+| 20XX TE's input display (its menu, `te_options2` bit 2000) | the same, one per player, in offline matches and replays |
+| `lab_overlay 1` (Training page) | offline Training: per fighter its action, frame, percent, speed and pad, then the last frame advantage (0xF4) |
+| `showfps 1`, `performance 1` | presented and game frames per second, simulation time; graph of the last 4 s (simulation time, time between pictures) |
+| `adapterrate 1` | the GameCube adapter's measured report rate (console; the Linux build reads no adapter) |
+| `playernicknames 1` | online: the players' Slippi names over the fighters |
+| `arcade_combo_counter 1` | offline: "N HITS" over the attacker's damage |
+| `lcancel_flash_mode 0/1/5/6`, `lcancel_success_flash 0/1/2` | off, missed, made, both; made in no colour, white, green: a ring around the fighter for 10 frames (not a tint of the model: that needs draw-owner tokens this decoder does not read). Online: this console's player only |
+| `latencytest 1` | X + D-pad Down paints the picture black, then white; X + D-pad Up ends it |
+| `aspect 0..4` | Auto (4:3, or the screen with the 16:9 code), 73:60, 4:3, 16:9, stretched; live |
+| `scale 0..4` | internal resolution: Auto (the display) or 640x480 times N; live |
+| `brightness`, `contrast` 0.5..1.5, `vibrance` 0..2, `sharpness` 0..1 | Aurora's present pass (patches/0109); live |
+| `crt_filter 0/1/2`, `crt_curve 0..3` | off, studio monitor, home television (curved); live |
+| `borderart grid` or `FILE.bmp`, `borderedge 0/1` | art in the side bars (`<folder>/Borders`, the app's folder in the app), soft shadow at the picture's edge |
+
+The Picture page's **Quality preset** row sets internal resolution, sharpening and launcher.ini `msaa`/`anisotropy` (those
+two at the next start): Low, Medium, High (the default), Ultra, or shows Custom.
+
+```sh
+./test-overlays-linux.sh /path/to/disc-folder match training latency te picture studio scale1 scale2   # MU_MODS_DIR for te
+MU_APP_SETTINGS="playernicknames 1" ./test-app-linux.sh /path/to/disc-folder online overlaymenu
+```
 
 ### Mod profiles
 
@@ -603,6 +639,16 @@ with `../patches/net-0001`), one container per run, no network:
 | `community_codes 100000` (full FoD reflections) | `play: options ... display 00100000` |
 | Melee Maker, 20XX Hack Pack debug menu and stage variants | see "Mod discs" under Feature modules |
 | NRO | `melee-nx-netplay.nro` links, NACP version 0.4.1; both programs pass the `netplay_link` check
+
+Overlays and picture options on Linux (`test-overlays-linux.sh`, `test-app-linux.sh online overlaymenu`; screenshots
+looked at): input display with values for two ports, frame counter and graph, the adapter line, combo counter ("2 HITS"
+to "10 HITS"), L-cancel rings (3 made, 5 missed in `match`), Training panel with "Frame advantage -6 on hit", 20XX TE's
+input display bit alone, latency test black / white / picture again (retraces 1061, 1241, 1421), curved television with
+brightness, contrast, vibrance, sharpening, 73:60 and the grid border, studio monitor with a .bmp border, internal
+resolution 640x480 and 1280x960 (no cropping), names over the fighters online (`net check` equal, final state identical),
+the menu's Overlays and Picture pages writing `inputoverlay 1` and `scale 1`. AddressSanitizer with alloc/dealloc mismatch
+on (`MU_SANITIZE=address test-app-linux.sh menu`): no report. After these changes the five reference scripts with
+`mu-native-gfx-null` and `parity_vs_onett` with a picture: IDENTICAL. Not seen: any of it on the console (NVK, the adapter's rate).
 
 Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
 over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble

@@ -13,6 +13,7 @@ namespace fe::features {
 void register_options();
 void register_training();
 void register_replays();
+void register_overlays();
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -32,6 +33,11 @@ void read_controllers(MuPadStatus out[4]);   // the host's own pad read, now (th
 uint32_t training_option_bits();     // MU_GAME_OPTION_LAB* for option word 1 (offline Training tools)
 void training_pad_hook(MuPadStatus pads[4]);   // frame advance (reads the pads; changes nothing)
 void training_scene_changed();
+bool training_lab_overlay();         // Training's "Inputs and frame advantage" is on (lab_overlay)
+bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
+
+// overlays.cpp
+bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
 
 // replays.cpp
 bool replay_playing();               // a .slp is being played back
