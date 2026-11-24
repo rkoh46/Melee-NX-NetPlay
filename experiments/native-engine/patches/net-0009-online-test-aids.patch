@@ -1,18 +1,19 @@
 Online evidence for tests (patches/net-0009): the netplay object logs which chat lines the game gets (custom or default, per
-port, once per change), and MELEE_NET_TEST_CHECKSUM=FRAME:low|high (tests only, off unless set) sends the other side a wrong
-checksum for that finalized frame, so the other game's own notices can be seen: "DESYNC DETECTED" (low half) and
-"Desync Risk" (high half only). Nothing changes without the variable. Applied by ../net_sources.sh after net-0008.
+port, once per change), and MELEE_NET_TEST_CHECKSUM=FRAME:low|high (tests only, off unless set) sends the other side wrong
+checksums for the 30 finalized frames from FRAME on, so the other game's own notices can be seen: "DESYNC DETECTED" (low half)
+and "Desync Risk" (high half only). Nothing changes without the variable. Applied by ../net_sources.sh after net-0008.
 
 diff -ruN a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.cpp
 --- a/port/runtime/hle/slippi_online.cpp
 +++ b/port/runtime/hle/slippi_online.cpp
-@@ -662,7 +662,20 @@
+@@ -662,7 +662,21 @@
    if (skip) g_netplay->SendSlippiPad(nullptr);
    else {
      if (frame == 1) for (int i = 1; i <= delay; ++i) g_netplay->SendSlippiPad(std::make_unique<Pad>(i));
 -    g_netplay->SendSlippiPad(std::make_unique<Pad>(frame + delay, finalized, finalized_checksum, inputs));
-+    // patches/net-0009, tests only: MELEE_NET_TEST_CHECKSUM=FRAME:low|high sends the other side a wrong checksum for that finalized
-+    // frame (low: the low half off by 5, the game's "DESYNC DETECTED"; high: only the high half, its "Desync Risk").
++    // patches/net-0009, tests only: MELEE_NET_TEST_CHECKSUM=FRAME:low|high sends the other side wrong checksums for the 30 finalized
++    // frames from FRAME on (low: the low half off by 5, the game's "DESYNC DETECTED"; high: only the high half, its "Desync Risk").
++    // Thirty, because a pad carries only the newest finalized frame's checksum and the other side compares the newest it has.
 +    static int test_frame = -1; static bool test_low = true;
 +    static const bool test_parsed = [] {
 +      if (const char* v = std::getenv("MELEE_NET_TEST_CHECKSUM")) { test_frame = std::atoi(v); test_low = std::strstr(v, "high") == nullptr; }
@@ -20,7 +21,7 @@ diff -ruN a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.
 +    }();
 +    (void)test_parsed;
 +    uint32_t sent_checksum = finalized_checksum;
-+    if (test_frame > 0 && finalized == test_frame && finalized_checksum) {
++    if (test_frame > 0 && finalized >= test_frame && finalized < test_frame + 30 && finalized_checksum) {
 +      sent_checksum = test_low ? ((finalized_checksum & 0xFFFF0000u) | ((finalized_checksum + 5) & 0xFFFFu)) : (finalized_checksum ^ 0x00010000u);
 +      host::log("slippi: test aid: frame %d's checksum sent as %08X (ours %08X, %s half)", finalized, sent_checksum, finalized_checksum, test_low ? "low" : "high");
 +    }
@@ -28,7 +29,7 @@ diff -ruN a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.
      suggest::note_sent(frame + delay, inputs);
    }
    const bool advancing = prepare_opponent_inputs(frame, skip, q);
-@@ -1132,6 +1145,17 @@
+@@ -1132,6 +1146,17 @@
    auto mine = g_user->GetUserChatMessages();
    if (mine.size() == 16) by_player[0] = mine;
    for (auto& p : g_matchmaking->GetPlayerInfo()) if (p.port >= 1 && p.port <= 4) by_player[p.port - 1] = p.chat_messages;
