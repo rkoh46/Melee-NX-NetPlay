@@ -1,0 +1,30 @@
+Native engine app (experiments/native-engine/frontend): menu_open_extra opens the in-game menu on a host page by its
+title (melee-unlocked's Start + D-pad Up + Z chord opens the Training page). After patches/0104. Applied to a build-time
+copy only.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/host/game_menu.cpp
++++ b/port/runtime/host/game_menu.cpp
+@@ -553,6 +553,14 @@
+   open_replays();
+ }
+ void menu_close() { std::lock_guard<std::mutex> lock(g_mutex); set_open(false); }
++// A host page by its title (patches/0111: melee-unlocked's Start + D-pad Up + Z opens its Practice panel); the main
++// page when no page has that title.
++void menu_open_extra(const std::string& title) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  set_open(true);
++  for (int k = 0; k < (int)g_extra.size(); ++k)
++    if (g_extra[(size_t)k].title == title) { open_extra(k); return; }
++}
+ void menu_set_replays(std::function<std::vector<std::string>()> list, std::function<void(const std::string&)> watch) {
+   std::lock_guard<std::mutex> lock(g_mutex);
+   g_replay_list = std::move(list); g_replay_watch = std::move(watch);
+--- a/port/runtime/host/game_menu.h
++++ b/port/runtime/host/game_menu.h
+@@ -69,4 +69,5 @@
+ void menu_set_quit(std::function<void()> quit);                 // what Quit does (default: exit(0))
+ void menu_set_hud_extra(std::function<std::string()> text);     // appended to the performance HUD's line
+ void menu_set_controls_live(bool live);                         // the Controls page lists controllers (default: as built)
++void menu_open_extra(const std::string& title);                 // opens the menu on the host page with this title (patches/0111)
+ }  // namespace host

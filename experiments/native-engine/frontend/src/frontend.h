@@ -117,7 +117,21 @@ void app_report();                             // the log lines saying what the 
 std::string app_ini(const std::string& key, const std::string& fallback);
 void app_ini_set(const std::string& key, const std::string& value);   // and writes launcher.ini
 void app_backup_card();                        // the first session of this app copies the memory card once
-void app_pad_postprocess(void* pads4);         // simulation thread: remapping, deadzones (host::PadState[4])
+// Simulation thread (lane 0, the game's poll) or the input-suggestion thread (lane 1), under play_io's input lock:
+// remapping, deadzones and the rest of the controller setup (host::PadState[4]).
+void app_pad_postprocess(void* pads4, int lane);
+// controls.cpp: the controller setup beyond the app's button remap (controls_core.h), its menu pages, profiles,
+// Dolphin import, the Start + D-pad + Z chords and the controller report rates.
+bool controls_active();                        // some controller has a setup that differs from its defaults
+uint32_t controls_test_adapter_ports();        // MU_CONTROLS_TEST_ADAPTER (Linux tests): ports read as adapter ports
+void controls_apply_adapter(int port, void* pad, int lane);   // host::PadState of an adapter port
+void controls_apply_sdl(const std::string& guid, void* sdl_gamepad, const void* before_app, void* pad, int trigger_press, int lane);
+bool controls_capture_frame(const void* raw_pads4);   // a binding is being captured: true = the menu gets neutral pads
+void controls_chords(void* pads4);             // Start + D-pad Down + Z, Start + D-pad Up + Z; Training's lone Start
+void controls_menu_pages(void* extra_pages);   // appends the pages (std::vector<host::MenuExtraPage>)
+void controls_saved(void (*put)(const std::string& id, const std::string& text));   // launcher.ini padx.<id>
+void controls_load(const std::string& id, const std::string& text);
+std::vector<std::string> controls_rate_lines();   // render thread: Pro Controller / Joy-Con report rates (console)
 bool app_rumble_allowed(int port);
 void app_retrace(uint32_t retrace, bool fighting, bool online);   // simulation thread, once per retrace
 void app_menu_setup();                         // the in-game menu's settings and pages (Aurora builds)

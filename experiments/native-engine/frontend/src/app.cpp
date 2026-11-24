@@ -170,6 +170,9 @@ void app_configure() {
   }
   host::set_controller_configs(configs);
   if (const std::string k = get("keyboard", ""); !k.empty()) host::set_keyboard_map(host::KeyboardMap::parse(k));
+  // The rest of each controller's setup (controls.cpp): padx.<SDL GUID> or padx.gc<adapter port>.
+  for (const auto& [key, value] : ini)
+    if (key.rfind("padx.", 0) == 0 && key.size() > 5) controls_load(key.substr(5), value);
 #ifdef __SWITCH__
   melee_nx_gc_trigger_scale = clamp_int(get("trigger_range", ""), 4, 2, 8);
   melee_nx_gc_stick_range = clamp_int(get("stick_range", ""), 100, 80, 120);
@@ -332,6 +335,8 @@ void app_retrace(uint32_t, bool, bool) {
     for (auto it = ini.begin(); it != ini.end();) it = it->first.rfind("pad.", 0) == 0 ? ini.erase(it) : std::next(it);
     for (const host::ControllerConfig& c : host::controller_configs()) ini["pad." + c.guid] = std::to_string(c.port) + ";" + c.map.serialize();
     ini["keyboard"] = host::keyboard_map().serialize();
+    for (auto it = ini.begin(); it != ini.end();) it = it->first.rfind("padx.", 0) == 0 ? ini.erase(it) : std::next(it);
+    controls_saved([](const std::string& id, const std::string& text) { ini["padx." + id] = text; });
     write_ini_locked();
   }
   menu_was_open = open;
@@ -371,42 +376,50 @@ std::string guid_of(SDL_Gamepad* pad) {
 bool same_bindings(const host::ControllerMap& a, const host::ControllerMap& b) { return std::equal(a.binding, a.binding + host::GC_CTL_COUNT, b.binding); }
 }  // namespace
 
-// After the app's input_poll (play_io.cpp): a controller with a saved configuration gets its remapped buttons,
-// swapped sticks, deadzones and trigger press point, as the app's desktop builds apply them (window_sdl.cpp).
-// Controllers without one are left exactly as Aurora's GameCube layout gives them (the earlier app's behaviour).
-void app_pad_postprocess(void* pads4) {
+// Before the in-game menu sees the pads (play_io.cpp's menu_frame): a controller with a saved configuration gets its
+// remapped buttons, swapped sticks, deadzones and trigger press point, as the app's desktop builds apply them
+// (window_sdl.cpp), then the rest of its setup (controls.cpp: bindings beyond the buttons, box mode, inversion, radius,
+// snapback, trigger click and cap). GameCube adapter ports get only the latter. Controllers without a configuration
+// are left exactly as Aurora's GameCube layout or the adapter gives them (the earlier app's behaviour).
+void app_pad_postprocess(void* pads4, int lane) {
   auto* pads = static_cast<host::PadState*>(pads4);
-  if (host::controller_configs().empty()) return;
+  const bool extended = controls_active();
+  if (host::controller_configs().empty() && !extended) return;
   host::GcAdapterStatus adapter{};
-  const uint32_t adapter_ports = host::gcadapter_status(adapter) ? adapter.ports : 0;
+  const uint32_t adapter_ports = (host::gcadapter_status(adapter) ? adapter.ports : 0) | controls_test_adapter_ports();
   static const uint16_t bits[host::GC_CTL_COUNT] = {0x0100, 0x0200, 0x0400, 0x0800, 0x0010, 0x0040, 0x0020, 0x1000, 0x0008, 0x0004, 0x0001, 0x0002};
   const host::ControllerMap defaults = host::ControllerMap::defaults();
   for (int port = 0; port < 4; ++port) {
     host::PadState& p = pads[port];
-    if (p.err != 0 || (adapter_ports & (1u << port))) continue;
+    if (p.err != 0) continue;
+    if (adapter_ports & (1u << port)) { if (extended) controls_apply_adapter(port, &p, lane); continue; }
     SDL_Gamepad* pad = gamepad_on_port(port);
     if (!pad) continue;
-    const host::ControllerConfig* config = host::controller_config_for(guid_of(pad));
-    if (!config) continue;
-    const host::ControllerMap& m = config->map;
-    if (!same_bindings(m, defaults) || m.trigger_press != defaults.trigger_press) {
-      const int lt = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) / 128, rt = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) / 128;
-      uint16_t button = 0;
-      for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
-        const int input = m.binding[i];
-        bool down = false;
-        if (input == host::kTriggerLeft || input == host::kTriggerRight) down = (input == host::kTriggerLeft ? lt : rt) >= std::max(1, m.trigger_press * 255 / 100);
-        else if (input >= 0) down = SDL_GetGamepadButton(pad, SDL_GamepadButton(input));
-        if (!down) continue;
-        button |= bits[i];
-        if (i == host::GC_CTL_L && input != host::kTriggerLeft && input != host::kTriggerRight) p.trig_l = 255;
-        if (i == host::GC_CTL_R && input != host::kTriggerLeft && input != host::kTriggerRight) p.trig_r = 255;
+    const std::string guid = guid_of(pad);
+    const host::PadState before = p;
+    const host::ControllerConfig* config = host::controller_config_for(guid);
+    if (config) {
+      const host::ControllerMap& m = config->map;
+      if (!same_bindings(m, defaults) || m.trigger_press != defaults.trigger_press) {
+        const int lt = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) / 128, rt = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) / 128;
+        uint16_t button = 0;
+        for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
+          const int input = m.binding[i];
+          bool down = false;
+          if (input == host::kTriggerLeft || input == host::kTriggerRight) down = (input == host::kTriggerLeft ? lt : rt) >= std::max(1, m.trigger_press * 255 / 100);
+          else if (input >= 0) down = SDL_GetGamepadButton(pad, SDL_GamepadButton(input));
+          if (!down) continue;
+          button |= bits[i];
+          if (i == host::GC_CTL_L && input != host::kTriggerLeft && input != host::kTriggerRight) p.trig_l = 255;
+          if (i == host::GC_CTL_R && input != host::kTriggerLeft && input != host::kTriggerRight) p.trig_r = 255;
+        }
+        p.button = button;
       }
-      p.button = button;
+      if (m.swap_sticks) { std::swap(p.stick_x, p.sub_x); std::swap(p.stick_y, p.sub_y); }
+      if (m.stick_deadzone != defaults.stick_deadzone && std::abs(int(p.stick_x)) * 100 < m.stick_deadzone * 127 && std::abs(int(p.stick_y)) * 100 < m.stick_deadzone * 127) { p.stick_x = 0; p.stick_y = 0; }
+      if (m.cstick_deadzone != defaults.cstick_deadzone && std::abs(int(p.sub_x)) * 100 < m.cstick_deadzone * 127 && std::abs(int(p.sub_y)) * 100 < m.cstick_deadzone * 127) { p.sub_x = 0; p.sub_y = 0; }
     }
-    if (m.swap_sticks) { std::swap(p.stick_x, p.sub_x); std::swap(p.stick_y, p.sub_y); }
-    if (m.stick_deadzone != defaults.stick_deadzone && std::abs(int(p.stick_x)) * 100 < m.stick_deadzone * 127 && std::abs(int(p.stick_y)) * 100 < m.stick_deadzone * 127) { p.stick_x = 0; p.stick_y = 0; }
-    if (m.cstick_deadzone != defaults.cstick_deadzone && std::abs(int(p.sub_x)) * 100 < m.cstick_deadzone * 127 && std::abs(int(p.sub_y)) * 100 < m.cstick_deadzone * 127) { p.sub_x = 0; p.sub_y = 0; }
+    if (extended) controls_apply_sdl(guid, pad, &before, &p, config ? config->map.trigger_press : defaults.trigger_press, lane);
   }
 }
 bool app_rumble_allowed(int port) {
@@ -417,7 +430,7 @@ bool app_rumble_allowed(int port) {
   return !config || config->map.rumble;
 }
 #else
-void app_pad_postprocess(void*) {}
+void app_pad_postprocess(void*, int) {}
 bool app_rumble_allowed(int) { return true; }
 void app_menu_setup() {}   // no menu without a picture
 void feature_overlay(void*, int, int) {}
