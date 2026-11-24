@@ -15,12 +15,14 @@
 // Upstream's online rules: the input delay, Zelda as Sheik and the Training bits are offline only. Automatic
 // L-cancel is allowed offline and in Direct upstream (host/lcancel_policy.h); here it is offline only,
 // because this host does not know which pad drives the local fighter in a netplay match. Shield colours
-// are the port's own online (upstream exchanges them with other melee-unlocked players only).
+// online: this player's shield_color_online (settings.ini, play_main) and the opponent's when their build is a Melee-NX-NetPlay
+// one (patches/net-0004; upstream exchanges them with other melee-unlocked players), else the port's own.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "features_internal.h"
 #include "frontend.h"
 #include "host_services.h"       // melee-unlocked (fetched tree): linux_host::game_api
 #include "features/snapshot_store.h"     // runner/features
+#include "netplay_bridge.h"                // runner: online shield colours (patches/net-0004)
 
 #include <algorithm>
 #include <array>
@@ -76,7 +78,10 @@ uint32_t w_options3() { uint32_t v = 0; return replay_word(2, &v) ? v : orig_opt
 
 // ---- shield colours ----
 uint32_t shield_color(int32_t slot) {
-  if (slot < 0 || slot > 3 || online()) return 0;
+  if (slot < 0 || slot > 3) return 0;
+  // Online: this player's shield_color_online, the opponent's own choice when their build sent one (patches/net-0004),
+  // otherwise the port's colour. Display only.
+  if (online()) return netplay_bridge::shield_color(slot);
   return shield[slot];
 }
 

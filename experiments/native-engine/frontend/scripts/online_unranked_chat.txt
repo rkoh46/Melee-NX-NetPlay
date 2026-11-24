@@ -1,0 +1,69 @@
+# Controller script for --play-script: from boot to an Unranked search, by the game's own menus.
+# Needs slippi_menus 1 (the game then opens on the Online Play page) and the services program with a user file.
+# Frame numbers count from the moment each screen is entered. After the last line the script holds nothing;
+# on the console the real controllers add to it at any time.
+@scene 01 00
+# The main menu, open on Online Play with Unranked highlighted: A.
+200 A
+206
+260 A
+266
+@scene 08 00
+# Slippi's character select: the hand starts on the player card. Up onto Falco, A, then START to search.
+120 sy=127
+132
+150 A
+156
+240 START
+246
+# Quick chat (test-online-linux.sh MU_PADS_A): after the match the game is back on Slippi's character select, still
+# connected; D-pad Up opens the chat window and Up again sends message 0x88 ("ggs"), every 1.5 s from then on.
+# Frame numbers keep counting from the first visit of this screen (no @rearm), so these fall after the match.
+1650 DU
+1656
+1670 DU
+1676
+1740 DU
+1746
+1760 DU
+1766
+1830 DU
+1836
+1850 DU
+1856
+1920 DU
+1926
+1940 DU
+1946
+2010 DU
+2016
+2030 DU
+2036
+2100 DU
+2106
+2120 DU
+2126
+2190 DU
+2196
+2210 DU
+2216
+2280 DU
+2286
+2300 DU
+2306
+2370 DU
+2376
+2390 DU
+2396
+2460 DU
+2466
+2480 DU
+2486
+2550 DU
+2556
+2570 DU
+2576
+2640 DU
+2646
+2660 DU
+2666

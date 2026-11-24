@@ -39,7 +39,7 @@ if(MU_FE_VARIANT STREQUAL "switch")
   set(MELEE_AURORA_SOURCE "${GFX}/gen/aurora" CACHE PATH "Aurora source (Switch-patched)" FORCE)
   include("${REPO}/switch/cmake/Graphics.cmake")
   set(CMAKE_CXX_STANDARD_LIBRARIES
-    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
+    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lzstd -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
     CACHE STRING "" FORCE)
 elseif(MU_FE_VARIANT STREQUAL "linux")
   # The same Dawn revision and Aurora source as the Switch build, for Linux (build.sh deps).
@@ -174,6 +174,20 @@ if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
   target_compile_definitions(mu_features PRIVATE MU_FOREIGN_ELF MU_SQUAD=1 MELEE_NO_SLIPPI MELEE_PORT_VERSION="mu-native")
   target_compile_options(mu_features PRIVATE -O2 -g -Wall -fno-strict-aliasing)
   target_include_directories(mu_features PRIVATE "${GEN}")   # native_recording_codes.h
+  # replays.cpp compiles the fetched tree's port/app/replay_slpz.cpp, which includes "zstd/zstd.h" (upstream vendors zstd):
+  # here that name leads to the system's zstd (Linux) or devkitPro's portlib (Switch), so header and library match.
+  file(WRITE "${CMAKE_BINARY_DIR}/zstdshim/zstd/zstd.h" "#include <zstd.h>\n")
+  target_include_directories(mu_features PRIVATE "${CMAKE_BINARY_DIR}/zstdshim")
+  # spectator.cpp: the Slippi spectator server's own ENet (the netplay object's copy is local to that object) and
+  # nlohmann's JSON, both this repository's port/third_party.
+  set(_enet "${REPO}/port/third_party/enet")
+  set(MU_ENET_SOURCES "${_enet}/callbacks.c" "${_enet}/compress.c" "${_enet}/host.c" "${_enet}/list.c" "${_enet}/packet.c"
+    "${_enet}/peer.c" "${_enet}/protocol.c" "${_enet}/unix.c")
+  target_sources(mu_features PRIVATE ${MU_ENET_SOURCES})
+  set_source_files_properties(${MU_ENET_SOURCES} PROPERTIES
+    COMPILE_DEFINITIONS "HAS_FCNTL=1;HAS_POLL=1;HAS_INET_PTON=1;HAS_INET_NTOP=1;HAS_SOCKLEN_T=1;HAS_MSGHDR_FLAGS=1"
+    COMPILE_OPTIONS "-w;-include;arpa/inet.h")
+  target_include_directories(mu_features PRIVATE "${_enet}/include" "${REPO}/port/third_party")
   if(MU_FE_VARIANT STREQUAL "switch")
     target_include_directories(mu_features SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   endif()
@@ -269,7 +283,7 @@ function(mu_program target netplay_object suffix)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME mu-native-gfx-${MU_FE_VARIANT}${suffix})
     # A position-independent executable keeps the host away from the fixed game addresses.
     target_link_options(${target} PRIVATE -pie)
-    target_link_libraries(${target} PRIVATE pthread z m)
+    target_link_libraries(${target} PRIVATE pthread zstd z m)
     if(suffix)
       target_link_libraries(${target} PRIVATE curl)
     endif()

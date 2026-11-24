@@ -102,9 +102,14 @@ sync_tree() {
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
   mkdir -p "$gen/app"
-  for f in input_sdl.cpp input_script.cpp audio_sdl.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
+  for f in input_sdl.cpp input_script.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
     cmp -s "$repo/port/runtime/host/$f" "$gen/app/$f" || cp "$repo/port/runtime/host/$f" "$gen/app/$f"
   done
+  # The sound output follows the game's speed (online time sync; patches/0110).
+  rm -rf "$gen/audiosrc"; mkdir -p "$gen/audiosrc/port/runtime/host"; cp "$repo/port/runtime/host/audio_sdl.cpp" "$gen/audiosrc/port/runtime/host/"
+  patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0110-audio-follows-game-speed.patch"
+  cmp -s "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp" || cp "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp"
+  rm -rf "$gen/audiosrc"
   # The app's in-game menu (patches/0104: pages a host adds, greyed rows, the Quit action, a HUD extra) and its sign-in
   # and notice screens (patches/0105: built off the console too, controllers through the host's input path).
   rm -rf "$gen/appsrc"; mkdir -p "$gen/appsrc/port/runtime/host"

@@ -12,6 +12,7 @@
 #include "mu_host.h"
 #include "hackpack_source.h"     // melee-unlocked (fetched tree): the Hack Pack's saved choices
 #include "feature_calls.h"       // the feature modules' settings keys (src/features/)
+#include "netplay_bridge.h"      // runner: online port colours (patches/net-0004)
 
 #include <algorithm>
 #include <atomic>
@@ -55,6 +56,12 @@ struct Settings {
   // Online (upstream's onlinedelay / onlinedelayauto; the existing app's default is automatic)
   int online_delay = 2;                   // 1..9 frames, used when online_delay_auto is off
   bool online_delay_auto = true;
+  // Online, between Melee-NX-NetPlay builds (patches/net-0004; upstream's directpause, portcolour1/2, shield_color_online),
+  // and the Unranked skip list (upstream's blockcode1..3)
+  bool direct_pause = true;
+  int port_colour[2] = {-1, -1};          // -1 none, 0 red, 1 blue, 2 yellow, 3 green
+  uint32_t shield_online = 0;             // 0x1000000 | RGB, or 0
+  std::string block_code[3];
 } settings;
 // Online: set by play mode once per retrace, read by the game through the option functions (same thread).
 std::atomic<bool> online{false};
@@ -159,6 +166,10 @@ void set(const std::string& key, const std::string& value) {
   else if (key == "slippi_menus") s.slippi_menus = on;
   else if (key == "onlinedelay") { if (n >= 1 && n <= 9) s.online_delay = n; }
   else if (key == "onlinedelayauto") s.online_delay_auto = on;
+  else if (key == "directpause") s.direct_pause = value != "0";
+  else if (key == "portcolour1" || key == "portcolour2") s.port_colour[key.back() - '1'] = value.empty() || value == "-" ? -1 : std::clamp(n, -1, 3);
+  else if (key == "shield_color_online") s.shield_online = value.empty() || value == "-" || value == "0" ? 0u : 0x1000000u | (uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & 0xFFFFFFu);
+  else if (key == "blockcode1" || key == "blockcode2" || key == "blockcode3") s.block_code[key.back() - '1'] = value.substr(0, 16);
   else if (key == "mod_profile") s.mod_profile = value;
   else if (key == "mod_te_enabled") s.mod_te_enabled = value != "0";
   else if (key == "te_options") s.te_options = uint32_t(std::strtoul(value.c_str(), nullptr, 16));
@@ -216,6 +227,9 @@ std::string get(const std::string& key) {
   if (key == "slippi_menus") return bit(s.slippi_menus);
   if (key == "onlinedelay") return num(s.online_delay);
   if (key == "onlinedelayauto") return bit(s.online_delay_auto);
+  if (key == "directpause") return bit(s.direct_pause);
+  if (key == "portcolour1" || key == "portcolour2") return num(s.port_colour[key.back() - '1']);
+  if (key == "blockcode1" || key == "blockcode2" || key == "blockcode3") return s.block_code[key.back() - '1'];
   if (key == "mod_profile") return s.mod_profile;
   if (key == "mod_te_enabled") return bit(s.mod_te_enabled);
   return std::string();
@@ -309,7 +323,9 @@ uint32_t word_display() {
                      (s.arcade_hitboxes ? MU_DISPLAY_OPTION_HITBOXES : 0u) | (s.arcade_projectile_hitboxes ? MU_DISPLAY_OPTION_PROJECTILE_HITBOXES : 0u) |
                      (s.arcade_hitboxes_behind ? MU_DISPLAY_OPTION_HITBOXES_BEHIND : 0u) | (s.arcade_camera_2d ? MU_DISPLAY_OPTION_ARCADE_CAMERA : 0u) |
                      (boot_to_css ? MU_DISPLAY_OPTION_BOOT_TO_CSS : 0u)) |  // --auto-vs
-         (s.arcade_backdrop == 2 ? MU_DISPLAY_OPTION_GRID : 0u);
+         (s.arcade_backdrop == 2 ? MU_DISPLAY_OPTION_GRID : 0u) |
+         // Online 1v1 port colours, agreed with another Melee-NX-NetPlay build (patches/net-0004); 0 against anyone else.
+         (net ? netplay_bridge::port_colour_bits() & MU_DISPLAY_OPTION_PORT_COLOURS : 0u);
 }
 uint32_t word_audio() {
   // Mute voices everywhere; faster sound effects never in a network session (upstream's h_audio_options).
@@ -321,6 +337,11 @@ uint32_t word_audio() {
 bool settings_vanilla() { return settings.vanilla; }
 void settings_online(bool on) { online.store(on, std::memory_order_relaxed); }
 void settings_deactivate() { active = false; }
+void settings_net_prefs(bool* direct_pause, int port_colour[2], uint32_t* shield_online, std::string skip[3]) {
+  *direct_pause = settings.direct_pause; port_colour[0] = settings.port_colour[0]; port_colour[1] = settings.port_colour[1];
+  *shield_online = settings.shield_online;
+  for (int i = 0; i < 3; ++i) skip[i] = settings.block_code[i];
+}
 int settings_online_delay() { return settings.online_delay_auto ? 0 : settings.online_delay; }
 bool settings_slippi_menus() { return settings.slippi_menus && !settings.vanilla; }
 const std::string& settings_profile() { return settings.mod_profile; }
@@ -342,6 +363,10 @@ void settings_state_changed() {
 bool settings_widescreen() { return settings.widescreen; }
 void settings_boot_to_css(bool on) { boot_to_css = on; }
 
+// A '#' starts a comment at the start of a line or after a space: a connect code (blockcode1 ABCD#123) keeps its own.
+void strip_comment(char* line) {
+  for (char* p = line; *p; ++p) if (*p == '#' && (p == line || *(p - 1) == ' ' || *(p - 1) == '\t')) { *p = 0; return; }
+}
 void settings_load(const std::string& path) {
   active = true;
   file_path = path;
@@ -357,7 +382,7 @@ void settings_load(const std::string& path) {
   } else {
     char line[512]; int count = 0;
     while (std::fgets(line, sizeof line, in)) {
-      if (char* hash = std::strchr(line, '#')) *hash = 0;
+      strip_comment(line);
       char key[64], value[256];
       if (std::sscanf(line, " %63s %255s", key, value) == 2) { set(key, value); given.insert(key); ++count; }
     }
@@ -369,7 +394,7 @@ void settings_load(const std::string& path) {
   if (FILE* state = std::fopen(state_path.c_str(), "r")) {
     char line[512];
     while (std::fgets(line, sizeof line, state)) {
-      if (char* hash = std::strchr(line, '#')) *hash = 0;
+      strip_comment(line);
       char key[64], value[256];
       if (std::sscanf(line, " %63s %255s", key, value) == 2) set(key, value);
     }

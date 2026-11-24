@@ -289,6 +289,9 @@ int play_main() {
     net.delay_auto = frames <= 0;
     if (frames > 0) net.delay = frames;
   }
+  // Between Melee-NX-NetPlay builds (patches/net-0004) and the Unranked skip list: settings.ini, except in a direct run (the
+  // command line's --net-direct-pause, --net-port-colour, --net-shield, --net-skip there).
+  if (!direct) settings_net_prefs(&net.direct_pause, net.port_colour, &net.shield_online, net.skip);
   net.out_dir = options.net_dir.empty() ? options.out_dir : options.net_dir; net.iso_path = options.iso; net.embedded_image = true;
   if (net.user_dir.empty() && !options.user_dir.empty()) net.user_dir = options.user_dir;   // the app's User/Slippi
 #ifdef __SWITCH__
@@ -334,6 +337,7 @@ int play_main() {
     say("play: online: this program has no online services (the services program has): the Online Play page will show Log-in");
   }
   if (direct || menu_online) {
+    net_host::set_speed_hook(io_game_speed);
     if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); screens_stop(); log_close(); return code; }
     net_on = true;
     // Tests (input suggestions): MU_NET_CONTROLLERS=1 lets the controllers, or the controller script, play a direct match

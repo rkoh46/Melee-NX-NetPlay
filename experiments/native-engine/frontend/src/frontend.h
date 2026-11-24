@@ -67,12 +67,14 @@ void io_stop();                      // run end: closes the sound output, prints
 uint64_t io_last_pad_ns();           // when the game last read the controllers (0: never)
 void io_retrace(uint32_t retrace, uint32_t scene_major, uint32_t scene_minor, bool fighting);   // once per retrace, simulation thread
 double io_take_pad_ms();             // time spent reading controllers since the last call
+void io_game_speed(double speed);    // online time sync's frame rate (net_host::set_speed_hook): the sound output follows it
 // settings.cpp (play mode)
 void settings_load(const std::string& path);
 bool settings_vanilla();
 void settings_online(bool on);       // the option words follow the online rules while this is on
 void settings_deactivate();          // the host's own words again (the netplay runs that boot straight into a match)
 int settings_online_delay();         // frames; 0: automatic
+void settings_net_prefs(bool* direct_pause, int port_colour[2], uint32_t* shield_online, std::string skip[3]);   // patches/net-0004
 bool settings_widescreen();
 void settings_boot_to_css(bool on);
 void settings_report();

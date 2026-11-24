@@ -62,6 +62,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
 | `patches/0108-aurora-imgui-draw-list-delete.patch`, `patches/0109-aurora-picture-options.patch` | Against a build-time copy of Aurora (`build/sdk/aurora` -> `build/native-engine-gfx/gen/aurora`, which both picture variants compile): ImGui's frozen draw lists are freed with `IM_DELETE` (they were made with `IM_NEW` and freed with `operator delete`: AddressSanitizer's alloc/dealloc mismatch, now on in the sanitizer runs); `aurora_set_picture` (brightness, contrast, vibrance, sharpening, the CRT looks) in the present pass. `build/sdk` is not changed. |
 | `patches/0107-gx-core-array-pool-fence.patch` | After 0102: the decoder reuses a vertex-array buffer the render thread let go of only after an acquire fence (0.4.2; ThreadSanitizer). |
+| `patches/0110-audio-follows-game-speed.patch` | Against a build-time copy of `port/runtime/host/audio_sdl.cpp`: the output's resampling ratio follows the game's speed (online time sync, 0.4.3). |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
 | `CMakeLists.txt`, `build.sh` | Three variants: `null` (Linux, no graphics device), `linux` (Aurora on Vulkan, test build), `switch` (NRO). |
 | `linux-gfx.Dockerfile`, `DawnLinux.cmake`, `test-linux.sh` | The off-console picture test: Xvfb and Mesa's software Vulkan driver. |
@@ -241,6 +242,10 @@ the game runs as upstream runs it: its built-in code set on (UCF and the rest), 
 | `vanilla` | 0 / 1 | ours: the retail game without the built-in code set; the CPU, 20XX and Stadium options are then not given, as upstream's vanilla session does |
 | `onlinedelayauto` | 1 / 0 | online input delay from the round trip (2..5 frames); default 1 |
 | `onlinedelay` | 1..9 | frames, with `onlinedelayauto 0` |
+| `blockcode1..3` | connect code | Unranked turns these opponents down and searches again (upstream's skip list; patches/net-0004) |
+| `directpause` | 1 / 0 | 0: no pausing in Direct, when every player's build is a Melee-NX-NetPlay one (otherwise Slippi's rule: Start pauses Direct) |
+| `portcolour1`, `portcolour2` | -1..3 | online 1v1 port colour, first and second choice (0 red, 1 blue, 2 yellow, 3 green), between Melee-NX-NetPlay builds |
+| `shield_color_online` | RRGGBB | this player's shield online; the opponent's own choice shows when their build is a Melee-NX-NetPlay one |
 
 What upstream sends only outside network play (the offline community codes, the hitboxes, the 2D camera, faster
 sound effects, the CPU options) is sent here offline and cleared online (see Netplay below).
@@ -408,6 +413,28 @@ in the first 40 ms run lost two thirds of its re-simulated frames; the other run
 way a suggestion arrives after the frame it is for has been simulated, so it cannot save a rollback. Not yet tried
 against a real Slippi player (real changes come at any time between polls).
 
+### Between two Melee-NX-NetPlay builds (0.4.3)
+
+`../patches/net-0004` adds a build message (id 0xD0) that the netplay object sends first on the reliable channel at every
+connection: the Direct pause rule, the shield colour and the port colour choices. Slippi Dolphin and melee-unlocked log an
+unknown id and ignore it, and a side that never got one keeps Slippi's behaviour, so nothing changes against them. Since a
+side's selections always follow its build message on the same ordered channel, both sides decide the pause rule from the
+same bytes before a match can start (a rule only one side applied would split the game at the first Start press). The
+headless runner takes the same choices as `--net-direct-pause 0|1`, `--net-port-colour A[,B]`, `--net-shield RRGGBB`,
+`--net-skip CODE` and, for tests, `--net-as-slippi` (no build message, the other's ignored). Results: FEATURES.md rows
+"Pause in Direct and Friends", "Online port colours", "Opponent shield colour", "Skip in Unranked". settings.ini comments
+now start at a `#` at the start of a line or after a space, so a connect code keeps its `#`.
+
+### Quick chat (0.4.3)
+
+Slippi's D-pad chat on the online character select works as in Slippi: the game sends 0xBB, the netplay object sends the
+message to the opponent, and the receiver's game shows it from the match state (0xB3; message 0x84 on the wire). The
+netplay host logs each step (`net: chat: the game sends quick chat message 0x88`, `our message 0x88 went out`, on the
+other side `message 0x88 received from player 2 (shown by the game)`). Test: `MU_PADS_A=scripts/online_unranked_chat.txt
+MU_TWO_SCREENS=1 ./test-online-linux.sh DISC 3000` (side a presses D-pad Up, Up after the match, back on the character
+select and still connected; side b has its own X screen, `shots/b-NNN.png`): side b showed "Mock 2: ggs" (screenshot),
+two to five messages per run depending on when the match ended, the match itself identical on both sides.
+
 ### Feature modules: training, replays, options, mod discs, 120 Hz
 
 `src/features/*.cpp` and `../runner/features/*.cpp` register through `src/feature_hooks.h` (commands by
@@ -420,6 +447,9 @@ against a real Slippi player (real changes come at any time between polls).
 | `practicecpu_on 1`, `practicecpu_preset N`, `practicecpu HEX` | the Practice CPU (command 0xF6); the Training page also has "Go to Training" |
 | `shield_colorp1..4 RRGGBB`, `offline_delay 1` + `offline_delay_frames N`, `autolcancel 1`, `zelda_as_sheik 1` | offline only (shield colours: online the ports' own) |
 | `savereplays 0`, `replay_dir DIR` | every VS and online match is written to `sdmc:/switch/melee-nx-netplay/Replays/Game_YYYYMMDDTHHMMSS.slp` (Linux: `<out>/Replays`) |
+| `slippi_spectator 1`, `slippi_spectator_port N` | the Slippi spectator server (off by default; port 51441): every recorded match goes out live over ENet as Slippi Dolphin sends it, for the Slippi Launcher's Broadcast tab and slippi-js overlays (`src/features/spectator.cpp`; on the console on every interface, off it on 127.0.0.1). Test: `test-spectator-linux.sh` (an ENet client, `../tools/spectator_client.cpp`, and `../tools/spectator_check.py`: the stream is the .slp's raw element byte for byte) |
+| `netoverlay 1` | during an online match, one line near the top: the last 10 s of ping, rollbacks, the time sync's frame rate and the time between frames (`src/features/netoverlay.cpp`; upstream's key, its graphs not drawn) |
+| `compressreplays 1` | replays are written as `.slpz` (the slpz tool's format, compiled from the fetched tree's `port/app/replay_slpz.cpp`; 5 to 18 times smaller), each checked to unpack to the recording first; `--replay` and the Replays page read both (a `.slpz` is unpacked to `Replays/.slpz-playback.slp` to play). Round trip: `../tools/slpz_roundtrip.sh DIR` |
 | `subframe 0|1|2`, `fps N` | presentation: Off / Predict / Interpolate sub-frames; `fps` caps presents per second (tests). The simulation stays at 60 Hz |
 | `input_suggestions 0` | Slippi 3.7.0 input suggestions off (default on; the Game page's row; from the next online game). See "Input suggestions" |
 
@@ -649,6 +679,21 @@ resolution 640x480 and 1280x960 (no cropping), names over the fighters online (`
 the menu's Overlays and Picture pages writing `inputoverlay 1` and `scale 1`. AddressSanitizer with alloc/dealloc mismatch
 on (`MU_SANITIZE=address test-app-linux.sh menu`): no report. After these changes the five reference scripts with
 `mu-native-gfx-null` and `parity_vs_onett` with a picture: IDENTICAL. Not seen: any of it on the console (NVK, the adapter's rate).
+
+Online and replay features of 0.4.3 on Linux (runner and patches from the working tree, `MU_SYNC_REF=worktree`; game image
+`1ddc3690...`), one container per run, no network:
+
+| Check | Result |
+|---|---|
+| The five reference scripts, headless; `parity_vs_onett` with `mu-native-gfx-null` | all IDENTICAL to the x86-64 references |
+| Time sync frame rate (`../tools/net_test.sh 3600 30 0`, one clock 0.4 % fast) | nudged to x0.998 and x1.001, no frame advance after the start (7 with `--net-fixed-rate`); confirmed states identical, `net check` equal; play mode the same (`test-net-linux.sh`) |
+| `.slpz` (`../tools/slpz_roundtrip.sh`, `compressreplays 1`) | 11 replays round-trip byte-identical; a play-mode recording written as .slpz plays back with 0 of 3302 post-frame records differing |
+| Spectator server (`test-spectator-linux.sh`) | an ENet client got the match from cursor 0, at the start and 25 s late: byte-identical to the .slp's raw element |
+| Quick chat (`test-online-linux.sh`, `scripts/online_unranked_chat.txt`, `MU_TWO_SCREENS=1`) | 0x88 sent after the match, received and shown ("Mock 2: ggs") on the other side |
+| Build message (`net_test.sh`, `test-online-linux.sh`) | Direct pause rule agreed on both sides, Slippi's rule kept against a side acting as Slippi Dolphin; port colours on both screens; `net check` equal in every run |
+| Skip in Unranked (`blockcode1`) | three matches with the listed code turned down, no match played |
+| Network overlay (`netoverlay 1`, `test-net-linux.sh` with delay) | the line on screen during the match |
+| NROs (`../build.sh nro`, `MU_NET_SERVICES=1 ../build.sh nro`, `./build.sh nro`) | link; both programs pass the `netplay_link` check |
 
 Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
 over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble
