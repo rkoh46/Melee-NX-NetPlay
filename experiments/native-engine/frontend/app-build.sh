@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Melee-NX-NetPlay 0.4.0 (the native engine as the app) where the build computer expects the app's NRO:
+# Builds Melee-NX-NetPlay (the native engine as the app; version in VERSION) where the build computer expects the app's NRO:
 # dist/sd/switch/melee-nx-netplay/melee-nx-netplay.nro. Meant as tools/update-host.py's build command
 # (MELEE_NX_UPDATE_BUILD, with update-host-native.patch applied); it can also be run by hand:
 #   experiments/native-engine/frontend/app-build.sh /path/to/GALE01.iso

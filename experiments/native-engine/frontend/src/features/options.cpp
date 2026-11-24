@@ -9,7 +9,9 @@
 //   - shield colours (MuHostApi.shield_color; upstream gx_core.cpp shield_color, keys shield_colorp1..4);
 //   - offline input delay (upstream port/runtime/host/offline_input_delay.*: offline_delay, offline_delay_frames);
 //   - automatic L-cancel (upstream port/runtime/host/lcancel.cpp, the automatic half; key autolcancel);
-//   - Zelda starts as Sheik (command 0xDE; key zelda_as_sheik).
+//   - Zelda starts as Sheik (command 0xDE; key zelda_as_sheik);
+//   - Slippi 3.7.0 input suggestions online (key input_suggestions, default on as upstream; the netplay object asks
+//     mu_net_suggest_setting at each online game's start: patches/net-0001, play_io.cpp mu_net_suggest_read).
 // Upstream's online rules: the input delay, Zelda as Sheik and the Training bits are offline only. Automatic
 // L-cancel is allowed offline and in Direct upstream (host/lcancel_policy.h); here it is offline only,
 // because this host does not know which pad drives the local fighter in a netplay match. Shield colours
@@ -42,6 +44,7 @@ bool offline_delay_on = false;
 int offline_delay_frames = 4;            // 1..9
 bool auto_lcancel = false;
 bool zelda_sheik = false;
+std::atomic<bool> input_suggestions{true};
 
 uint32_t colour_value(const std::string& value) {
   return value == "-" || value.empty() || value == "0" ? 0u : 0x1000000u | (uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & 0xFFFFFFu);
@@ -53,6 +56,7 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "offline_delay_frames") offline_delay_frames = std::clamp(n, 1, 9);
   else if (key == "autolcancel") auto_lcancel = value == "1";
   else if (key == "zelda_as_sheik") zelda_sheik = value == "1";
+  else if (key == "input_suggestions") input_suggestions = value != "0";
   else return false;
   return true;
 }
@@ -307,5 +311,11 @@ void register_options() {
                   [](fe::features::MenuEntry::Write w) { w("offline_delay", offline_delay_on ? "1" : "0"); w("offline_delay_frames", std::to_string(offline_delay_frames)); }});
   add_menu_entry({"Game", "Zelda starts as Sheik", [] { return on_off(zelda_sheik); }, [](int) { zelda_sheik = !zelda_sheik; }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("zelda_as_sheik", zelda_sheik ? "1" : "0"); }});
+  add_menu_entry({"Game", "Input suggestions (online, next game)", [] { return on_off(input_suggestions.load()); },
+                  [](int) { input_suggestions = !input_suggestions.load(); }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("input_suggestions", input_suggestions.load() ? "1" : "0"); }});
 }
 }  // namespace fe::features
+
+// The netplay object (patches/net-0001) asks at the start of each online game whether to send and use input suggestions.
+extern "C" int mu_net_suggest_setting(void) { return fe::features::input_suggestions.load() ? 1 : 0; }

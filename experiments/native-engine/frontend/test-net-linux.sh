@@ -4,6 +4,10 @@
 # own online code and this repository's Slippi netplay, with pads from a controller script per side.
 #   ./test-net-linux.sh /path/to/disc-folder [retraces] [extra arguments for both instances]
 #   MU_NET_DELAY, MU_NET_JITTER   ms of delay and jitter between the two (../tools/udp_delay_relay.py): rollbacks
+#   MU_NET_CONTROLLERS=1          the controller scripts play the match instead of the game's generated test inputs
+#   MU_SUGGEST_LEAD_MS=N          with it: each script change is also read N ms before the poll that takes it, as a
+#                                 player's change between frames would be (sent as a Slippi input suggestion)
+#   MU_NET_SUGGESTIONS=0|1        input suggestions off or on (default: on); MU_SUGGEST_TRACE=1 logs the first ones
 # Output: build/native-engine-gfx/run-net/{a,b}/ (console.log, digest-net-confirmed.csv) and shots/.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -22,7 +26,8 @@ for side, period, stick in (("a", 47, 80), ("b", 61, -80)):
     open(f"{sys.argv[1]}/{side}/pads.txt", "w").write("\n".join(lines) + "\n")
 PY
 timeout "${MU_TEST_LIMIT:-600}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" -v "$here/../tools:/t:ro" \
-  -e FRAMES="$frames" -e EXTRA="$*" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+  -e FRAMES="$frames" -e EXTRA="$*" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy \
+  -e MU_NET_CONTROLLERS -e MU_SUGGEST_LEAD_MS -e MU_NET_SUGGESTIONS -e MU_SUGGEST_TRACE "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
     for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
@@ -44,6 +49,6 @@ timeout "${MU_TEST_LIMIT:-600}" docker run --rm --network none -v "$disc:/iso:ro
 python3 -I "$here/../tools/compare_net_digests.py" "$run/a/digest-net-confirmed.csv" "$run/b/digest-net-confirmed.csv" | sed 's/^/confirmed states: /'
 for side in a b; do
   echo "== $side"
-  grep -E "^net|^play:|selftest|DIVERGED|desync|Desync|rollback|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "^\[net\] slippi: \(netplay\|ping\)\|net: slow frame \([4-9]\|1[0-9]\)" | tail -30 | cut -c1-330
+  grep -E "^net|^play:|selftest|DIVERGED|desync|Desync|rollback|input suggestions|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "^\[net\] slippi: \(netplay\|ping\)\|net: slow frame \([4-9]\|1[0-9]\)" | tail -30 | cut -c1-330
   grep -E "picture: (simulation thread: work \(|simulation thread: then|match frames with|slow frame [1-3]:|netplay:|decoder thread: all work: [0-9]+ frames, avg)" "$run/$side/console.log" | head -9 | cut -c1-420
 done

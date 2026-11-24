@@ -13,7 +13,7 @@
 #            changes the volume, the closing B never reaches the game (it stays on Online Play), the later A does (Unranked
 #            opens Slippi's character select, scene 8)
 #   signin   no user.json: the sign-in screen comes first; B (Play offline) through the test pad file starts the game offline
-#   update   a fake build computer on 127.0.0.1 (python http.server) publishes 0.4.1: the prompt, A, the download, the
+#   update   a fake build computer on 127.0.0.1 (python http.server) publishes the version after VERSION: the prompt, A, the download, the
 #            check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app closes; then the same version: no prompt
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
@@ -219,9 +219,10 @@ EOF
     mkdir -p "$dir/server"
     head -c 3000000 /dev/urandom > "$dir/server/melee-nx-netplay-test.nro"
     sha=$(shasum -a 256 "$dir/server/melee-nx-netplay-test.nro" | cut -d' ' -f1)
-    printf '{"schema":1,"app_version":"0.4.1","slippi_version":"3.7.0","built":"2026-11-23T00:00:00Z","commit":"test","files":{"game":{"name":"melee-nx-netplay-test.nro","size":3000000,"sha256":"%s"}},"pending":null}\n' "$sha" > "$dir/server/latest.json"
+    same=$(cat "$here/VERSION"); newer="${same%.*}.$(( ${same##*.} + 1 ))"
+    printf '{"schema":1,"app_version":"'"$newer"'","slippi_version":"3.7.0","built":"2026-11-23T00:00:00Z","commit":"test","files":{"game":{"name":"melee-nx-netplay-test.nro","size":3000000,"sha256":"%s"}},"pending":null}\n' "$sha" > "$dir/server/latest.json"
     echo "the installed build (a dummy)" > "$dir/melee-nx-netplay/melee-nx-netplay.nro"
-    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt NEWER='"$newer"' SAME='"$same"'; pad ""
       (cd /out/server && python3 -m http.server 8080 --bind 127.0.0.1 > /out/server.log 2>&1) & server=$!
       sleep 1
       cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
@@ -230,7 +231,7 @@ EOF
       wait_log /out/console.log "the new version is" 60 && { sleep 2; shot installed; pad "A"; sleep 0.5; pad ""; }
       wait $app
       # The same version published: no prompt, the game starts.
-      sed -i "s/0.4.1/0.4.0/" /out/server/latest.json
+      sed -i "s/\"$NEWER\"/\"$SAME\"/" /out/server/latest.json
       cd /out && /b/mu-native-gfx-linux-services > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log
       kill $server'
     echo "installed file now: $(shasum -a 256 "$dir/melee-nx-netplay/melee-nx-netplay.nro" | cut -c1-16) (published $(echo $sha | cut -c1-16)); backup: $(cat "$dir/melee-nx-netplay/melee-nx-netplay.nro.bak" 2>/dev/null)"

@@ -174,20 +174,20 @@ WEAKEN_LINUX="for v in obj-linux obj-linux-services; do [ ! -f $W/net/\$v/netpla
 # The netplay object with the app's real services for Linux, by the recipe of ../build.sh (net_build with
 # MU_NET_SERVICES=1) from the synced runner: the bridge, this repository's netplay sources and ENet in one object,
 # every other symbol local. Its service address is the loopback stand-in's, compiled in. Made here because the test
-# needs one that matches the synced bridge header.
-NET_INC="-I$W/runner -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app"
+# needs one that matches the synced bridge header. The netplay sources are ../net_sources.sh's patched copy.
+NET_INC="-I$W/runner -I$W/netsrc/port/runtime/hle -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app"
 NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DMU_NET_SERVICES'
 NET_CXX='slippi_online slippi_net slippi_offline slippi_net_diag slippi_match_quality slippi_text slippi_version slippi_matchmaking_ws slippi_report slippi_http_curl slippi_login'
 build_net_services_linux() {
   local o="$W/net/obj-linux-services" stamp
-  stamp="$(cd "$repo" && cat $(for f in $NET_CXX; do echo port/runtime/hle/$f.cpp; done) port/runtime/hle/slippi_*.h "$W"/runner/netplay_bridge.* | shasum -a 256 | cut -c1-32)"
+  stamp="$(bash "$here/../net_sources.sh" "$work/netsrc")-$(cd "$repo" && cat "$W"/runner/netplay_bridge.* | shasum -a 256 | cut -c1-16)"
   [ -f "$repo/$o/netplay.o" ] && [ "$(cat "$repo/$o/stamp" 2>/dev/null)" = "$stamp" ] && return 0
   dock 900 "$LINUX_IMG" "
     rm -rf $o; mkdir -p $o/net
     for f in callbacks compress host list packet peer protocol unix; do
       gcc -fPIE -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/\$f.c -o $o/net/enet_\$f.o
     done
-    for f in $NET_CXX; do echo port/runtime/hle/\$f.cpp; done > $o/list; echo $W/runner/netplay_bridge.cpp >> $o/list
+    for f in $NET_CXX; do echo $W/netsrc/port/runtime/hle/\$f.cpp; done > $o/list; echo $W/runner/netplay_bridge.cpp >> $o/list
     xargs -P $jobs -I{} sh -c 'g++ -fPIE -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden $NET_INC $NET_DEF -c {} -o $o/net/\$(basename {} .cpp).o' < $o/list
     ld -r --force-group-allocation $o/net/*.o -o $o/netplay.o
     objcopy --localize-hidden $o/netplay.o"

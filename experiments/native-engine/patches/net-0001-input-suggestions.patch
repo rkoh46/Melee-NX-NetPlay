@@ -1,0 +1,373 @@
+diff -ru a/port/runtime/hle/slippi_net.cpp b/port/runtime/hle/slippi_net.cpp
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -9,6 +9,7 @@
+ #if !defined(MELEE_PORT_OFFLINE) || !MELEE_PORT_OFFLINE
+ #include "host.h"
+ #include "slippi_net_diag.h"
++#include "slippi_input_suggestions.h"   // Slippi 3.7.0's rules for using suggestions (the fetched tree's copy, build time)
+ #include "slippi_version.h"
+ #include "slippi_matchmaking_ws.h"
+ #if defined(_WIN32)
+@@ -334,6 +335,11 @@
+           AddRemotePad(pidx, (int32_t)(frame - i), &data[pad_data_offset + i * PAD_WIRE_SIZE]);
+         remote_checksums_[pidx] = {checksum_frame, checksum};
+       }
++      // Each new real input judges the suggestion that stood in for it, oldest first (slippi_input_suggestions.h).
++      for (int64_t i = inputs_to_copy - 1; i >= 0; --i)
++        if (suggestions::on_remote_input(pidx, (int32_t)(frame - i), packet.data() + pad_data_offset + i * PAD_WIRE_SIZE))
++          host::log("slippi: ignoring player %u's input suggestions for the rest of the game from frame %d: they kept disagreeing with the real inputs",
++                    packet_player_port, (int32_t)(frame - i));
+       if (inputs_to_copy > 0) {
+         Packet ack;
+         ack << (uint8_t)NP_MSG_SLIPPI_PAD_ACK << frame << player_idx_;
+@@ -375,13 +381,31 @@
+       break;
+     }
+     case NP_MSG_SLIPPI_PAD_SUGGESTION: {
+-      // Slippi 3.7 input suggestions: the opponent's newest input between frames, used only to predict.
+-      // This port neither sends nor uses them (the game predicts with the latest real input, as before
+-      // 3.7); every prediction is checked against the real input either way, so ignoring them is safe.
++      // Slippi 3.7 input suggestions: the opponent's newest input between frames, used only to predict their frames
++      // not received yet (slippi_input_suggestions.h decides which applies). The real input still decides every frame.
+       uint8_t packet_player_port; int32_t target_frame; uint32_t seq;
+-      if (!(packet >> packet_player_port) || !(packet >> target_frame) || !(packet >> seq) || packet.size() < 10 + (size_t)PAD_INPUT_SIZE) {
++      constexpr size_t pad_offset = 10;   // message id, port, target frame, sequence number
++      if (!(packet >> packet_player_port) || !(packet >> target_frame) || !(packet >> seq) || packet.size() < pad_offset + (size_t)PAD_INPUT_SIZE) {
+         static int warned = 0; if (++warned <= 3) host::log("slippi: input suggestion packet too small");
++        break;
+       }
++      const uint8_t pidx = PlayerIdxFromPort(packet_player_port);
++      if (packet_player_port == player_idx_ || pidx >= remote_player_count_) {
++        static int warned = 0; if (++warned <= 3) host::log("slippi: input suggestion with invalid player port %u", packet_player_port);
++        break;
++      }
++      suggestions::on_remote_suggestion(pidx, target_frame, seq, packet.data() + pad_offset);
++      {
++        static const bool trace = [] { const char* v = std::getenv("MU_SUGGEST_TRACE"); return v && *v == '1'; }();
++        static int lines = 0;
++        if (trace && ++lines <= 200) {
++          int32_t latest = 0;
++          { std::lock_guard<std::mutex> lk(pad_mutex_); if (!remote_pad_queue_[pidx].empty()) latest = remote_pad_queue_[pidx].front()->frame; }
++          const uint8_t* pad = packet.data() + pad_offset;
++          host::log("slippi: suggestion received: target %d seq %u, newest real pad %d, buttons %02X%02X stick %d,%d", target_frame, seq, latest,
++                    pad[0], pad[1], (int8_t)pad[2], (int8_t)pad[3]);
++        }
++      }
+       break;
+     }
+     case NP_MSG_SLIPPI_PLAYER_DROP: {
+@@ -416,6 +440,7 @@
+         host::log("slippi: received selections from player %u (char %u color %u stage %u)", s->player_idx, s->character_id, s->character_color, s->stage_id);
+         match_info_.remote[idx].Merge(*s);
+         has_game_started_ = false;
++        suggestions::reset_remote(idx);
+         std::lock_guard<std::mutex> lk(pad_mutex_);
+         remote_pad_queue_[idx].clear();
+         remote_pad_history_[idx].clear();
+@@ -758,6 +783,14 @@
+   is_desync_recovery_ = false;
+   { std::lock_guard<std::mutex> lk(game_prep_mutex_); game_prep_step_queue_.clear(); }
+   match_info_.Reset();
++}
++
++void NetplayClient::SendSlippiPadSuggestion(int32_t target_frame, uint32_t seq, const uint8_t pad[PAD_INPUT_SIZE]) {
++  if (status_.load(std::memory_order_acquire) != ConnectStatus::CONNECTED) return;
++  auto p = std::make_unique<Packet>();
++  *p << (uint8_t)NP_MSG_SLIPPI_PAD_SUGGESTION << player_idx_ << target_frame << seq;
++  p->append(pad, PAD_INPUT_SIZE);
++  SendAsync(std::move(p));   // Send() puts it on channel 1, unsequenced, as pads
+ }
+ 
+ void NetplayClient::SendSlippiPad(std::unique_ptr<Pad> pad) {
+diff -ru a/port/runtime/hle/slippi_net.h b/port/runtime/hle/slippi_net.h
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -175,6 +175,9 @@
+   std::vector<int> GetFailedConnections() const { return failed_connections_; }
+   void StartSlippiGame();
+   void SendSlippiPad(std::unique_ptr<Pad> pad);
++  // Slippi 3.7.0 input suggestion: this side's newest controller state between frames, for the pad frame it first
++  // appears in (unsequenced, like pads). Safe from any thread: it only queues the packet.
++  void SendSlippiPadSuggestion(int32_t target_frame, uint32_t seq, const uint8_t pad[PAD_INPUT_SIZE]);
+   void SetMatchSelections(PlayerSelections& s);
+   void SendGamePrepStep(const GamePrepStepResults& s);
+   void SendSyncedGameState(const SyncedGameState& s);
+diff -ru a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.cpp
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -34,6 +34,21 @@
+ }  // namespace slippi::online
+ #else
+ #include "slippi_net.h"
++#include "slippi_input_suggestions.h"   // Slippi 3.7.0's rules for input suggestions (the fetched tree's copy, build time)
++#include <atomic>
++#include <chrono>
++#include <mutex>
++
++// Input suggestions, the host's side (experiments/native-engine/patches/net-0001). Weak: a program without them
++// (the headless runner) sends no suggestions and takes the setting's default.
++extern "C" {
++// Reads the local player's controller on `port` (0..3) as the game will get it at its next poll, in wire form
++// (buttons big-endian, stick x/y, C-stick x/y, L, R), from the sampler thread between frames. 0 when it cannot:
++// no controllers in this program, generated test inputs play the match, the in-game menu is open.
++__attribute__((weak, visibility("default"))) int mu_net_suggest_read(int port, uint8_t out[8]);
++// The player's setting: 1 on, 0 off.
++__attribute__((weak, visibility("default"))) int mu_net_suggest_setting(void);
++}
+ #include "slippi_report.h"
+ #include "slippi_match_quality.h"
+ #include "slippi_matchmaking_ws.h"
+@@ -183,6 +198,157 @@
+ uint64_t g_rollbacks = 0;
+ int32_t g_current_online_frame = 0;   // for the rollback log line
+ bool g_in_online_match = false;
++
++// ---------------------------------------------------------------- input suggestions, the sending side
++// Slippi 3.7.0: while an online game runs, the local player's controller is read on a thread of its own about a
++// thousand times a second (mu_net_suggest_read: the host's input path; the console's controller driver updates at
++// 200 Hz, the GameCube adapter at 1000 Hz). A change that can start an action (slippi::suggestions::
++// is_meaningful_change: a button, a trigger past the light-shield line, a stick into walk, dash, tap-jump, crouch or
++// smash range) goes to the other players at once, unsequenced like a pad, as a suggestion for the pad frame it first
++// appears in. They predict that player's frames from it until the real pad arrives; the real pad always decides.
++// The frame is known exactly: the pad polled next goes out as (last sent frame + 1), one more when the game advances
++// a frame for time sync, and a change read after the game polled but before that frame's pad went out belongs to the
++// frame after it (released when the frame is done). Using received suggestions: slippi_input_suggestions.h.
++namespace suggest {
++constexpr int kPad = PAD_INPUT_SIZE;
++std::mutex mutex;                          // known, pending, seq, the counters
++std::thread thread;
++std::atomic<bool> running{false};
++std::atomic<bool> poll_pending{false};     // the game polled; that poll's pad is not sent (or skipped) yet
++std::atomic<bool> advancing{false};        // the last poll also runs the next frame (time sync)
++std::atomic<int32_t> last_sent_frame{0};   // the pad frame of the newest pad sent
++std::atomic<int> port{0};                  // the controller port the local inputs come from
++std::atomic<uint64_t> last_frame_us{0};    // when the game last handed over a frame
++uint8_t known[kPad] = {};                  // the newest pad the other players know of from this side, real or suggested
++bool has_known = false;
++uint8_t pending[kPad] = {};                // a read made while a poll was being handled
++bool has_pending = false;
++uint32_t seq = 0;
++uint64_t sent = 0, reads = 0, read_ns = 0, unreadable = 0;
++bool game_on = false;                      // suggestions::start_game was called for the game in progress
++bool sending = false, using_received = false;
++
++// MU_SUGGEST_TRACE=1 (tests): the first 200 suggestions sent and received are logged with their frames.
++bool trace_line() {
++  static const bool on = [] { const char* v = std::getenv("MU_SUGGEST_TRACE"); return v && *v == '1'; }();
++  static std::atomic<int> lines{0};
++  return on && lines.fetch_add(1, std::memory_order_relaxed) < 200;
++}
++bool wanted() {
++  if (const char* v = std::getenv("MU_NET_SUGGESTIONS"); v && *v) return *v != '0';   // tests
++  return mu_net_suggest_setting ? mu_net_suggest_setting() != 0 : true;                // upstream's default: on
++}
++void clamp_rest(uint8_t pad[kPad]) {        // noise around the centre is not a change
++  if ((int8_t)pad[2] >= -2 && (int8_t)pad[2] <= 2 && (int8_t)pad[3] >= -2 && (int8_t)pad[3] <= 2) pad[2] = pad[3] = 0;
++  if ((int8_t)pad[4] >= -2 && (int8_t)pad[4] <= 2 && (int8_t)pad[5] >= -2 && (int8_t)pad[5] <= 2) pad[4] = pad[5] = 0;
++}
++int32_t next_poll_target() { return last_sent_frame.load() + 1 + (advancing.load() ? 1 : 0); }
++// mutex held: the sequence number to send `pad` with as a suggestion for `target`, 0 when it is not news.
++uint32_t judge_locked(const uint8_t pad[kPad], int32_t target) {
++  if (!has_known || target < suggestions::kStartSyncFrame) return 0;   // the game zeroes inputs polled before it
++  if (!suggestions::is_meaningful_change(known, pad)) return 0;
++  std::memcpy(known, pad, kPad);
++  ++sent;
++  return ++seq;
++}
++// Only the game thread replaces g_netplay, and it stops this thread first (stop()).
++void send(int32_t target, uint32_t s, const uint8_t pad[kPad], const char* when) {
++  if (!s) return;
++  if (trace_line()) host::log("slippi: suggestion sent (%s): target %d seq %u, last pad sent %d, buttons %02X%02X stick %d,%d", when, target, s,
++                              last_sent_frame.load(), pad[0], pad[1], (int8_t)pad[2], (int8_t)pad[3]);
++  if (g_netplay) g_netplay->SendSlippiPadSuggestion(target, s, pad);
++}
++void loop() {
++  while (running.load(std::memory_order_acquire)) {
++    std::this_thread::sleep_for(std::chrono::milliseconds(1));
++    if (last_sent_frame.load(std::memory_order_acquire) <= 0) continue;          // no pad has gone out yet
++    if (time_us() - last_frame_us.load(std::memory_order_acquire) > 250000) continue;   // no online frames (paused, game over)
++    uint8_t now[kPad];
++    const auto t0 = std::chrono::steady_clock::now();
++    const int ok = mu_net_suggest_read(port.load(std::memory_order_relaxed), now);
++    const uint64_t ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
++    int32_t target = 0; uint32_t s = 0;
++    {
++      std::lock_guard<std::mutex> lk(mutex);
++      ++reads; read_ns += ns;
++      if (!ok) { ++unreadable; continue; }
++      clamp_rest(now);
++      if (poll_pending.load(std::memory_order_acquire)) { std::memcpy(pending, now, kPad); has_pending = true; continue; }
++      target = next_poll_target();
++      s = judge_locked(now, target);
++    }
++    send(target, s, now, "between frames");
++  }
++}
++// The game ended or the connection goes: the thread stops (before g_netplay can go), the game's numbers are logged.
++void stop(const char* why) {
++  running.store(false, std::memory_order_release);
++  if (thread.joinable()) thread.join();
++  if (!game_on) return;
++  game_on = false;
++  const suggestions::Stats st = suggestions::stats();
++  suggestions::end_game();
++  std::lock_guard<std::mutex> lk(mutex);
++  host::log("slippi: input suggestions (%s): sending %s, using received %s: %llu sent, %llu received, %llu replies predicted from one, %d players ignored; "
++            "controller read %llu times (%llu not readable), %.1f us per read",
++            why, sending ? "on" : "off", using_received ? "on" : "off", (unsigned long long)sent, (unsigned long long)st.received,
++            (unsigned long long)st.predicted_frames, st.ignored_players, (unsigned long long)reads, (unsigned long long)unreadable,
++            reads ? double(read_ns) / double(reads) / 1000.0 : 0.0);
++}
++// Frame 1 of an online game, on the game thread.
++void start(uint8_t local_port, int remote_count) {
++  stop("a new game started");
++  bool bot = false;   // upstream turns suggestions off when a bot is in the game (it makes the connection feel good itself)
++  if (g_matchmaking) for (const auto& player : g_matchmaking->GetPlayerInfo()) bot |= player.is_bot;
++  const bool on = wanted() && !bot;
++  suggestions::start_game(on, remote_count);
++  game_on = true;
++  {
++    std::lock_guard<std::mutex> lk(mutex);
++    has_known = has_pending = false; seq = 0; sent = reads = read_ns = unreadable = 0;
++    sending = on && mu_net_suggest_read != nullptr; using_received = on;
++  }
++  poll_pending.store(false); advancing.store(false); last_sent_frame.store(0); last_frame_us.store(time_us());
++  port.store(local_port & 3);
++  if (sending) { running.store(true, std::memory_order_release); thread = std::thread(loop); }
++  host::log("slippi: input suggestions: %s (controller port %u)%s", !on ? "off" : sending ? "sent and used" : "used, not sent (this program reads no controllers)",
++            local_port & 3, bot ? "; a bot is in the game" : "");
++}
++// The game is about to read the controllers (the host's poll): a change seen from now on is in the frame after the
++// next pad sent. Any thread.
++void note_poll() { if (running.load(std::memory_order_acquire)) poll_pending.store(true, std::memory_order_release); }
++// The game thread sent the pad for pad frame `frame` (the polled frame plus the delay).
++void note_sent(int32_t frame, const uint8_t inputs[kPad]) {
++  last_frame_us.store(time_us(), std::memory_order_release);
++  if (!running.load(std::memory_order_acquire)) return;
++  uint8_t pad[kPad];
++  std::memcpy(pad, inputs, kPad);
++  clamp_rest(pad);
++  { std::lock_guard<std::mutex> lk(mutex); std::memcpy(known, pad, kPad); has_known = true; }
++  last_sent_frame.store(frame, std::memory_order_release);
++  poll_pending.store(false, std::memory_order_release);
++}
++// The game thread finished the frame's command. `skipped`: the polled pad was not sent and the same frame is polled
++// again. `advancing_now`: the game also runs the next frame on this poll.
++void note_frame_done(bool skipped, bool advancing_now, const uint8_t inputs[kPad]) {
++  last_frame_us.store(time_us(), std::memory_order_release);
++  if (!running.load(std::memory_order_acquire)) return;
++  if (skipped) poll_pending.store(false, std::memory_order_release);
++  advancing.store(!skipped && advancing_now, std::memory_order_release);
++  uint8_t candidate[kPad];
++  int32_t target = 0; uint32_t s = 0;
++  {
++    std::lock_guard<std::mutex> lk(mutex);
++    bool have = false;
++    if (has_pending) { std::memcpy(candidate, pending, kPad); has_pending = false; have = true; }   // read after this frame's poll
++    else if (skipped) { std::memcpy(candidate, inputs, kPad); clamp_rest(candidate); have = true; }  // never sent: news if it differs
++    if (!have) return;
++    target = next_poll_target();
++    s = judge_locked(candidate, target);
++  }
++  send(target, s, candidate, skipped ? "after a skipped frame" : "read after the poll");
++}
++}  // namespace suggest
+ // Determinism oracle: the game hands us a checksum of its finalized state each frame and the
+ // opponent's client sends theirs; a mismatch is a desync between the two simulations.
+ std::map<int32_t, uint32_t> g_local_checksums;
+@@ -202,6 +368,7 @@
+ 
+ void cleanup_connection() {
+   host::log("slippi: connection cleanup");
++  suggest::stop("connection cleanup");
+   if (g_matchmaking || g_netplay) {
+     std::thread([mm = std::move(g_matchmaking), nc = std::move(g_netplay)]() mutable { mm.reset(); nc.reset(); }).detach();
+   }
+@@ -399,12 +566,19 @@
+   // The frame each remote player's fighter despawns on, or 0. The game compares it to the frame it is processing,
+   // which lands the despawn on the same frame for everyone even during a rollback.
+   for (int i = 0; i < REMOTE_PLAYER_MAX; ++i) append_u32(q, i < remote_count ? (uint32_t)results[i]->despawn_frame : 0);
+-  // The inputs to use for each frame after each player's latest one, should the game need to predict them. Slippi 3.7
+-  // fills these from the opponent's input suggestions; this build does not use suggestions, so every prediction is the
+-  // latest real input, exactly the pre-3.7 behaviour. The game checks each prediction against the real input and
+-  // rolls back if they differ.
+-  for (int i = 0; i < REMOTE_PLAYER_MAX; ++i)
+-    for (int j = 0; j < ROLLBACK_MAX_FRAMES; ++j) q.insert(q.end(), std::begin(latest_inputs[i]), std::end(latest_inputs[i]));
++  // The inputs to use for each frame after each player's latest one, should the game need to predict them: the latest
++  // real input, or a newer input suggestion from that player (Slippi 3.7, slippi_input_suggestions.h). The game checks
++  // each prediction against the real input and rolls back if they differ.
++  static_assert(suggestions::kPredictedFrames == ROLLBACK_MAX_FRAMES && suggestions::kReportBytes == PAD_FULL_SIZE, "the reply's prediction block");
++  for (int i = 0; i < REMOTE_PLAYER_MAX; ++i) {
++    uint8_t predictions[ROLLBACK_MAX_FRAMES][PAD_FULL_SIZE];
++    for (auto& p : predictions) std::memcpy(p, latest_inputs[i], PAD_FULL_SIZE);
++    if (i < remote_count) suggestions::fill_predictions((size_t)i, latest_read[i], results[i]->is_disconnected, latest_inputs[i], predictions);
++    if (i < remote_count && std::memcmp(predictions[0], latest_inputs[i], PAD_INPUT_SIZE) != 0 && suggest::trace_line())
++      host::log("slippi: suggestion used: frame %d, newest real input %d, buttons %02X%02X instead of %02X%02X", frame, latest_read[i],
++                predictions[0][0], predictions[0][1], latest_inputs[i][0], latest_inputs[i][1]);
++    q.insert(q.end(), &predictions[0][0], &predictions[0][0] + sizeof predictions);
++  }
+   // Random bits for the game to send with the next pad; it mixes them into the RNG seed.
+   q.push_back((uint8_t)(g_pad_rng_bits_source() & 0xFF));
+   return frame_result == 4;
+@@ -416,7 +590,7 @@
+   uint32_t finalized_checksum = be32(payload + 8);
+   uint8_t delay = payload[12];
+   const uint8_t* inputs = payload + 13;
+-  // payload[25] is the port the local inputs come from (used by input suggestions, which this build does not send).
++  const uint8_t input_port = payload[25];   // the controller port the local inputs come from (input suggestions read it)
+   const bool is_leaving = payload[26] != 0;
+   if (frame == 1) {
+     g_available_savestates.clear();
+@@ -438,6 +612,7 @@
+     host::input_mark_match_start();
+     g_local_checksums.clear(); g_checksums_compared = 0; g_checksums_mismatched = 0; g_last_checksum_frame = 0;
+     for (auto& gap : g_input_gap_start) gap = 0;
++    suggest::start(input_port, g_matchmaking ? g_matchmaking->RemotePlayerCount() : 1);
+   }
+   // The local player chose to leave (L+R+A+Start in party mode): that ends the game for us the same way as losing the
+   // connection, and the other players treat it as a disconnect too.
+@@ -459,8 +634,10 @@
+   else {
+     if (frame == 1) for (int i = 1; i <= delay; ++i) g_netplay->SendSlippiPad(std::make_unique<Pad>(i));
+     g_netplay->SendSlippiPad(std::make_unique<Pad>(frame + delay, finalized, finalized_checksum, inputs));
++    suggest::note_sent(frame + delay, inputs);
+   }
+-  prepare_opponent_inputs(frame, skip, q);
++  const bool advancing = prepare_opponent_inputs(frame, skip, q);
++  suggest::note_frame_done(skip, advancing, inputs);
+ }
+ 
+ void handle_capture_savestate(const uint8_t* payload) {
+@@ -654,6 +831,7 @@
+     }
+     if (!g_play_session_active) g_play_session_active = true;
+   } else {
++    if (g_netplay) suggest::stop("no connection");
+     g_netplay = nullptr;
+     discord::set_menus();
+   }
+@@ -841,6 +1019,7 @@
+ }
+ 
+ void handle_report_game(const uint8_t* p) {
++  suggest::stop("game over");
+   // ReportGameQuery (packed, big-endian fields): mode, frameLength, gameIndex, tiebreakIndex, winnerIdx, gameEndMethod, lrasInitiator, syncedTimer, players[4], gameInfoBlock[312]
+   uint8_t mode = p[0];
+   uint32_t frames = be32(p + 1), game_index = be32(p + 5), tiebreak = be32(p + 9);
+@@ -958,6 +1137,7 @@
+     std::string id = g_matchmaking->GetMatchmakeResult().id;
+     if (id.find("mode.ranked") != std::string::npos) host::log("slippi: exit during ranked match %s", id.c_str());
+   }
++  suggest::stop("shutdown");
+   g_netplay.reset();
+   discord::set_menus();
+   g_matchmaking.reset();
+@@ -1059,4 +1239,7 @@
+ }
+ 
+ }  // namespace slippi::online
++// The host calls this right before the game reads the controllers (play mode's pad read), so a controller change
++// read after it is put in the right pad frame (input suggestions).
++extern "C" __attribute__((visibility("default"))) void mu_net_suggest_note_poll(void) { slippi::online::suggest::note_poll(); }
+ #endif

@@ -79,18 +79,20 @@ DEFINES='-DMU_FOREIGN_ELF -DMU_SQUAD=1 -DMELEE_NO_SLIPPI -DMELEE_PORT_VERSION=\"
 CXXFLAGS='-O2 -g -std=gnu++17 -Wall -fno-strict-aliasing -ffp-contract=on'
 SOURCES=$(echo $SOURCES); INCLUDES=$(echo $INCLUDES)
 
-# The app's Slippi netplay (this repository's port/runtime/hle) and ENet, compiled against the app's
-# own headers, for the runner's --net mode. No matchmaking, login or reporting code is linked.
-NET_INC='-Iexperiments/native-engine/runner -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app'
+# The app's Slippi netplay (this repository's port/runtime/hle, as a copy with patches/net-*.patch applied:
+# net_sources.sh) and ENet, compiled against the app's own headers, for the runner's --net mode. No matchmaking,
+# login or reporting code is linked.
+NETSRC=build/native-engine/netsrc/port/runtime/hle
+NET_INC='-Iexperiments/native-engine/runner -I'$NETSRC' -Iport/runtime/hle -Iport/runtime/host -Iport/runtime/gx -Iport/runtime/ppc -Iport/runtime -Iport/third_party/enet/include -Iport/third_party -Iport/third_party/nlohmann -Iport/app'
 NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"wss://invalid.invalid/\"'
-NET_CXX='port/runtime/hle/slippi_online.cpp port/runtime/hle/slippi_net.cpp port/runtime/hle/slippi_offline.cpp port/runtime/hle/slippi_net_diag.cpp port/runtime/hle/slippi_match_quality.cpp port/runtime/hle/slippi_text.cpp port/runtime/hle/slippi_version.cpp experiments/native-engine/runner/netplay_bridge.cpp'
+NET_CXX="$NETSRC/slippi_online.cpp $NETSRC/slippi_net.cpp $NETSRC/slippi_offline.cpp $NETSRC/slippi_net_diag.cpp $NETSRC/slippi_match_quality.cpp $NETSRC/slippi_text.cpp $NETSRC/slippi_version.cpp experiments/native-engine/runner/netplay_bridge.cpp"
 # MU_NET_SERVICES=1 builds the variant with the app's real services instead of stubs: the matchmaking
 # service client (WebSocket, STUN), the user file, game reporting and HTTP (libcurl, mbedTLS on the Switch).
 # Off by default; the outputs get the suffix "-services". Never point it at a real service from a
 # development machine: SLIPPI_MM_URL (the app's own override) selects a local mock.
 NET_SUFFIX=''; NET_LIBS_LINUX=''; NET_LIBS_NX=''; NET_URL_NX='wss://invalid.invalid/'; NET_URL_LINUX='wss://invalid.invalid/'
 if [ "${MU_NET_SERVICES:-0}" = 1 ]; then
-  NET_CXX="$NET_CXX port/runtime/hle/slippi_matchmaking_ws.cpp port/runtime/hle/slippi_report.cpp port/runtime/hle/slippi_http_curl.cpp port/runtime/hle/slippi_login.cpp"
+  NET_CXX="$NET_CXX $NETSRC/slippi_matchmaking_ws.cpp $NETSRC/slippi_report.cpp $NETSRC/slippi_http_curl.cpp $NETSRC/slippi_login.cpp"
   NET_DEF="$NET_DEF -DMU_NET_SERVICES"
   # The Switch build gets the service address the app is pinned to (tools/slippi_pin.json). The Linux
   # build never does: it is pinned to the loopback mock (tools/mock_matchmaking.py), so a development
@@ -105,7 +107,7 @@ NET_C='callbacks compress host list packet peer protocol unix'
 NET_BUILD='net_build() { mkdir -p $4/net; for f in '"$NET_C"'; do $1 $3 -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/$f.c -o $4/net/enet_$f.o; done; for f in '"$NET_CXX"'; do $2 $3 -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden '"$NET_INC $NET_DEF"' -c $f -o $4/net/$(basename $f .cpp).o; done; $5 -r --force-group-allocation $4/net/*.o -o $4/netplay.o; $6 --localize-hidden $4/netplay.o; }'
 
 build_linux() {
-  generate
+  generate; bash "$here/net_sources.sh" "$repo/build/native-engine/netsrc" >/dev/null
   dock 600 "$LINUX_IMG" "
     o=build/native-engine/obj-linux$NET_SUFFIX; mkdir -p \$o
     gcc -O2 -g -fPIE -c experiments/native-engine/runner/fixedmap_linux.c -o \$o/fixedmap.o
@@ -119,7 +121,7 @@ build_linux() {
 }
 
 build_nro() {
-  generate
+  generate; bash "$here/net_sources.sh" "$repo/build/native-engine/netsrc" >/dev/null
   dock 600 "$NX_IMG" "
     export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:\$PATH
     o=build/native-engine/obj-nx$NET_SUFFIX; mkdir -p \$o

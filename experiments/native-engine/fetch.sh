@@ -18,9 +18,16 @@ if [ ! -d "$tree/.git" ]; then
   timeout 300 docker run --rm --network none -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e 'GIT_CONFIG_VALUE_0=*' \
     -v "$tree:/mu" -w /mu "$IMG" python3 tools/prepare_native_sources.py
   git -C "$tree/sourceport/extern/melee" add -A      # index = prepared baseline, so our decomp patch shows as a diff
-  for p in "$here"/patches/0*.patch; do echo "apply $(basename "$p")"; git -C "$tree" apply "$p"; done
-  for p in "$here"/patches/decomp-*.patch; do echo "apply $(basename "$p")"; git -C "$tree/sourceport/extern/melee" apply "$p"; done
 else
-  echo "fetch: $tree exists; delete it to start over"
+  echo "fetch: $tree exists (delete it to start over); applying the patches it does not have yet"
 fi
+# Every patch once: a patch added after the clone (a new decomp-*.patch) is applied to an existing tree too, and one
+# already in it is left alone. A patch that neither applies nor is already applied stops the fetch.
+apply() {   # $1 the git tree, $2 the patch
+  if git -C "$1" apply --reverse --check "$2" 2>/dev/null; then echo "have  $(basename "$2")"
+  elif git -C "$1" apply --check "$2" 2>/dev/null; then git -C "$1" apply "$2"; echo "apply $(basename "$2")"
+  else echo "fetch: $(basename "$2") does not apply to $1" >&2; exit 1; fi
+}
+for p in "$here"/patches/0*.patch; do apply "$tree" "$p"; done
+for p in "$here"/patches/decomp-*.patch; do apply "$tree/sourceport/extern/melee" "$p"; done
 echo "tree: $tree"

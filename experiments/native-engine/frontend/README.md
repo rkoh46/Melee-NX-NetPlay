@@ -317,6 +317,47 @@ before them, the netplay device, log lines queued, disc reads, stream bytes from
 is answered with that result), prints the layout line, restarts the title with `--relaunch` as the runner does, and
 ends with `play: cannot start: ...` otherwise.
 
+### Input suggestions (0.4.1)
+
+Slippi 3.7.0 sends each player's newest controller state between frames as an input suggestion (message 0x87), so
+the other side can predict that player's next frames from it instead of repeating the last real input; the real pad
+still decides every frame and a wrong guess is rolled back as before. This build sends and uses them, by
+`../patches/net-0001` on the netplay object's copy of `port/runtime/hle` (`../net_sources.sh`; `port/` is unchanged):
+
+- Using: each received suggestion is kept per player and put into the 0xB0 reply's prediction block for the frames
+  after that player's newest real input. Which suggestion applies, and when a player's suggestions are ignored for
+  the rest of the game (they keep disagreeing with the real inputs), are Slippi's rules as melee-unlocked has them
+  (`slippi_input_suggestions.h`, copied from the fetched tree at build time).
+- Sending: at an online game's first frame the netplay object starts a thread that reads the local player's
+  controller about a thousand times a second through `mu_net_suggest_read` (play_io.cpp: the app's whole input path,
+  never at the same time as the game's own poll, nothing while the in-game menu is open; on the console on core 1 at
+  priority 0x27). A change that can start an action (a button, a trigger past the light-shield line, a stick into
+  walk, dash, tap-jump, crouch or smash range) goes out at once, unsequenced like a pad, stamped with the pad frame it
+  first appears in (`mu_net_suggest_note_poll` marks each poll, so a change read after the game polled belongs to the
+  frame after it). A session whose match is played by generated test inputs sends none.
+- `input_suggestions 1` (default, as upstream) or the Game page's row; read at each online game's start. The log has
+  `[net] slippi: input suggestions: sent and used (controller port N)` at the start and, at the end of each game,
+  how many were sent, received and used, players ignored, and the controller reads with their average time.
+- The headless runner uses received suggestions but sends none (it reads no controllers). `MU_NET_SUGGESTIONS=0|1`
+  overrides the setting in any program (tests).
+
+Test (`test-net-linux.sh` with `MU_NET_CONTROLLERS=1`, the controller scripts play the match instead of generated
+inputs, and `MU_SUGGEST_LEAD_MS=12`, each script change is also read 12 ms before the poll that takes it, as a change
+between frames would be; the same inputs either way; `--net-delay 2`; per side, re-simulated frames per 1000 match frames):
+
+| Relay delay each way | Suggestions on | Suggestions off |
+|---|---|---|
+| 40 ms | side a 6 and 0, side b 100 and 308 | side a 6 and 5, side b 312 and 318 |
+| 60 ms | side a 247, side b 317 | side a 246, side b 317 |
+
+Every run: confirmed states identical on both sides, `net check` lines equal, no desync message, 0 players ignored;
+about 100 to 130 suggestions sent per side per 20 s match, 2 us per controller read. The gain depends on where the
+suggestion lands between the receiver's frames: in this test every change comes exactly 12 ms before a poll and the
+relay delay is fixed, so one side's suggestions arrive in the useful window in some runs and never in others (side b
+in the first 40 ms run lost two thirds of its re-simulated frames; the other runs show no change). With 60 ms each
+way a suggestion arrives after the frame it is for has been simulated, so it cannot save a rollback. Not yet tried
+against a real Slippi player (real changes come at any time between polls).
+
 ### Feature modules: training, replays, options, mod discs, 120 Hz
 
 `src/features/*.cpp` and `../runner/features/*.cpp` register through `src/feature_hooks.h` (commands by
@@ -330,6 +371,7 @@ ends with `play: cannot start: ...` otherwise.
 | `shield_colorp1..4 RRGGBB`, `offline_delay 1` + `offline_delay_frames N`, `autolcancel 1`, `zelda_as_sheik 1` | offline only (shield colours: online the ports' own) |
 | `savereplays 0`, `replay_dir DIR` | every VS and online match is written to `sdmc:/switch/melee-nx-netplay/Replays/Game_YYYYMMDDTHHMMSS.slp` (Linux: `<out>/Replays`) |
 | `subframe 0|1|2`, `fps N` | presentation: Off / Predict / Interpolate sub-frames; `fps` caps presents per second (tests). The simulation stays at 60 Hz |
+| `input_suggestions 0` | Slippi 3.7.0 input suggestions off (default on; the Game page's row; from the next online game). See "Input suggestions" |
 
 `--replay FILE|latest|N` plays a replay (the game takes one only at boot): Start pauses, A steps, D-pad Left/Right
 5 s back/forward, Up 1/2 and 1/4 speed, Down fast forward; the end of the run compares the game's post-frame records
@@ -357,10 +399,15 @@ Mod discs beyond 20XX (built on the PC with xdelta3 from each catalog archive's 
 MU_GAME_OPTION_TMCE offline; an m-ex disc with added fighters (Akaneia, ACE) shows them on the character select;
 rogueMelee sets MU_MOD_ROGUE; Melee Maker sets MU_MOD_MAKER and gets its data through command 0xEE (no 32 MB cache:
 the game loads its moves into the match heap). Melee 3D loads as files only (upstream: Static Recomp only).
+Checked in 0.4.1 on Linux (play mode, controller scripts, screenshots): Melee Maker's BUILD A FIGHTER panel opens with Z
+on the character select, X randomises a build (Falco with Samus's Charge Shot, Ness's PK Fire, Puff's Sing, Marth's
+Counter) and the match plays those moves; the 20XX Hack Pack's debug menu opens from VS Mode > Tournament Melee, a
+Battlefield variant chosen on its TEXTURES page is saved on B and the match loads that variant's file (`pick: stage 31
+page 1 -> 31, letter '2'`), and D-pad down and up on the stage select change the page (its own icons on page 2).
 
-## The app: Melee-NX-NetPlay 0.4.0
+## The app: Melee-NX-NetPlay 0.4.1
 
-`out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" 0.4.0, the app's icon: `build/icon.jpg` when
+`out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" with the version in `VERSION`, 0.4.1, the app's icon: `build/icon.jpg` when
 the app's build drew one, else `switch/icon.jpg`) replaces the recompiled app. Started with no arguments (the Homebrew
 Menu, a forwarder that adds only `--relaunch`) it is the app; with arguments it is the test program described above.
 Off the console `--app [--base DIR]` gives the same (default folder `./melee-nx-netplay`).
@@ -379,7 +426,10 @@ the input delay and ping.
 The memory card is the earlier app's `User/GC/CardA`: both engines keep slot A as a Dolphin-style folder of GCI files
 and read every `.gci` in it, the native host keeps a loaded file's name when it saves, and the save data is the same
 game's. So names, rules, records and unlocks carry over. The first session copies the folder once to
-`User/GC/CardA-before-0.4` before anything writes to it, so 0.3.x can always go back to the card as it was.
+`User/GC/CardA-before-0.4` before anything writes to it, so 0.3.x can always go back to the card as it was. From 0.4.1
+every start also backs the card up when it changed since the newest backup (upstream's automatic save backups):
+`User/GC/Backups/CardA-YYYYMMDD-HHMMSS`, the 10 newest kept and, older than those, the newest of each day for 30 days
+(`app: memory card backed up to ...`, or `app: memory card unchanged since the backup ...`).
 
 **launcher.ini keys honoured**: `iso`, `volume` (default 100), `hud`, `online_delay` (`auto` or 1..9; wins over
 settings.ini), `offline=1` (no online services, no sign-in, no update check), `widescreen` (16:9 code when settings.ini
@@ -414,7 +464,7 @@ restarts itself if `--relaunch` was given (a forwarder), otherwise it shows "PLE
 `game` entry), prompt (A install, B later, + quit), download beside the NRO, size and SHA-256 check, rename into place,
 `.bak` kept. The target is the NRO the app was started from (`argv[0]`), else `sdmc:/switch/melee-nx-netplay/melee-nx-netplay.nro`.
 This program has no RomFS holding its file open, so the swap happens right after the download; a swap left waiting
-is finished at the next start. The comparison is `0.4.0` / Slippi `3.7.0` (the netplay object's pin).
+is finished at the next start. The comparison is `VERSION` (0.4.1) / Slippi `3.7.0` (the netplay object's pin).
 
 **Feature modules**: the other modules plug in through `src/feature_hooks.h` (their interface): play mode calls
 `dispatch_tables` first in its tables hook, `dispatch_command` first in `mu_frontend_command`, `dispatch_retrace` each
@@ -525,14 +575,29 @@ modules not linked: `MU_FE_FEATURES=OFF`), one container each, loopback only:
 | NRO (`./build.sh nro`) | `melee-nx-netplay.nro` links; NACP name Melee-NX-NetPlay, version 0.4.0 |
 | After the first console session, with the feature modules linked (runner from the working tree: `netplay_bridge` ping and delay calls) | `handover`: the D-pad moves the menu and changes the volume (`volume=70`), B held 12 retraces closes it and is kept from the game (`closed with buttons 0200 held`), A then opens Unranked (scene 8 at retrace 569); before the fix the B reached the game and the later A was ignored. L + R + Start held 20 retraces without the menu opening left the game ignoring A too (the cause; now kept from the game). `menu`: also Training's "Inputs and frame advantage", saved as `lab_overlay 1` (a module's row through `persist`). `online`: ping on the HUD; confirmed states identical. Scripted `parity_vs_onett` IDENTICAL without a picture and with one, sub-frames off, predict and interpolate. `test-online-linux.sh`, `test-net-linux.sh`: final state identical |
 
+
+0.4.1 on Linux (runner as of `5a4b4a8`, unchanged; game image `1ddc3690...` with `../patches/decomp-0003`; netplay object
+with `../patches/net-0001`), one container per run, no network:
+
+| Check | Result |
+|---|---|
+| The five reference scripts, 9000 retraces: headless runner, `mu-native-gfx-null`, and with a picture in sub-frame modes off, predict and interpolate | all 25 runs IDENTICAL to the x86-64 references |
+| `../tools/net_test.sh 3600 60 40` (headless, suggestions used, none sent) | 580 rollbacks per side, every confirmed state identical, `net check` equal |
+| `test-net-linux.sh` (generated inputs), `test-online-linux.sh` | final state identical on both sides, 0 desync messages |
+| Input suggestions (`test-net-linux.sh`, controller scripts, 12 ms lead) | sent, received and used; states identical; numbers in "Input suggestions" |
+| `test-app-linux.sh boot menu handover signin update online` | all pass as before; `update` offers the version after `VERSION` (0.4.2) and installs it, then no prompt for 0.4.1; the second start of `menu` backs the card up (`User/GC/Backups/CardA-...`, 1 save file); `online`: suggestions sent and used through the app's whole input path (5 us per read), confirmed states identical, 0 desync messages |
+| `community_codes 100000` (full FoD reflections) | `play: options ... display 00100000` |
+| Melee Maker, 20XX Hack Pack debug menu and stage variants | see "Mod discs" under Feature modules |
+| NRO | `melee-nx-netplay.nro` links, NACP version 0.4.1; both programs pass the `netplay_link` check
+
 Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
 over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble
 of SDL controllers, the shared pipeline cache, the card carried over from 0.3.x); a real Slippi match from the app;
 the Replays page's "Watch it" restart (wired, not run: no replay was recorded in these tests); Training's lines on
 screen (drawn only in Training mode, not looked at); 120 Hz on a display that has it.
 
-Not looked at: the Hack Pack's debug menu, hidden characters, playlists and stage variants beyond the first pick;
-TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
+Not looked at: the Hack Pack's hidden characters, playlists and random variants (its debug menu, a chosen variant and
+the stage select pages were checked in 0.4.1); TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
 holds beyond what is listed.
 
 On the console, by the session that ran it:

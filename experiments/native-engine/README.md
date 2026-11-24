@@ -9,11 +9,13 @@ everything built from them live under `build/native-engine/` (gitignored) and ar
 
 | Path | What it is |
 |---|---|
-| `fetch.sh` | Clones melee-unlocked at the pinned commit into `build/native-engine/mu`, runs its own source preparation in a container, applies `patches/`. |
+| `fetch.sh` | Clones melee-unlocked at the pinned commit into `build/native-engine/mu`, runs its own source preparation in a container, applies `patches/`. On an existing clone it applies the patches it does not have yet (a new `decomp-*.patch`) and leaves the others. |
 | `build.sh` | `game`: the game image with GCC 15.2 (AArch64 Linux ELF linked at `0x82800000`). `linux`: the runner for aarch64 Linux (test build). `nro`: the runner for Horizon. |
 | `patches/0001-aarch64-build.patch` | Lets the game and the headless host build for AArch64 (compiler flags, CPU check, image checker). |
 | `patches/0002-host-foreign-elf-bridge.patch` | Lets the headless host load the image through our loader instead of `dlopen`/`mmap` (it reuses the code paths the project has for its macOS bridge). |
 | `patches/decomp-0001-...patch` | Two disc read buffers get an explicit 32-byte alignment (x86-64 GCC aligned them by itself; AArch64 does not, and the game asserts). |
+| `patches/decomp-0003-...patch` | A fighter's shield flags (fp+221B) start cleared; see "Shield flags at fighter creation" below. |
+| `patches/net-*.patch`, `net_sources.sh` | Changes to this repository's netplay (`port/runtime/hle`) for the netplay object only: `net_sources.sh` copies `port/runtime/hle` to `build/native-engine/netsrc`, adds the fetched tree's `slippi_input_suggestions.h` and applies the patches; `port/` itself is never changed. `net-0001`: Slippi 3.7.0 input suggestions (frontend/README.md). |
 | `runner/fixedmap.h`, `fixedmap_horizon.c`, `fixedmap_linux.c` | Memory at fixed addresses. **The Horizon file is the unverified part** and is kept small on purpose. |
 | `runner/mu_elf.cpp`, `mu_elf_bridge.h` | ELF loader: copies the segments and applies relocations in staging pages, then maps them at `0x82800000`. |
 | `runner/mu_imports.c` | The 31 C library functions the image imports, bound to newlib (or glibc in the test build). |
@@ -277,10 +279,9 @@ generated inputs by itself. `--net` (the two-instance test) does, with a seed pe
 
 - The self-test's differences inside fighter data (fighter+0x6D4, +0x2968, +0x28C0, +0x2AC3 in this build's
   64-bit layout): not yet identified as fields. Everything else it lists is drawing-related.
-- Input suggestions (message 0x87): the app's netplay ignores them on receipt and never sends them. Using a
-  received suggestion is a small change in `port/` (keep the newest per player in `slippi_net.cpp`, use it for
-  the predicted inputs in `slippi_online.cpp`), but it cannot be tested here: both test instances are this app,
-  which sends none, and the test's inputs are generated at frame time, so there is nothing newer to suggest.
+- Input suggestions (message 0x87): done in 0.4.1 as `patches/net-0001` (received ones are used by every build;
+  only a program that reads controllers sends them, so the headless runner logs "used, not sent"). Tested with two
+  play-mode instances (frontend/README.md, Input suggestions); not yet against a real Slippi player.
 - Four players and items in a netplay test (the local-peer match is two players, items off).
 
 ## Licensing
@@ -378,3 +379,27 @@ match found did not connect; the second did (round trip about 126 ms, automatic 
 left after 1,230 frames. 143 rollbacks (depth 1 to 7); rollback frame 6.1 ms average, 11.5 ms worst, none
 over 16.67 ms; simulation thread 4.5 ms average in the match; 640 checksum comparisons with the opponent,
 0 mismatched; the game report was sent.
+
+## Shield flags at fighter creation (decomp-0003, 0.4.1)
+
+`fp+221B` holds a fighter's shield flags. Fighter creation does not initialise bits 0-4 and 7 (bits 5 and 6 are
+cleared in `fighter.c`); bit 0 is set when a shield starts and bits 1-4 are only ever cleared there by name, so until
+a fighter first shields the byte holds whatever the fighter pool's memory held. The original game is the same: its
+pool hands out memory a previous scene used, so a real console or Slippi Dolphin can have those bits set at
+creation. A post-frame record stores the byte, which is why a playback (booted straight into the match) re-recorded
+other bits than the recording; `decomp-0003` clears the byte at creation.
+
+- What a Slippi peer sees: nothing changes. Every online match runs Slippi's "Init Player Data" code (injection at
+  0x80068EEC, in the online code list), which zeroes the whole fighter at creation on both sides; the game image does
+  the same online (`MU_RC_INIT_PLAYER_DATA`). The byte is not part of Slippi's frame checksum either.
+- Replays recorded by Slippi Dolphin offline: Slippi's offline recording code list does not carry Init Player Data
+  (checked in the code lists the fetched tree generates: the online list has the 0x80068EEC code, the offline one
+  not), so such a replay records the console's leftover bits until the fighter first shields. Gameplay reads them in
+  two places before a shield can set them: bit 2 when the fighter's attack hits an item (`ftcoll.c`, the item's
+  reflect bit) and bits 0, 1, 3, 4 behind checks for an active shield. So in principle a Dolphin replay could depend
+  on leftover bits (an item hit before the first shield); neither this engine, with or without the patch, nor
+  Dolphin's own playback can reproduce such bits, since a playback starts from different memory.
+- Exactness after the patch (game image `1ddc3690...`): the five reference scripts are IDENTICAL headless, with no
+  graphics device, and with a picture in all three presentation modes (off, predict, interpolate); netplay
+  (`tools/net_test.sh 3600 60 40`): every confirmed state identical, `net check` lines equal. The reference digests
+  do not include the byte.

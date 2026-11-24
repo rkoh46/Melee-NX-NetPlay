@@ -21,6 +21,7 @@
 #include <cstdarg>
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <dirent.h>
@@ -334,6 +335,12 @@ int play_main() {
   if (direct || menu_online) {
     if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); screens_stop(); log_close(); return code; }
     net_on = true;
+    // Tests (input suggestions): MU_NET_CONTROLLERS=1 lets the controllers, or the controller script, play a direct match
+    // instead of the game's generated test inputs (the netplay host asks for those in a direct run).
+    if (direct && std::getenv("MU_NET_CONTROLLERS") && std::getenv("MELEE_ONLINE_TEST_INPUTS")) {
+      unsetenv("MELEE_ONLINE_TEST_INPUTS");
+      say("play: netplay test: the controllers play the match, not the generated inputs (MU_NET_CONTROLLERS)");
+    }
     if (options.sync_net) options.sync_decode = true;      // --gfx-sync-net: the earlier way, for comparison
     const std::string delay = net.delay_auto ? std::string("automatic") : std::to_string(net.delay);
     if (direct) say("play: netplay on: the retail game with the runner's seed and clock; settings.ini (but for the input delay, %s) and mod profiles are not read", delay.c_str());

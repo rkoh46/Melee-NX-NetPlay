@@ -1,10 +1,10 @@
-Publish the native-engine app (Melee-NX-NetPlay 0.4.0) from the build computer instead of the recompiled app.
+Publish the native-engine app (Melee-NX-NetPlay 0.4.x, version from VERSION) from the build computer instead of the recompiled app.
 Not applied in this repository; apply on the build computer with:  git apply experiments/native-engine/frontend/update-host-native.patch
 Then add to builder/systemd/melee-nx-update.service, [Service] (or a drop-in, systemctl --user edit melee-nx-update):
   Environment=MELEE_NX_UPDATE_BUILD=%h/Melee-NX-NetPlay/experiments/native-engine/frontend/app-build.sh
   Environment=MELEE_NX_UPDATE_NROS=game
   Environment=MELEE_NX_UPDATE_VERSION_FILE=experiments/native-engine/frontend/VERSION
-latest.json keeps schema 1 and the "game" entry, so 0.3.x consoles offer 0.4.0 and install it in place of
+latest.json keeps schema 1 and the "game" entry, so 0.3.x and 0.4.x consoles offer the newer version and install it in place of
 sdmc:/switch/melee-nx-netplay/melee-nx-netplay.nro; without a "replays" entry they leave the Replays app alone.
 SPDX-License-Identifier: GPL-2.0-or-later
 

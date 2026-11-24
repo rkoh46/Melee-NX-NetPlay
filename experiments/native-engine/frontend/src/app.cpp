@@ -31,12 +31,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 #if defined(__SWITCH__) && MU_FE_AURORA
@@ -190,15 +193,78 @@ void app_report() {
       options.offline ? ", offline=1 (no online services)" : "");
 }
 
-// The first session of the native engine copies the player's memory card once, before anything writes to it.
-void app_backup_card() {
-  const std::string backup = options.base_dir + "/User/GC/CardA-before-0.4";
-  if (exists(backup)) return;
+// The memory card's .gci files (names, sorted).
+std::vector<std::string> gci_names(const std::string& folder) {
   std::vector<std::string> names;
-  if (DIR* dir = opendir(options.card_dir.c_str())) {
+  if (DIR* dir = opendir(folder.c_str())) {
     while (dirent* e = readdir(dir)) { const std::string n = e->d_name; if (n.size() > 4 && n.compare(n.size() - 4, 4, ".gci") == 0) names.push_back(n); }
     closedir(dir);
   }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+std::string file_bytes(const std::string& path) { std::ifstream in(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(in), {}); }
+
+// Automatic save backups (upstream host/card_backup.h): at each start, when the card differs from the newest backup, a
+// copy in User/GC/Backups/CardA-YYYYMMDD-HHMMSS; the 10 newest are kept, and of the older ones the newest of each day
+// for 30 days. Only that folder is ever pruned.
+void backup_card_rotating() {
+  const std::string root = options.base_dir + "/User/GC/Backups";
+  const std::vector<std::string> names = gci_names(options.card_dir);
+  if (names.empty()) return;
+  std::vector<std::string> backups;   // CardA-YYYYMMDD-HHMMSS, oldest first
+  if (DIR* dir = opendir(root.c_str())) {
+    while (dirent* e = readdir(dir)) { const std::string n = e->d_name; if (n.size() == 21 && n.rfind("CardA-", 0) == 0) backups.push_back(n); }
+    closedir(dir);
+  }
+  std::sort(backups.begin(), backups.end());
+  bool same = false;
+  if (!backups.empty()) {
+    const std::string last = root + "/" + backups.back();
+    same = gci_names(last) == names;
+    for (size_t i = 0; same && i < names.size(); ++i) same = file_bytes(last + "/" + names[i]) == file_bytes(options.card_dir + "/" + names[i]);
+  }
+  if (same) { say("app: memory card unchanged since the backup %s", backups.back().c_str()); return; }
+  const time_t now = time(nullptr);
+  struct tm local{};
+  localtime_r(&now, &local);
+  char name[32];
+  std::strftime(name, sizeof name, "CardA-%Y%m%d-%H%M%S", &local);
+  if (!backups.empty() && backups.back() >= name) { say("app: memory card backup skipped: the clock (%s) is behind the newest backup %s", name, backups.back().c_str()); return; }
+  ensure_dir(root); ensure_dir(root + "/" + name);
+  size_t copied = 0;
+  for (const auto& n : names) {
+    std::ofstream out(root + "/" + name + "/" + n, std::ios::binary | std::ios::trunc);
+    const std::string bytes = file_bytes(options.card_dir + "/" + n);
+    if (out && out.write(bytes.data(), std::streamsize(bytes.size()))) ++copied;
+  }
+  backups.push_back(name);
+  // Keep the 10 newest; older: the newest of each day, for days in the last 30.
+  char oldest_day[16];
+  const time_t month_ago = now - 30 * 86400;
+  struct tm then{};
+  localtime_r(&month_ago, &then);
+  std::strftime(oldest_day, sizeof oldest_day, "%Y%m%d", &then);
+  size_t removed = 0;
+  std::string kept_day;                       // newest first, so the first backup seen of a day is that day's newest
+  for (size_t i = backups.size(), rank = 0; i-- > 0; ++rank) {
+    if (rank < 10) continue;
+    const std::string day = backups[i].substr(6, 8);
+    if (day >= oldest_day && day != kept_day) { kept_day = day; continue; }
+    const std::string dir = root + "/" + backups[i];
+    for (const auto& n : gci_names(dir)) std::remove((dir + "/" + n).c_str());
+    if (rmdir(dir.c_str()) == 0) ++removed;
+  }
+  say("app: memory card backed up to %s (%zu save file%s); %zu older backup%s removed", (root + "/" + name).c_str(), copied, copied == 1 ? "" : "s", removed, removed == 1 ? "" : "s");
+}
+
+// The first session of the native engine copies the player's memory card once, before anything writes to it; every
+// start then makes a rotating backup when the card changed.
+void app_backup_card() {
+  backup_card_rotating();
+  const std::string backup = options.base_dir + "/User/GC/CardA-before-0.4";
+  if (exists(backup)) return;
+  const std::vector<std::string> names = gci_names(options.card_dir);
   ensure_dir(backup);
   size_t copied = 0;
   for (const auto& n : names) {

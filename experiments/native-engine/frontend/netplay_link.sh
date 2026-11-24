@@ -41,8 +41,10 @@ case "$mode" in
     ;;
   check-dynamic)
     # Linux: shared libraries supply what is missing at run time; a strong reference that nothing supplies fails the
-    # link already, so only references that are still weak and unresolved are a problem.
-    missing=$(comm -12 <("$nm" -u "$object" | awk '{ print $NF }' | sort -u) <("$nm" "$target" | awk '$1 == "w" || $1 == "v" { print $2 }' | sort -u) | grep -Ev '^(__gmon_start__|_ITM_.*|__cxa_finalize)$' || true)
+    # link already, so only references that are still weak and unresolved are a problem. The input-suggestion hooks
+    # (../patches/net-0001: mu_net_suggest_read, mu_net_suggest_setting) are optional on purpose: a program without
+    # controllers or feature modules leaves them out, and the netplay object then sends no suggestions.
+    missing=$(comm -12 <("$nm" -u "$object" | awk '{ print $NF }' | sort -u) <("$nm" "$target" | awk '$1 == "w" || $1 == "v" { print $2 }' | sort -u) | grep -Ev '^(__gmon_start__|_ITM_.*|__cxa_finalize|mu_net_suggest_.*)$' || true)
     if [ -n "$missing" ]; then echo "netplay_link: $(basename "$target") has weak unresolved references of the netplay object: $(echo $missing)" >&2; exit 1; fi
     echo "netplay_link: no weak unresolved reference of the netplay object in $(basename "$target")"
     ;;

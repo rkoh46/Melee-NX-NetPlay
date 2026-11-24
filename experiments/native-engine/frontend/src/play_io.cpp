@@ -19,10 +19,15 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include "mu_host.h"
+#if MU_FE_AURORA
+#include "input_script.h"        // the app's script reader: the input-suggestion test's look ahead
+#endif
 #ifdef __SWITCH__
 #include <switch.h>
 #endif
@@ -38,6 +43,11 @@ uint32_t quit_since = 0; bool quit_counting = false, quit_sent = false;
 uint64_t pad_ns_frame = 0;               // time inside the controller read since io_take_pad_ms
 uint64_t refills = 0, refill_ms = 0;     // sound: silence put in after the game stalled (see mu_frontend_audio)
 uint64_t stat_frames = 0, stat_ns = 0, stat_underruns = 0;
+// The controllers are read by the game's poll (simulation thread) and, during an online game, by the netplay
+// object's input-suggestion thread between frames (mu_net_suggest_read): never both at once.
+std::mutex input_mutex;
+thread_local bool suggestion_read = false;   // this thread is reading for a suggestion: the in-game menu is not run
+std::atomic<uint32_t> last_poll_retrace{0};
 
 // A line made while the game runs (the simulation, decoder or render thread): to the log thread.
 void hold(const char* line) {
@@ -231,13 +241,20 @@ extern "C" void mu_frontend_audio(const int16_t* rl, uint32_t frames) {
 
 #if MU_FE_AURORA
 // The game reads its four controllers (only reached when no runner script drives them).
+// The netplay object (patches/net-0001, input suggestions), weak: told right before each poll.
+extern "C" __attribute__((weak)) void mu_net_suggest_note_poll(void);
 extern "C" int mu_frontend_pad_read(MuPadStatus out[4]) {
   if (!fe::options.play || !fe::running.load(std::memory_order_relaxed)) return 0;
   const uint64_t t0 = host::now_ns();
+  if (mu_net_suggest_note_poll) mu_net_suggest_note_poll();   // a change read from here on is in the next frame's pad
   if (!fe::auto_vs.step(out)) {
     host::PadState pads[4];
-    host::input_poll(pads);
-    if (fe::options.app) fe::app_pad_postprocess(pads);   // the player's remapping, deadzones (launcher.ini pad.<guid>)
+    {
+      std::lock_guard<std::mutex> lock(fe::input_mutex);
+      fe::last_poll_retrace.store(host::retrace_count(), std::memory_order_relaxed);
+      host::input_poll(pads);
+      if (fe::options.app) fe::app_pad_postprocess(pads);   // the player's remapping, deadzones (launcher.ini pad.<guid>)
+    }
     static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
     std::memcpy(out, pads, sizeof pads);
   }
@@ -252,6 +269,77 @@ extern "C" void mu_frontend_pad_rumble(int32_t port, int32_t on) {
   // A controller Aurora's PAD put on the port (Pro Controller, Joy-Con, a pad seen through SDL), unless its
   // saved configuration turned rumble off. The adapter's ports are rumbled by the adapter code above.
   if (on == 0 || fe::app_rumble_allowed(port)) host::gamepad_rumble(port, on != 0);
+}
+
+namespace fe {
+bool menu_masks(host::PadState pads[4]);   // below: the in-game menu's hand-over masks, without changing them
+namespace {
+// MU_SUGGEST_LEAD_MS=N (tests only): a controller script changes its pads exactly at a poll, so between polls there is
+// never anything new to suggest. With this set, a read N ms before the next poll returns the pad the script gives that
+// poll: a change made N ms before the poll, the same inputs either way. Time-keyed scripts only (no scene blocks).
+struct Lead {
+  bool on = false;
+  double seconds = 0;
+  host::InputScript script;
+  Lead() {
+    const char* v = std::getenv("MU_SUGGEST_LEAD_MS");
+    const double ms = v && *v ? std::atof(v) : 0.0;
+    if (ms <= 0.0 || ms >= 16.0 || options.play_script.empty()) return;
+    std::ifstream file(options.play_script);
+    on = file && script.load(file);
+    seconds = ms / 1000.0;
+  }
+};
+}  // namespace
+}  // namespace fe
+
+// The netplay object's input-suggestion thread (patches/net-0001), about a thousand times a second during an online
+// game: the local player's controller on `port`, as the game will get it at its next poll, in wire form. The app's
+// whole input path (GameCube adapter, SDL gamepads through Aurora's PAD, the player's remapping), never at the same
+// time as the game's own poll; the in-game menu is left alone (no suggestion while it is open, and what it keeps from
+// the game is kept from the suggestion too). 0 when there is nothing to read.
+extern "C" int mu_net_suggest_read(int port, uint8_t out[8]) {
+  if (!fe::options.play || !fe::running.load(std::memory_order_relaxed) || port < 0 || port > 3) return 0;
+  static const bool generated = std::getenv("MELEE_ONLINE_TEST_INPUTS") != nullptr;   // the game's own test inputs play
+  if (generated || fe::auto_vs.phase == fe::AutoVs::Running) return 0;
+#ifdef __SWITCH__
+  // The sampler thread (started by the netplay object at an online game's start) runs beside the render thread on core
+  // 1, just above it: about a thousand wake-ups a second of a few microseconds each. Core 2 stays the game's alone, core 0
+  // the decoder's and the GameCube adapter reader's.
+  static thread_local bool placed = false;
+  if (!placed) {
+    placed = true;
+    svcSetThreadPriority(CUR_THREAD_HANDLE, 0x27);
+    svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1u << 1);
+  }
+#endif
+  host::PadState pads[4];
+  static fe::Lead lead;
+  if (lead.on) {
+    const uint32_t polled = fe::last_poll_retrace.load(std::memory_order_relaxed);
+    const bool ahead = double(host::now_ns() - fe::last_pad_ns.load(std::memory_order_relaxed)) * 1e-9 >= 1.0 / 60.0 - lead.seconds;
+    const auto sample = lead.script.sample(ahead ? polled + 1 : polled);
+    for (int i = 0; i < 4; ++i) {
+      pads[i] = {};
+      pads[i].err = sample[i].connected ? 0 : -1;
+      pads[i].button = sample[i].buttons;
+      pads[i].stick_x = sample[i].sx; pads[i].stick_y = sample[i].sy;
+      pads[i].sub_x = sample[i].cx; pads[i].sub_y = sample[i].cy;
+    }
+  } else {
+    std::lock_guard<std::mutex> lock(fe::input_mutex);
+    fe::suggestion_read = true;
+    host::input_poll(pads);
+    fe::suggestion_read = false;
+    if (fe::options.app) fe::app_pad_postprocess(pads);
+    if (!fe::menu_masks(pads)) return 0;
+  }
+  const host::PadState& p = pads[port];
+  if (p.err != 0) return 0;
+  out[0] = uint8_t(p.button >> 8); out[1] = uint8_t(p.button);
+  out[2] = uint8_t(p.stick_x); out[3] = uint8_t(p.stick_y); out[4] = uint8_t(p.sub_x); out[5] = uint8_t(p.sub_y);
+  out[6] = p.trig_l; out[7] = p.trig_r;
+  return 1;
 }
 
 // ---- what the app's sources expect from the rest of the app ----
@@ -285,6 +373,7 @@ void log_changes(const PadState pads[4], const char* who) {
 }
 }  // namespace
 void menu_frame(PadState pads[4]) {
+  if (fe::suggestion_read) return;                 // a read for an input suggestion: fe::menu_masks applies the masks
   if (fe::options.app) {
     if (!fe::running.load(std::memory_order_relaxed)) return;
     PadState raw[4];
@@ -336,6 +425,23 @@ void menu_frame(PadState pads[4]) {
     linux_host::request_stop(0);
   }
 }
+}  // namespace host
+namespace fe {
+// For an input-suggestion read (input_mutex held): false while the in-game menu is open; otherwise the masks the last
+// poll left (the button that closed the menu, the menu's own L + R + Start) applied as the game would get them.
+bool menu_masks(host::PadState pads[4]) {
+  if (!options.app) return true;
+  if (host::menu_is_open()) return false;
+  for (int i = 0; i < 4; ++i) {
+    if (pads[i].err != 0) continue;
+    if (host::combo_hold[i]) { pads[i].button &= uint16_t(~0x1060); pads[i].trig_l = 0; pads[i].trig_r = 0; }
+    pads[i].button &= uint16_t(~host::swallow[i]);
+    if (host::swallow_triggers[i]) { pads[i].trig_l = 0; pads[i].trig_r = 0; }
+  }
+  return true;
+}
+}  // namespace fe
+namespace host {
 #ifdef __SWITCH__
 // The app's adapter code (gc_adapter_usbhs.cpp, compiled with its poll renamed) looks for the adapter every two
 // seconds from whoever polls it, here the simulation thread, for as long as there is none. Three looks at the

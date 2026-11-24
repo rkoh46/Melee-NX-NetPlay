@@ -80,6 +80,7 @@ const std::vector<Page>& pages() {
       {"community_codes", "V-cancel sound", Kind::Bit, 0x200000},
       {"community_codes", "No fighter shadows", Kind::Bit, 0x1000000},
       {"community_codes", "Centred 2-player HUD", Kind::Bit, 0x4000000},
+      {"community_codes", "Full Fountain of Dreams reflections", Kind::Bit, 0x100000},
       {"community_codes", "Instant Melee (offline)", Kind::Bit, 0x400000, 1, 1, {}, true},
       {"community_codes", "Free pause camera (offline)", Kind::Bit, 0x800000, 1, 1, {}, true},
       {"community_codes", "Boot to character select (offline)", Kind::Bit, 0x2000000, 1, 1, {}, true, true},
