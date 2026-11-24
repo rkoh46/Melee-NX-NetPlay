@@ -1,0 +1,35 @@
+Melee-NX-NetPlay: offline Squad Strike (Z on the VS character select adds fighters) becomes a player setting, off by default.
+melee-unlocked builds the mode into every image (MELEE_SQUAD_STRIKE ON) and turns it on in every ordinary stock VS match; here
+gmSquad_ModeAllowed() also asks the host (test_getenv "MU_SQUAD_STRIKE", "1" = on). The frontend says "1" only when settings.ini
+has squad_strike 1 and no online session runs (and while a replay plays back); the headless runner answers nothing, so the
+reference scripts run with it off (they never press Z on the select). Online Squad Strike rows are upstream's own and unchanged.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/sourceport/game/shim/mu_squad.c
++++ b/sourceport/game/shim/mu_squad.c
+@@ -66,6 +66,15 @@
+         memset(gmSquad_coin_pos, GMSQUAD_NONE, sizeof(gmSquad_coin_pos));
+         s_init = true;
+     }
++}
++
++/* Melee-NX-NetPlay (experiments/native-engine/patches/0006): offline Squad Strike in ordinary VS is a
++ * player setting, off by default. The host says "1" for MU_SQUAD_STRIKE through test_getenv when the
++ * player turned it on (and during the playback of a replay); a host that answers nothing keeps it off. */
++static int squad_offline_on(void)
++{
++    const char* v = mu_test_getenv("MU_SQUAD_STRIKE");
++    return v != NULL && v[0] == '1';
+ }
+ 
+ bool gmSquad_ModeAllowed(void)
+@@ -79,7 +88,8 @@
+     /* The CSS checks its live teams toggle; OnEnterVs checks the copied
+      * match rules. The persistent VS copy is stale while the CSS is open. */
+     return gm_GetCurrentGameMode() == GM_VS &&
+-           gmMainLib_GetGameRules()->mode == Mode_Stock;
++           gmMainLib_GetGameRules()->mode == Mode_Stock &&
++           squad_offline_on();
+ }
+ 
+ bool gmSquad_Live(void) {

@@ -60,6 +60,7 @@ struct Snapshot {
   Flash flashes[4];
   bool advantage = false; int advantage_frames = 0, advantage_kind = 0; uint32_t advantage_retrace = 0;
   bool lab_panel = false;                       // Training with "Inputs and frame advantage" (lab_overlay)
+  bool practice_combo = false;                  // the Practice menu's Tools: combo counter (offline Training)
   bool te_inputs = false;                       // 20XX TE's input display bit (MU_GAME_OPTION2_TE_INPUT_DISPLAY), offline matches and replays
   int latency_fill = -1;                        // -1 the picture, 0 black, 1 white
   float game_fps = 0;                           // retraces per second, measured on the simulation thread

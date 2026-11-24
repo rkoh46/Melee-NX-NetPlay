@@ -20,6 +20,14 @@
 // shown on their select); a Slippi player just sees this player not locked in yet, as when someone is slow to pick, so it is
 // not sent here.
 //
+// Search from Training (upstream's Practice menu Search page, native_practice.cpp start_search): in an offline Training match
+// the Practice menu's Search page starts Slippi Unranked, or Direct or Teams by a code typed on its on-screen keyboard. The
+// search is asked for as the online menus would ask (netplay_bridge::request_match: the locked-in pick is the Training
+// fighter) and kept at once, so it runs while the player keeps training, exactly as a search kept from the select: the closed
+// menu shows the search time, "Stop searching" ends it, and when the opponent is connected the game goes back to Slippi's
+// character select for that mode (Direct's first-match state reset as upstream does), still locked in. Services program only
+// (the others have no matchmaking); a mod's added fighter is refused, as upstream refuses it.
+//
 // Training after online (upstream's keys): online_training_after 1: when a Direct or Teams session ends (the other player left,
 // Z held, the connection dropped) after at least one match, straight into a Training match with this player's fighter against
 // the last opponent's fighter (Unranked excluded, as upstream: it ends a session after each game there). online_return_training
@@ -28,6 +36,7 @@
 #include "features_internal.h"
 #include "frontend.h"
 #include "netplay_bridge.h"                // runner: search_info, keep_search (patches/net-0005)
+#include "proai/practice_state.h"          // the Practice menu's Search page (render thread)
 
 #include <algorithm>
 #include <cstdlib>
@@ -63,8 +72,16 @@ struct Kept {
   uint64_t since_ms = 0, found_ms = 0, going_ms = 0, safe_wait_ms = 0;
   uint32_t via_menu = 0;                     // the retrace the way back reached the main menu
   bool left_online = false;
+  bool from_menu = false;                    // started from the Practice menu's Search page in Training
   std::string opponent;
 } kept;
+
+// The Practice menu's Search page (render thread asks, simulation thread acts).
+std::mutex ask_mutex;
+struct Ask { int mode = 0; std::string code; int port = 0; bool stop = false; } ask;
+std::mutex view_mutex;
+fe::proai::SearchView view;
+std::string refusal;
 uint32_t hold = 0; bool armed = false;
 uint32_t prev_major = 0xFFFFFFFF, prev_minor = 0xFFFFFFFF, steady = 0;
 
@@ -127,6 +144,7 @@ void go_back(const char* why) {
     int32_t a[3] = {kept.character, kept.color, kept.port};
     g->practice(MU_PRACTICE_SET_EVENT_BACKUP, a, 3);
   }
+  if (kept.mode == 2) if (MuGameApi* g = game(); g && g->practice) { int32_t none[1] = {}; g->practice(MU_PRACTICE_DIRECT_FIRST_MATCH, none, 0); }
   set_online_mode(kept.mode);
   // From a match scene through the main menu first, as upstream's Source Port goes back.
   if (scene_major() == kOnlineMajor) return;
@@ -156,6 +174,53 @@ void begin_warmup(const netplay_bridge::SearchInfo& s, int port, int character, 
   netplay_bridge::keep_search(true);
   if (!training_go(character, color, -1, 0, true)) { netplay_bridge::keep_search(false); kept = Kept{}; return; }
   say("search: warm-up: Training with fighter %d while the %s connection stays up", character, s.mode == 3 ? "Teams" : s.mode == 2 ? "Direct" : "Unranked (test)");
+}
+
+const char* mode_name(int mode) { return mode == 2 ? "Direct" : mode == 3 ? "Teams" : mode == 4 ? "Party" : "Unranked"; }
+
+// The Practice menu's Unranked / Direct / Teams (upstream start_search): the Training fighter is the pick, the search kept at once.
+bool begin_from_training(const netplay_bridge::SearchInfo& s, int mode, const std::string& code, int port) {
+  refusal.clear();
+  const auto refuse = [](const char* why) { refusal = why; say("search: Practice menu search refused: %s", why); return false; };
+  if (!netplay_bridge::has_services()) return refuse("This program has no matchmaking: search from the app's Online Play");
+  if (online() || replay_playing() || vanilla()) return refuse("Search from an offline Training match");
+  if (scene_major() != kTrainingMajor || scene_minor() != 2) return refuse("Search from an offline Training match");
+  if (kept.stage != Stage::Off || (s.state != 0 && s.state != 5)) return refuse("A search is already running");
+  int character = -1, color = 0;
+  if (MuGameApi* g = game(); g && g->practice)
+    for (int slot = 0; slot < 4 && character < 0; ++slot) {
+      int32_t a[9] = {slot};
+      if (g->practice(MU_PRACTICE_GET_PLAYER, a, 9) == 0 && a[1] != 3 && a[3] == 0) { character = a[2]; color = a[4]; }
+    }
+  if (character < 0) return refuse("No fighter of yours was found in this match");
+  if (character >= 26) return refuse("Added fighters go online from Online Play > Direct: pick them on its character select");
+  if (!netplay_bridge::request_match(mode, code, uint8_t(character), uint8_t(color))) return refuse("Unable to start matchmaking");
+  netplay_bridge::keep_search(true);
+  kept = Kept{};
+  kept.stage = Stage::Away;
+  kept.mode = mode;
+  kept.character = character; kept.color = color; kept.port = port;
+  kept.since_ms = now_ms();
+  kept.from_menu = true;
+  say("search: Practice menu: %s search started%s%s with fighter %d (costume %d), Training goes on", mode_name(mode), code.empty() ? "" : " for ",
+      code.c_str(), character, color);
+  return true;
+}
+
+void publish_view(const netplay_bridge::SearchInfo& s) {
+  fe::proai::SearchView v;
+  const bool training = scene_major() == kTrainingMajor && scene_minor() == 2 && !replay_playing() && !vanilla();
+  const bool searching = kept.stage != Stage::Off && !kept.warmup;
+  v.searching = searching;
+  v.available = s.state >= 0 && netplay_bridge::has_services() && (training || searching);
+  v.can_start = v.available && !searching && kept.stage == Stage::Off && (s.state == 0 || s.state == 5) && !online();
+  v.mode = mode_name(searching ? kept.mode : 1);
+  v.elapsed_ms = searching ? s.elapsed_ms : 0;
+  v.state = s.state;
+  if (searching && kept.stage != Stage::Away) std::snprintf(v.opponent, sizeof v.opponent, "%s", kept.opponent.empty() ? "your opponent" : kept.opponent.c_str());
+  std::snprintf(v.note, sizeof v.note, "%s", refusal.c_str());
+  std::lock_guard<std::mutex> lock(view_mutex);
+  view = v;
 }
 
 // Tests only: --feature-test unranked-as-direct treats Unranked as Direct for the warm-up and online_training_after (the loopback
@@ -206,12 +271,31 @@ void watch_session(const Retrace& info, const netplay_bridge::SearchInfo& s) {
   }
 }
 
-void on_retrace(const Retrace& info) {
+void on_retrace_body(const Retrace& info) {
   const uint32_t major = info.scene_major, minor = info.scene_minor;
   steady = major == prev_major && minor == prev_minor ? steady + 1 : 0;
   prev_major = major; prev_minor = minor;
   const netplay_bridge::SearchInfo s = netplay_bridge::search_info();
   if (s.state < 0) return;                                          // no netplay object running
+  {
+    Ask a;
+    { std::lock_guard<std::mutex> lock(ask_mutex); std::swap(a, ask); }
+    if (a.stop && kept.stage != Stage::Off && !kept.warmup) { note("Search stopped", 240); end("the player stopped the search (Practice menu)", true); }
+    else if (a.mode > 0 && begin_from_training(s, a.mode, a.code, a.port)) return;   // the search's state is read again next retrace
+    // --feature-test practice-search:MODE[:CODE] (verification runs): the Search page's start, two seconds into the Training match.
+    static bool test_done = false; static uint32_t training_ticks = 0;
+    std::string v;
+    if (!test_done && feature_test("practice-search", &v)) {
+      training_ticks = major == kTrainingMajor && minor == 2 ? training_ticks + 1 : 0;
+      if (training_ticks == 120) {
+        test_done = true;
+        const size_t colon = v.find(':');
+        const std::string m = v.substr(0, colon), code = colon == std::string::npos ? std::string() : v.substr(colon + 1);
+        say("search: test: the Practice menu's %s", m.c_str());
+        if (begin_from_training(s, m == "direct" ? 2 : m == "teams" ? 3 : 1, code, 0)) return;
+      }
+    }
+  }
   if (applied_chat != quickchat || applied_previews != int(pick_previews)) {
     applied_chat = quickchat; applied_previews = pick_previews;
     netplay_bridge::set_chat(quickchat, pick_previews);
@@ -312,9 +396,17 @@ void on_retrace(const Retrace& info) {
   hud_text = line;
 }
 
+void on_retrace(const Retrace& info) {
+  on_retrace_body(info);
+  const netplay_bridge::SearchInfo s = netplay_bridge::search_info();
+  if (s.state >= 0) publish_view(s);
+}
+
 void hud(std::vector<HudLine>& out) {
   std::lock_guard<std::mutex> lock(hud_mutex);
-  if (!hud_text.empty()) out.push_back({hud_text, kept.stage == Stage::Away ? 0xFFC850FFu : 0x80FF90FFu});
+  // A search started from the Practice menu shows in the menu's own closed-menu bar while in Training (when the menu is built in).
+  const bool menu_bar = kept.from_menu && &fe::practice_menu_draw && scene_major() == kTrainingMajor;
+  if (!hud_text.empty() && !menu_bar) out.push_back({hud_text, kept.stage == Stage::Away ? 0xFFC850FFu : 0x80FF90FFu});
   if (!note_text.empty() && retrace() < note_until) out.push_back({note_text, 0xFF8080FFu});
 }
 
@@ -345,3 +437,12 @@ void register_search() {
                   [](MenuEntry::Write w) { w("online_return_training", return_training ? "1" : "0"); }});
 }
 }  // namespace fe::features
+
+namespace fe::proai {
+SearchView search_view() { std::lock_guard<std::mutex> lock(fe::features::view_mutex); return fe::features::view; }
+void search_ask(int mode, const char* code, int port) {
+  std::lock_guard<std::mutex> lock(fe::features::ask_mutex);
+  fe::features::ask.mode = mode; fe::features::ask.code = code ? code : ""; fe::features::ask.port = port; fe::features::ask.stop = false;
+}
+void search_stop() { std::lock_guard<std::mutex> lock(fe::features::ask_mutex); fe::features::ask.stop = true; fe::features::ask.mode = 0; }
+}  // namespace fe::proai

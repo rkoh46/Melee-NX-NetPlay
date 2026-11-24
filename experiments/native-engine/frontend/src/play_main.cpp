@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 #include <dirent.h>
@@ -234,6 +235,27 @@ void* play_thread(void* user) {
     config.has_time_base = true; config.time_base = 0;
     options.fresh_card = true;
   }
+  if (!direct) {
+    // The game's calendar from the real clock (upstream source_host.cpp h_boot_time: saves and Training Mode CE exports were
+    // dated January 1, 2000 at zero). The console's clock keeps local wall time, read as UTC as upstream does. On the Switch
+    // newlib's time() is the network/user clock in UTC with no time zone, so the local time comes from the time service.
+    int64_t local_seconds = -1;
+#ifdef __SWITCH__
+    u64 now = 0; TimeCalendarTime cal{}; TimeCalendarAdditionalInfo info{};
+    if (R_SUCCEEDED(timeGetCurrentTime(TimeType_Default, &now)) && R_SUCCEEDED(timeToCalendarTimeWithMyRule(now, &cal, &info))) {
+      std::tm t{}; t.tm_year = cal.year - 1900; t.tm_mon = cal.month - 1; t.tm_mday = cal.day; t.tm_hour = cal.hour; t.tm_min = cal.minute; t.tm_sec = cal.second;
+      local_seconds = int64_t(timegm(&t));
+    }
+#else
+    const std::time_t now = std::time(nullptr); std::tm t{}; localtime_r(&now, &t); local_seconds = int64_t(timegm(&t));
+#endif
+    if (local_seconds > 946684800) {
+      config.has_time_base = true;
+      config.time_base = uint64_t(local_seconds - 946684800) * uint64_t(MU_TB_HZ);
+      std::tm d{}; const std::time_t ls = std::time_t(local_seconds); gmtime_r(&ls, &d);
+      say("play: the game's calendar starts at %04d-%02d-%02d %02d:%02d (local time)", d.tm_year + 1900, d.tm_mon + 1, d.tm_mday, d.tm_hour, d.tm_min);
+    }
+  }
   mkdir(config.card_dir.c_str(), 0777);
   if (options.fresh_card)
     if (DIR* dir = opendir(config.card_dir.c_str())) {
@@ -267,11 +289,21 @@ int play_main() {
 #ifdef __SWITCH__
   socketInitializeDefault();
   nxlinkStdio();
+  // Keep the display awake while the game runs (upstream main.cpp SetThreadExecutionState: controllers do not count as user
+  // activity). The GameCube adapter's pads reach this program over usb:hs, which the system's idle timer never sees, so the
+  // console would dim and go to sleep mid-match: the program reports media playback for as long as it runs, as video players do.
+  struct Awake {
+    bool on = R_SUCCEEDED(appletSetMediaPlaybackState(true));
+    ~Awake() { if (on) appletSetMediaPlaybackState(false); }
+  } awake;
 #endif
   mkdir(options.out_dir.c_str(), 0777);
   log_open();
   say("---- mu-native-gfx --play (native engine, interactive)%s%s ----", netplay_bridge::has_services() ? ", with online services" : "", options.app ? ", as the app" : "");
   if (options.app) app_report();
+#ifdef __SWITCH__
+  say("play: the display stays awake while the game runs (media playback state %s)", awake.on ? "set" : "refused");
+#endif
   // The process layout, checked at the top of main (frontend_main.cpp), as the runner handles it.
   say("%s", fixedmap_layout());
   if (options.layout > 0) {

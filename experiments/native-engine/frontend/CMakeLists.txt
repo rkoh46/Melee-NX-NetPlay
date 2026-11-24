@@ -252,7 +252,8 @@ if(TARGET mu_features)
     target_include_directories(mu_proai SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   endif()
   if(NOT MU_FE_VARIANT STREQUAL "null")
-    add_library(mu_practice_menu OBJECT "${GEN}/proai/practice_menu.cpp" "${FE}/proai/practice_overlay.cpp")
+    add_library(mu_practice_menu OBJECT "${GEN}/proai/practice_menu.cpp" "${FE}/proai/practice_overlay.cpp"
+      "${MU}/port/runtime/hle/native_practice_model.cpp")   # upstream's connect code rules (the Search page)
     set_target_properties(mu_practice_menu PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
     target_include_directories(mu_practice_menu PRIVATE "${FE}/proai/include" "${FE}/proai" "${GEN}/proai" "${MU}/port/runtime/hle"
       "${MU}/port/runtime/abi")
@@ -283,6 +284,19 @@ if(NOT MU_FE_VARIANT STREQUAL "null")
   endif()
 endif()
 
+# The free DSP coefficient table (Dolphin's free DSP ROM table v0.2.1, GPL-2.0-or-later; melee-unlocked ships it as
+# Sys/GC/dsp_coef.bin, docs/licenses/dsp-coefficients.txt), embedded from the fetched tree for features/options.cpp
+# (settings.ini dsp_lowpass). Never a console dump: a player's own User/GC/dsp_coef.bin is read from the SD card.
+set(_dsp_coef "${MU}/port/slippi_sys/GC/dsp_coef.bin")
+set(_dsp_bytes "0")
+if(EXISTS "${_dsp_coef}")
+  file(READ "${_dsp_coef}" _dsp_hex HEX)
+  string(REGEX REPLACE "(..)" "0x\\1," _dsp_bytes "${_dsp_hex}")
+endif()
+file(WRITE "${CMAKE_BINARY_DIR}/dsp_coef_free.cpp.new"
+  "// Generated from the fetched tree's port/slippi_sys/GC/dsp_coef.bin (CMakeLists.txt).\nextern const unsigned char fe_dsp_coef_free[];\nextern const unsigned fe_dsp_coef_free_size;\nconst unsigned char fe_dsp_coef_free[] = {${_dsp_bytes}};\nconst unsigned fe_dsp_coef_free_size = sizeof fe_dsp_coef_free;\n")
+file(COPY_FILE "${CMAKE_BINARY_DIR}/dsp_coef_free.cpp.new" "${CMAKE_BINARY_DIR}/dsp_coef_free.cpp" ONLY_IF_DIFFERENT)
+
 # The presenter (features/present: display-rate presentation, sub-frames): objects, so the weak references of the
 # feature modules and frontend.cpp find it. Built with the renderer's include directories and definitions.
 add_library(mu_present OBJECT "${FE}/features/present/present.cpp")
@@ -295,7 +309,7 @@ endif()
 # The program, twice: with the netplay object of ../build.sh (copied by build.sh sync: everything behind net_host,
 # its other symbols local), and with the services variant of that object when there is one.
 function(mu_program target netplay_object suffix)
-  add_executable(${target} "${FE}/frontend_main.cpp" "${FE}/log_queue.cpp")
+  add_executable(${target} "${FE}/frontend_main.cpp" "${FE}/log_queue.cpp" "${CMAKE_BINARY_DIR}/dsp_coef_free.cpp")
   if(suffix)
     target_sources(${target} PRIVATE "${FE}/services_check.cpp")   # the services program's start-up self-check
     if(TARGET mu_proai)
