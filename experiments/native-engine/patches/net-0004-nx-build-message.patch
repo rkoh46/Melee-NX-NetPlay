@@ -1,0 +1,293 @@
+Melee-NX-NetPlay builds talk to each other (0.4.3): a build message (NP_MSG_NX_BUILD, 0xD0, sent first on the reliable
+channel at connection; Slippi Dolphin and melee-unlocked log an unknown id and ignore it) carries the Direct pause rule,
+a shield colour and online port colour choices, so between two such builds: Direct pausing can be turned off when
+every player's build reads the rule (otherwise Slippi's rule: Start pauses Direct), each sees the other's shield colour,
+and a 1v1 shows the players in their chosen port colours (melee-unlocked's rules for all three, its slippi_net.cpp and
+slippi_online.cpp). Also melee-unlocked's Unranked skip list (up to three connect codes, blockcode1..3). Against plain
+Slippi nothing changes. Applied by ../net_sources.sh after net-0003; port/ is unchanged.
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -6,6 +6,8 @@
+ #include <pthread/qos.h>
+ #endif
+ #include "slippi_net.h"
++#include <cctype>
++#include "slippi_online.h"   // patches/net-0004: the build message and the skip list read its settings
+ #if !defined(MELEE_PORT_OFFLINE) || !MELEE_PORT_OFFLINE
+ #include "host.h"
+ #include "slippi_net_diag.h"
+@@ -500,6 +502,26 @@
+       { std::lock_guard<std::mutex> lk(sync_mutex_); remote_sync_states_[pidx] = r; }
+       break;
+     }
++    case NP_MSG_NX_BUILD: {     // patches/net-0004
++      if (!slippi::online::config().nx_build_message) { host::log("slippi: unknown netplay message %u", mid); break; }   // test: as Slippi Dolphin
++      uint8_t n = 0, x = 0, b = 0, version = 0, port = 0, flags = 0, has_shield = 0, r = 0, g = 0, bl = 0, c1 = 0, c2 = 0;
++      if (!(packet >> n >> x >> b >> version >> port >> flags) || n != 'N' || x != 'X' || b != 'B' || version < 1 || port > 3 || port == player_idx_) {
++        host::log("slippi: invalid build message"); break;
++      }
++      NxBuild nx;
++      nx.received = true;
++      nx.pause_rule = (flags & 1) != 0;
++      nx.no_pause = nx.pause_rule && (flags & 2) != 0;
++      if ((packet >> has_shield) && has_shield == 1 && (packet >> r >> g >> bl)) nx.shield = 0x1000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | bl;
++      if ((packet >> c1) && (packet >> c2)) {
++        nx.port_colour[0] = c1 >= 1 && c1 <= 4 ? (int8_t)(c1 - 1) : (int8_t)-1;
++        nx.port_colour[1] = c2 >= 1 && c2 <= 4 ? (int8_t)(c2 - 1) : (int8_t)-1;
++      }
++      { std::lock_guard<std::mutex> lk(nx_mutex_); remote_nx_[port] = nx; }
++      host::log("slippi: opponent %u is a Melee-NX-NetPlay build: Direct pause %s, shield colour %s%06X, port colours %d/%d", port,
++                nx.no_pause ? "off" : "on", nx.shield ? "" : "none ", nx.shield & 0xFFFFFFu, nx.port_colour[0], nx.port_colour[1]);
++      break;
++    }
+     default: host::log("slippi: unknown netplay message %u", mid); break;
+   }
+ }
+@@ -672,6 +694,7 @@
+     if (all) {
+       client_->intercept = intercept_callback;
+       host::log("slippi: online connection successful");
++      QueueNxBuild();           // patches/net-0004: first on the reliable channel, ahead of anything queued while connecting
+       status_.store(ConnectStatus::CONNECTED, std::memory_order_release);
+       break;
+     }
+@@ -853,6 +876,47 @@
+   }
+ }
+ 
++// patches/net-0004: this side's build message, once per connection (a setting changed later applies from the next one, so
++// both sides always decide from the bytes they exchanged).
++void NetplayClient::QueueNxBuild() {
++  const auto& cfg = slippi::online::config();
++  if (!cfg.nx_build_message) { host::log("slippi: no build message (test: behaving as Slippi Dolphin)"); return; }
++  sent_no_pause_ = !cfg.direct_pause;
++  for (int i = 0; i < 2; ++i) sent_port_colour_[i] = (int8_t)std::clamp(cfg.port_colour[i], -1, 3);
++  auto p = std::make_unique<Packet>();
++  *p << (uint8_t)NP_MSG_NX_BUILD << (uint8_t)'N' << (uint8_t)'X' << (uint8_t)'B' << (uint8_t)1 << player_idx_
++     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0));
++  const uint32_t shield = cfg.shield_online;
++  if (shield & 0x1000000u) *p << (uint8_t)1 << (uint8_t)(shield >> 16) << (uint8_t)(shield >> 8) << (uint8_t)shield;
++  else *p << (uint8_t)0;
++  *p << (uint8_t)(sent_port_colour_[0] + 1) << (uint8_t)(sent_port_colour_[1] + 1);
++  { std::lock_guard<std::mutex> lk(async_mutex_); async_queue_.push_front(std::move(p)); }
++  host::log("slippi: build message queued (Direct pause %s, shield colour %s%06X, port colours %d/%d)", sent_no_pause_ ? "off" : "on",
++            (shield & 0x1000000u) ? "" : "none ", shield & 0xFFFFFFu, sent_port_colour_[0], sent_port_colour_[1]);
++}
++bool NetplayClient::PauseOff() const {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  if (remote_player_count_ == 0) return false;
++  bool off = sent_no_pause_;
++  int seen = 0;
++  for (int port = 0; port < 4; ++port) {
++    if (port == player_idx_) continue;
++    if (!remote_nx_[port].received) continue;
++    if (!remote_nx_[port].pause_rule) return false;
++    off = off || remote_nx_[port].no_pause;
++    ++seen;
++  }
++  return seen == remote_player_count_ && off;     // a remote player without the message (Slippi Dolphin): Slippi's rule
++}
++bool NetplayClient::PortColours(int8_t mine[2], int8_t theirs[2]) const {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  if (remote_player_count_ != 1) return false;
++  const uint8_t other = player_idx_ == 0 ? 1 : 0;
++  if (!remote_nx_[other].received) return false;
++  for (int i = 0; i < 2; ++i) { mine[i] = sent_port_colour_[i]; theirs[i] = remote_nx_[other].port_colour[i]; }
++  return true;
++}
++
+ void NetplayClient::SetMatchSelections(PlayerSelections& s) {
+   PlayerSelections local;
+   {
+@@ -1441,6 +1505,28 @@
+     return;
+   }
+   terminateMmConnection();   // free the port so the netplay client can bind it
++  // patches/net-0004: Unranked turns down up to three connect codes (melee-unlocked's blockcode1..3). A new search starts;
++  // the other player's client sees a failed connection and searches again, as with any match that does not connect.
++  if (search_settings_.mode == UNRANKED) {
++    const auto clean = [](const std::string& code) {
++      std::string out;
++      for (char c : code) if (!std::isspace((unsigned char)c)) out += (char)std::toupper((unsigned char)c);
++      return out;
++    };
++    std::vector<UserInfo> found;
++    { std::lock_guard<std::mutex> lk(info_mutex_); found = player_info_; }
++    for (int i = 0; i < (int)found.size(); ++i) {
++      if (i == local_player_index_) continue;
++      const std::string theirs = clean(found[i].connect_code);
++      if (theirs.empty()) continue;
++      for (const auto& code : slippi::online::config().blocked_codes) {
++        if (clean(code).empty() || clean(code) != theirs) continue;
++        host::log("slippi: matched %s, who is on the Unranked skip list; searching again", theirs.c_str());
++        state_ = INITIALIZING;
++        return;
++      }
++    }
++  }
+   state_ = OPPONENT_CONNECTING;
+   host::log("slippi: opponent found (decider: %d)", is_host_);
+ }
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -39,6 +39,11 @@
+   NP_MSG_SLIPPI_PAD = 0x80, NP_MSG_SLIPPI_PAD_ACK = 0x81, NP_MSG_SLIPPI_MATCH_SELECTIONS = 0x82, NP_MSG_SLIPPI_CONN_SELECTED = 0x83,
+   NP_MSG_SLIPPI_CHAT_MESSAGE = 0x84, NP_MSG_SLIPPI_COMPLETE_STEP = 0x85, NP_MSG_SLIPPI_SYNCED_STATE = 0x86,
+   NP_MSG_SLIPPI_PAD_SUGGESTION = 0x87, NP_MSG_SLIPPI_PLAYER_DROP = 0x88,
++  // Melee-NX-NetPlay 0.4.3 only (patches/net-0004): the sender's build: 'N' 'X' 'B', version, the sender's port, flags (0x01
++  // reads the Direct pause rule, 0x02 this player turned pausing off), a shield colour (1 + RGB, or 0), port colour choices
++  // (each + 1, 0 none). Sent first on the reliable channel at connection, so it arrives before any selections. Slippi Dolphin
++  // and melee-unlocked log an unknown id and ignore it.
++  NP_MSG_NX_BUILD = 0xD0,
+ };
+ 
+ // sf::Packet wire format: integers big-endian, bool as one byte, strings as u32 length + bytes.
+@@ -198,6 +203,14 @@
+   // reads them every frame (0xB3).
+   MatchInfo GetMatchInfoSnapshot() const { std::lock_guard<std::mutex> lk(match_mutex_); return match_info_; }
+   PlayerSelections GetSlippiRemoteChatMessage(bool chat_enabled);
++  // patches/net-0004: what the other players' builds said (NP_MSG_NX_BUILD), by port 0..3.
++  struct NxBuild { bool received = false, pause_rule = false, no_pause = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
++  NxBuild RemoteNxBuild(uint8_t port) const { std::lock_guard<std::mutex> lk(nx_mutex_); return port < 4 ? remote_nx_[port] : NxBuild{}; }
++  // Direct pausing is off: every remote player's build reads the rule and this player or one of them turned it off. Both
++  // sides decide from the same bytes: each sent its own once at connection, before its selections.
++  bool PauseOff() const;
++  // An online 1v1 where the other build sent its port colour choices: this side's as sent, theirs.
++  bool PortColours(int8_t mine[2], int8_t theirs[2]) const;
+   uint8_t GetSlippiRemoteSentChatMessage(bool chat_enabled);
+   int32_t CalcTimeOffsetUs();
+   bool IsWaitingForDesyncRecovery();
+@@ -277,6 +290,12 @@
+   mutable std::mutex match_mutex_;   // match_info_'s selections (the players' indices are fixed at construction)
+   MatchInfo match_info_;
+   std::mutex chat_mutex_;        // set by the netplay thread, taken by the game thread
++  // patches/net-0004: the build message, sent once at connection (the netplay thread), and the ones received.
++  void QueueNxBuild();
++  mutable std::mutex nx_mutex_;
++  NxBuild remote_nx_[4];
++  bool sent_no_pause_ = false;
++  int8_t sent_port_colour_[2] = {-1, -1};
+   PlayerSelections remote_chat_message_;
+ };
+ 
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -27,6 +27,8 @@
+ int32_t current_online_frame() { return 0; }
+ bool is_online_match() { return false; }
+ uint8_t local_player_slot() { return 0; }
++uint32_t port_colour_bits() { return 0; }
++uint32_t shield_color(int) { return 0; }
+ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vector<uint8_t>& q) {
+   if (!g_initialized) init();
+   return offline::handle(cmd, payload, payload_len, q);
+@@ -195,6 +197,7 @@
+ int g_frames_to_skip = 0, g_frames_to_advance = 0, g_fall_behind = 0, g_fall_far_behind = 0;
+ bool g_currently_skipping = false, g_currently_advancing = false;
+ std::mt19937 g_rng((uint32_t)time_ms());
++std::atomic<uint32_t> g_port_colour_bits{0};   // patches/net-0004: update_port_colours
+ uint64_t g_rollbacks = 0;
+ std::atomic<int32_t> g_current_online_frame{0};   // for the rollback log line; net_diag reads it on the netplay thread
+ bool g_in_online_match = false;
+@@ -385,6 +388,7 @@
+   net_diag::match_ended("reset");
+   host::set_online_ping_ms(-1);
+   host::set_emulation_speed(1.0);
++  g_port_colour_bits.store(0, std::memory_order_relaxed);
+ }
+ 
+ // ---------------------------------------------------------------- per-frame online flow
+@@ -760,6 +764,31 @@
+ void prepare_online_match_state(std::vector<uint8_t>& q);
+ 
+ 
++// patches/net-0004: online 1v1 port colours (melee-unlocked's rule): each player shows in their first choice; a colour both
++// picked goes to one of them by the match's agreed random offset and the other gets their second choice; a player with no
++// choice keeps their port's colour. Both builds know both choices (the build message), so both draw the same. Display only.
++void update_port_colours(uint32_t rng_offset) {
++  int8_t mine[2], theirs[2];
++  const int me = g_local_player_index;
++  if (!g_netplay || !g_matchmaking || g_matchmaking->RemotePlayerCount() != 1 || me > 1 || !g_netplay->PortColours(mine, theirs) ||
++      (mine[0] < 0 && theirs[0] < 0)) { g_port_colour_bits.store(0, std::memory_order_relaxed); return; }
++  const int8_t* pref[2] = {me == 0 ? mine : theirs, me == 0 ? theirs : mine};
++  int colour[2] = {-1, -1};
++  bool taken[4] = {};
++  for (int p = 0; p < 2; ++p) if (pref[p][0] < 0) { colour[p] = p; taken[p] = true; }
++  const int first = (int)((rng_offset >> 3) & 1u);
++  for (int k = 0; k < 2; ++k) {
++    const int p = k == 0 ? first : 1 - first;
++    if (colour[p] >= 0) continue;
++    for (const int c : {(int)pref[p][0], (int)pref[p][1], p}) if (c >= 0 && c < 4 && !taken[c]) { colour[p] = c; break; }
++    for (int c = 0; colour[p] < 0 && c < 4; ++c) if (!taken[c]) colour[p] = c;
++    taken[colour[p]] = true;
++  }
++  const uint32_t bits = ((uint32_t)colour[0] | ((uint32_t)colour[1] << 2)) << 28;
++  if (g_port_colour_bits.exchange(bits, std::memory_order_relaxed) != bits)
++    host::log("slippi: port colours P1 %d, P2 %d (0 red, 1 blue, 2 yellow, 3 green)", colour[0], colour[1]);
++}
++
+ void prepare_online_match_state(std::vector<uint8_t>& q) {
+   host::set_emulation_speed(1.0);
+   static std::vector<uint8_t> block = {
+@@ -924,8 +953,19 @@
+     block[0x61 + 2 * 0x24] = remote_count >= 2 ? 0 : 3;
+     block[0x61 + 3 * 0x24] = remote_count >= 3 ? 0 : 3;
+     block[0xE] = (uint8_t)(stage_id >> 8); block[0xF] = (uint8_t)stage_id;
+-    bool pause_allowed = g_last_search.mode == Matchmaking::DIRECT;
++    // Direct pauses (Slippi's rule) unless every player's build reads the pause rule and one of them turned it off
++    // (patches/net-0004; the same bytes on every side, exchanged before the selections that started this match).
++    const bool pause_off = g_last_search.mode == Matchmaking::DIRECT && g_netplay && g_netplay->PauseOff();
++    {
++      static int logged = -1;
++      if (g_last_search.mode == Matchmaking::DIRECT && logged != (pause_off ? 1 : 0)) {
++        logged = pause_off ? 1 : 0;
++        host::log("slippi: Direct pause %s", pause_off ? "off (a player turned it off; every build reads the rule)" : "on");
++      }
++    }
++    bool pause_allowed = g_last_search.mode == Matchmaking::DIRECT && !pause_off;
+     block[2] = pause_allowed ? (block[2] & 0xF7) : (block[2] | 0x8);
++    update_port_colours(rng_offset);
+     bool stage_selection_mode = g_last_search.mode == Matchmaking::DIRECT || g_last_search.mode == Matchmaking::TEAMS;
+     if (!stage_selection_mode) alt_stage_mode = 0;
+     // Desync recovery restores the fighters here; the timer is restored further down, after the default timer is set.
+@@ -1103,6 +1143,12 @@
+ uint8_t local_player_slot() { return g_local_player_index; }
+ int32_t current_online_frame() { return g_current_online_frame.load(std::memory_order_relaxed); }
+ bool is_online_match() { return g_in_online_match; }
++uint32_t port_colour_bits() { return g_netplay ? g_port_colour_bits.load(std::memory_order_relaxed) : 0u; }
++uint32_t shield_color(int slot) {
++  if (slot < 0 || slot > 3 || !g_netplay) return 0;
++  if (slot == g_local_player_index) return g_config.shield_online & 0x1FFFFFFu;
++  return g_netplay->RemoteNxBuild((uint8_t)slot).shield;
++}
+ 
+ void init() {
+   if (g_initialized) return;
+--- a/port/runtime/hle/slippi_online.h
++++ b/port/runtime/hle/slippi_online.h
+@@ -18,6 +18,13 @@
+   bool delay_auto = false;       // pick 2..5 from the opponent's ping at each game's start (delay ignored)
+   int chat = 0;                  // 0 enabled, 1 direct only, 2 disabled
+   bool show_local_rank = true, show_opponent_rank = true;
++  // Melee-NX-NetPlay 0.4.3 (experiments/native-engine/patches/net-0004). Between two of its builds only (the build message
++  // NP_MSG_NX_BUILD, which Slippi Dolphin and melee-unlocked log as unknown and ignore); against anyone else nothing changes.
++  bool direct_pause = true;          // Start pauses Direct (Slippi's rule); off only when every player's build says so
++  int port_colour[2] = {-1, -1};     // online 1v1 port colour, first and second choice (0 red, 1 blue, 2 yellow, 3 green; -1 none)
++  uint32_t shield_online = 0;        // this player's shield colour online, 0x1000000 | RGB (0: the port's own)
++  std::string blocked_codes[3];      // Unranked: matches with these connect codes are turned down (a new search starts)
++  bool nx_build_message = true;      // tests: false behaves as Slippi Dolphin (sends no build message, ignores the other's)
+ };
+ Config& config();
+ // The input delay the next game uses: config().delay, or the automatic choice from the measured ping.
+@@ -34,6 +41,11 @@
+ uint64_t rollback_count();
+ int32_t current_online_frame();
+ bool is_online_match();
++// Display only (patches/net-0004): bits 28-31 of the game's display options for an online 1v1 between two Melee-NX-NetPlay
++// builds (MU_DISPLAY_OPTION_PORT_COLOURS), 0 otherwise; and a fighter slot's shield colour in an online match (0x1000000 |
++// RGB, or 0 for the port's own): this player's own choice, the opponent's when their build sent one.
++uint32_t port_colour_bits();
++uint32_t shield_color(int slot);
+ uint8_t local_player_slot();
+ 
+ }  // namespace slippi::online

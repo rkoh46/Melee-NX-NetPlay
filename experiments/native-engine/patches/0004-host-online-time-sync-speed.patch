@@ -1,0 +1,67 @@
+diff --git a/port/linux/host_services.cpp b/port/linux/host_services.cpp
+index ba64145..79c929e 100644
+--- a/port/linux/host_services.cpp
++++ b/port/linux/host_services.cpp
+@@ -18,6 +18,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <chrono>
+ #include <cctype>
+ #include <cerrno>
+@@ -91,6 +92,14 @@ int stop_code = 0;
+ uint64_t boot_ticks = 0;
+ uint64_t next_retrace = ticks_per_frame;
+ Clock::time_point wall_start;
++#ifdef MU_FOREIGN_ELF
++// Online time sync nudges the frame rate (Slippi: 0.995 to 1.01 of normal). Set from any thread, applied by the
++// pacing on the simulation thread: console time after the anchor runs at `pace_speed_applied` against wall time.
++std::atomic<double> pace_speed{1.0};
++double pace_speed_applied = 1.0;
++uint64_t pace_anchor_ticks = 0, pace_last_ticks = 0;
++double pace_anchor_wall_ns = 0;
++#endif
+ std::vector<uint8_t> aram;
+ std::vector<MuStateRegion> image_regions;
+ std::vector<MuStateRegion> image_mappings;
+@@ -272,15 +281,28 @@ void check_stop() { if (stop_requested) throw Stop{stop_code}; }
+ uint64_t console_nanoseconds(uint64_t ticks) {
+   return (ticks/MU_TB_HZ)*1000000000ull + (ticks%MU_TB_HZ)*1000000000ull/MU_TB_HZ;
+ }
++#ifdef MU_FOREIGN_ELF
++double paced_wall_ns(uint64_t ticks) {
++  const double console = ticks >= pace_anchor_ticks ? double(console_nanoseconds(ticks - pace_anchor_ticks))
++                                                    : -double(console_nanoseconds(pace_anchor_ticks - ticks));
++  return pace_anchor_wall_ns + console / pace_speed_applied;
++}
++#endif
+ void pace_to(uint64_t ticks) {
+   if (!cfg.pace) return;
+   // Multiply only the remainder: ticks*1e9 overflows after about 7.6 minutes.
+-  const auto elapsed = std::chrono::nanoseconds(console_nanoseconds(ticks));
+ #ifdef MU_FOREIGN_ELF
++  const double speed = pace_speed.load(std::memory_order_relaxed);
++  if (speed != pace_speed_applied) {      // a new rate from here on: anchor at the last paced point
++    pace_anchor_wall_ns = paced_wall_ns(pace_last_ticks); pace_anchor_ticks = pace_last_ticks; pace_speed_applied = speed;
++  }
++  pace_last_ticks = ticks;
++  const auto elapsed = std::chrono::nanoseconds(int64_t(paced_wall_ns(ticks)));
+   const auto before = Clock::now();
+   std::this_thread::sleep_until(wall_start + elapsed);
+   slept_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - before).count());
+ #else
++  const auto elapsed = std::chrono::nanoseconds(console_nanoseconds(ticks));
+   std::this_thread::sleep_until(wall_start + elapsed);
+ #endif
+ }
+@@ -1191,6 +1213,9 @@ void shutdown() {
+ void skip_draws(uint32_t frames) { draws_to_skip = frames; }
+ // Paced runs: how long the host has slept so far, so a frame's work can be told from its wait.
+ uint64_t slept_nanoseconds() { return slept_ns; }
++// Online time sync: the frame rate against real time (1.0 normal), applied from the next paced frame on.
++void set_pace_speed(double speed) { pace_speed.store(speed < 0.5 ? 0.5 : speed > 2.0 ? 2.0 : speed, std::memory_order_relaxed); }
++double pace_speed_now() { return pace_speed_applied; }
+ // Experiment: the game waits for the next frame by polling, and every poll moves the console clock
+ // by this many ticks (2048 in melee-unlocked, about 330 polls per frame).
+ void set_poll_ticks(uint64_t ticks) { if (ticks) poll_ticks = ticks; }

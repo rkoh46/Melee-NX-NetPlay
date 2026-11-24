@@ -10,6 +10,7 @@
 #   MU_ONLY_A=1            one instance and no stand-in: to look at the menus
 #   MU_REARM=1             the scripts search again after each match (the stand-in is started again for every pair)
 #   MU_NET_DELAY, MU_NET_JITTER   ms; MU_SHOT_EVERY seconds between screenshots (default 5)
+#   MU_TWO_SCREENS=1       side b gets its own screenless X server: shots/shot-NNN.png show a, shots/b-NNN.png show b
 #   MU_DEAD_FIRST=N        the stand-in matches each side's first N searches with a peer that never answers: each of
 #                          those connection attempts fails after 8 s and the side searches again (the console's
 #                          failed-connection-then-search-again path), then the two sides are paired
@@ -48,27 +49,31 @@ done
 bin=mu-native-gfx-${MU_VARIANT:-linux}-services; san_env=""
 case "${MU_SANITIZE:-}" in
   "") ;;
-  address) bin=$bin-asan; san_env="ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0:handle_segv=0:allow_user_segv_handler=1:abort_on_error=0:log_path=san" ;;
+  address) bin=$bin-asan; san_env="ASAN_OPTIONS=detect_leaks=0:handle_segv=0:allow_user_segv_handler=1:abort_on_error=0:log_path=san" ;;
   thread) bin=$bin-tsan; san_env="TSAN_OPTIONS=handle_segv=0:history_size=4:second_deadlock_stack=1:suppressions=/t/tsan_graphics.supp:log_path=san" ;;
   *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
 esac
 mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FIRST"
 timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -e SLIPPI_MM_URL=ws://127.0.0.1:8765 -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -v "$disc:/iso:ro" -v "$work/out:/b:ro" \
   -v "$here/../tools:/t:ro" -v "$run:/out" -e FRAMES="$frames" -e EXTRA="$*" -e ARGS_A="${MU_ARGS_A:-}" -e ARGS_B="${MU_ARGS_B:-}" -e ONLY_A="${MU_ONLY_A:-0}" \
-  -e EVERY="${MU_SHOT_EVERY:-5}" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+  -e EVERY="${MU_SHOT_EVERY:-5}" -e TWO="${MU_TWO_SCREENS:-0}" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
     for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
+    display_b=:99
+    if [ "$TWO" = 1 ]; then Xvfb :98 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb-b.log 2>&1 & display_b=:98
+      for i in $(seq 100); do xwd -display :98 -root -silent >/dev/null 2>&1 && break; sleep 0.1; done; fi
     [ "$ONLY_A" = 1 ] || { (while true; do python3 /t/mock_matchmaking.py 8765 $MOCK_ARGS; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!; sleep 1; }
     common="--play --iso /iso/GALE01.iso --frames $FRAMES --novsync --window 640x480 --fake-user $EXTRA"
     [ -z "$SAN_ENV" ] || export "$SAN_ENV"
     cd /out/a && /b/$BIN $common --out /out/a --settings /out/a/settings.ini --play-script /out/a/pads.txt --net-inputs 1 $ARGS_A >/out/a/console.log 2>&1 & a=$!
     b=$a
-    [ "$ONLY_A" = 1 ] || { cd /out/b && /b/$BIN $common --out /out/b --settings /out/b/settings.ini --play-script /out/b/pads.txt --net-inputs 2 $ARGS_B >/out/b/console.log 2>&1 & b=$!; }
+    [ "$ONLY_A" = 1 ] || { cd /out/b && DISPLAY=$display_b /b/$BIN $common --out /out/b --settings /out/b/settings.ini --play-script /out/b/pads.txt --net-inputs 2 $ARGS_B >/out/b/console.log 2>&1 & b=$!; }
     n=0
     while kill -0 $a 2>/dev/null || kill -0 $b 2>/dev/null; do
       sleep "$EVERY"; n=$((n+1))
       xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true
+      [ "$TWO" != 1 ] || xwd -display :98 -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/b-%03d.png $n)" 2>/dev/null || true
     done
     wait $a; ra=$?; rb=0; [ "$ONLY_A" = 1 ] || { wait $b; rb=$?; }
     [ -n "${mock:-}" ] && kill $mock 2>/dev/null

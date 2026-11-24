@@ -1,0 +1,32 @@
+The sound output follows the game's speed (Melee-NX-NetPlay 0.4.3): online, Slippi's time sync runs the game up to 1 % off
+real time (runner/netplay_bridge.cpp -> net_host::set_speed_hook); the resampling ratio is multiplied by that speed,
+as melee-unlocked's audio_set_speed does. Against a build-time copy of port/runtime/host/audio_sdl.cpp (frontend/build.sh).
+--- a/port/runtime/host/audio_sdl.cpp
++++ b/port/runtime/host/audio_sdl.cpp
+@@ -43,6 +43,7 @@
+ int16_t g_last_output[2] = {0, 0};
+ std::atomic<uint64_t> g_underruns{0}, g_underrun_frames{0};
+ std::atomic<double> g_rate_min{1.0}, g_rate_max{1.0};
++std::atomic<double> g_speed{1.0};   // the game's speed against real time (Slippi's time sync nudges it online)
+ SDL_AudioStream* g_stream = nullptr;
+ bool g_audio_subsystem = false;
+ 
+@@ -70,7 +71,9 @@
+   if (g_fill_average == 0.0) g_fill_average = double(buffered);
+   g_fill_average += (double(buffered) - g_fill_average) * 0.02;
+   const double error = (g_fill_average - double(g_target_frames)) / double(g_target_frames);
+-  const double target_rate = 1.0 + std::clamp(error * 0.25, -MAX_RATE_SHIFT, MAX_RATE_SHIFT);
++  // The game makes its sound at its own speed (online time sync: up to 1 % off): the output follows that directly, the
++  // fill correction (capped far below it) only tracks the device's clock on top.
++  const double target_rate = g_speed.load(std::memory_order_relaxed) * (1.0 + std::clamp(error * 0.25, -MAX_RATE_SHIFT, MAX_RATE_SHIFT));
+   g_rate += (target_rate - g_rate) * 0.05;
+   if (g_rate < g_rate_min.load()) g_rate_min.store(g_rate);
+   if (g_rate > g_rate_max.load()) g_rate_max.store(g_rate);
+@@ -250,6 +253,7 @@
+ uint64_t audio_pushed_frames() { return g_frames; }
+ uint64_t audio_dropped_blocks() { return g_dropped; }
+ uint64_t audio_underruns(uint64_t* silent_ms) { if (silent_ms) *silent_ms = g_underrun_frames.load() * 1000 / SAMPLE_RATE; return g_underruns.load(); }
++void audio_set_speed(double speed) { g_speed.store(std::clamp(speed, 0.5, 2.0), std::memory_order_relaxed); }
+ void audio_rate_range(double* low, double* high) { if (low) *low = g_rate_min.load(); if (high) *high = g_rate_max.load(); }
+ uint32_t audio_buffered_ms() { return uint32_t((g_ring_write.load() - g_ring_read.load()) * 1000 / SAMPLE_RATE); }
+ bool headless_audio_output_ok() { return g_output_ok; }

@@ -42,6 +42,7 @@ int pc_preset = -1;                           // the preset applied last (-1 non
 // ---- overlay ----
 std::mutex hud_mutex;
 std::string advantage_text; uint32_t advantage_until = 0;
+int advantage_frames = 0, advantage_kind = 0; uint32_t advantage_at = 0; bool advantage_seen = false;
 std::string cpu_text;
 bool frozen = false;
 
@@ -105,7 +106,11 @@ int lab_advantage(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>&) 
   const int32_t frames = int32_t(be32(p));
   char line[96];
   std::snprintf(line, sizeof line, "Frame advantage %+d (on %s)", frames, p[4] == 2 ? "shield" : "hit");
-  { std::lock_guard<std::mutex> lock(hud_mutex); advantage_text = line; advantage_until = retrace() + 180; }
+  {
+    std::lock_guard<std::mutex> lock(hud_mutex);
+    advantage_text = line; advantage_until = retrace() + 180;
+    advantage_frames = frames; advantage_kind = p[4]; advantage_at = retrace(); advantage_seen = true;
+  }
   say("training: %s", line);
   return 1;
 }
@@ -247,7 +252,9 @@ void hud(std::vector<HudLine>& out) {
   std::lock_guard<std::mutex> lock(hud_mutex);
   if (scene_major() != kTrainingMajor) return;
   if (frozen) out.push_back({"Frame advance: Z steps, L+R+Z runs", 0xFFE070FFu});
-  if (tool(MU_PC_TOOL_OVERLAY) && !advantage_text.empty() && retrace() < advantage_until) out.push_back({advantage_text, 0xFFFFFFFFu});
+  // The frame advantage itself is drawn by the overlay drawer in its Training panel (overlays.cpp, overlay_draw.cpp);
+  // the line stays for a build without a picture overlay (the null variant draws nothing anyway).
+  if (tool(MU_PC_TOOL_OVERLAY) && !advantage_text.empty() && retrace() < advantage_until && !overlay_draws_training()) out.push_back({advantage_text, 0xFFFFFFFFu});
   if (pc.enabled && !cpu_text.empty()) out.push_back({cpu_text, 0xB0E0FFFFu});
 }
 
@@ -276,7 +283,14 @@ void training_scene_changed() {
   if (snapshot_store::running() && !replay_playing()) snapshot_store::release("the scene ended");
   frozen = false; combo_was = z_was = false;
   std::lock_guard<std::mutex> lock(hud_mutex);
-  advantage_text.clear(); cpu_text.clear();
+  advantage_text.clear(); cpu_text.clear(); advantage_seen = false;
+}
+bool training_lab_overlay() { return tool(MU_PC_TOOL_OVERLAY); }
+bool training_advantage(int* frames, int* kind, uint32_t* at) {
+  std::lock_guard<std::mutex> lock(hud_mutex);
+  if (!advantage_seen) return false;
+  *frames = advantage_frames; *kind = advantage_kind; *at = advantage_at;
+  return true;
 }
 
 void register_training() {

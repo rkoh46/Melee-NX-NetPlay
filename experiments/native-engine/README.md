@@ -13,7 +13,8 @@ everything built from them live under `build/native-engine/` (gitignored) and ar
 | `build.sh` | `game`: the game image with GCC 15.2 (AArch64 Linux ELF linked at `0x82800000`). `linux`: the runner for aarch64 Linux (test build). `nro`: the runner for Horizon. |
 | `patches/0001-aarch64-build.patch` | Lets the game and the headless host build for AArch64 (compiler flags, CPU check, image checker). |
 | `patches/0002-host-foreign-elf-bridge.patch` | Lets the headless host load the image through our loader instead of `dlopen`/`mmap` (it reuses the code paths the project has for its macOS bridge). |
-| `patches/0004-hackpack-z-on-paired-icons-in-vs.patch` | With the 20XX Hack Pack loaded, Squad Strike's Z on the character select stands aside on the pack's seven paired icons, so Z swaps in the hidden fighter in VS Mode too (only with the pack; the reference scripts are unchanged). |
+| `patches/0004-host-online-time-sync-speed.patch` | The headless host's pacing follows online time sync's frame rate (see "Time sync frame rate"). |
+| `patches/0005-hackpack-z-on-paired-icons-in-vs.patch` | With the 20XX Hack Pack loaded, Squad Strike's Z on the character select stands aside on the pack's seven paired icons, so Z swaps in the hidden fighter in VS Mode too (only with the pack; the reference scripts are unchanged). |
 | `patches/decomp-0001-...patch` | Two disc read buffers get an explicit 32-byte alignment (x86-64 GCC aligned them by itself; AArch64 does not, and the game asserts). |
 | `patches/decomp-0003-...patch` | A fighter's shield flags (fp+221B) start cleared; see "Shield flags at fighter creation" below. |
 | `patches/net-*.patch`, `net_sources.sh` | Changes to this repository's netplay (`port/runtime/hle`) for the netplay object only: `net_sources.sh` copies `port/runtime/hle` to `build/native-engine/netsrc`, adds the fetched tree's `slippi_input_suggestions.h` and applies the patches; `port/` itself is never changed. `net-0001`: Slippi 3.7.0 input suggestions (frontend/README.md). |
@@ -225,6 +226,25 @@ for the match again until the peer is there (`net: attempt N did not connect (T 
 gateway under a different port per flow: `--peer-via-gateway` uses that address, and the netplay code already
 accepts the peer's address on any port and survives its own unanswered connect. `tools/net_start_test.sh`
 reproduces both on one machine (a 20 s stagger and `tools/udp_nat_forwarder.py`, optionally with the delay relay).
+
+### Time sync frame rate (0.4.3)
+
+Slippi's time sync nudges each side's frame rate when one runs ahead of the other (-0.5 to +1 %), besides skipping or
+advancing whole frames when the gap gets large. Until 0.4.2 the nudge was dropped (`set_emulation_speed` was a no-op in
+`runner/netplay_bridge.cpp`). Now the bridge hands it to `net_host`, which sets the host's pacing (`patches/0004`: console
+time after the change runs at that rate against the wall clock; pacing only, the game sees the same console clock) and,
+in play mode, the sound output (`frontend/patches/0110`). During a match the speed is scaled to Slippi's 16683 us frame
+(`patches/net-0003`, 59.94 Hz, as melee-unlocked's host does), so a Dolphin peer and this host run at the same rate
+without the time sync having to correct a 0.1 % drift. Test options: `--net-clock-skew PERCENT` makes this instance's
+frame clock run fast (negative: slow), `--net-fixed-rate` logs the requested rates without applying them (the 0.4.2
+behaviour). `tools/net_test.sh` and `frontend/test-net-linux.sh` take per-side arguments in `MU_NET_ARGS_A`, `MU_NET_ARGS_B`.
+
+Measured on Linux, `tools/net_test.sh 3600 30 0` with `MU_NET_ARGS_A="--net-clock-skew 0.4"`: side a settles at
+x0.9978 (0.12 % under 59.94 Hz), side b at x1.0015 (0.25 % over), one halt at frame 30 and no frame advance after it;
+with `--net-fixed-rate` on both sides, side b had to advance 2 frames 7 times. Both runs: every confirmed state
+identical, `net check` equal, 0 desync messages. The same skew in play mode with a picture (`test-net-linux.sh`,
+`MU_NET_DELAY=30`): x0.9974..1.0003 and x0.9990..1.0022, final state identical, `net check` equal. The end-of-run
+line `net: time sync frame rate: N changes, LOW..HIGH; of M match retraces K nudged` summarises it.
 
 ### Real services (off by default)
 

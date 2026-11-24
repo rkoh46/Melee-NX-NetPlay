@@ -1,0 +1,291 @@
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -138,6 +138,17 @@
+ void aurora_set_pause_on_focus_lost(bool value);
+ void aurora_set_background_input(bool value);
+ void aurora_set_resampler(AuroraSampler sampler);
++/** Picture adjustments of the present pass (a host's picture options). All neutral: the present pass is the plain
++ *  copy (or the resampler's). Read on the render worker each presented frame. */
++typedef struct {
++  float brightness;   /* 1 unchanged (gain) */
++  float contrast;     /* 1 unchanged (about mid grey) */
++  float vibrance;     /* 1 unchanged, 0 grey, 2 twice the saturation */
++  float sharpness;    /* 0 off .. 1 contrast-adaptive sharpening */
++  uint32_t crt;       /* 0 off, 1 studio monitor (flat, fine beam, RGB stripes), 2 home television (curved, soft) */
++  float crt_curve;    /* home television's screen curve: 1 as designed, 0 flat .. 3 */
++} AuroraPicture;
++void aurora_set_picture(const AuroraPicture* picture);
+ /** Keeps the previous frame instead of clearing, for hosts that pause the
+  *  game: with nothing drawing, a cleared framebuffer presents as black. */
+ void aurora_preserve_frame_buffer(bool preserve);
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -361,7 +361,7 @@
+       wgpu::BindGroup presentBindGroup;
+       if (rmlBindGroup && !rmlOverlay) {
+         presentBindGroup = rmlBindGroup;
+-      } else if (webgpu::get_resampler() == SAMPLER_BILINEAR) {
++      } else if (webgpu::get_resampler() == SAMPLER_BILINEAR && !webgpu::picture_active()) {
+         presentBindGroup = webgpu::g_CopyBindGroup;
+       } else {
+         const auto& resampledSource = webgpu::resample_present_source(encoder, viewport);
+@@ -543,6 +543,13 @@
+   (void)sampler;
+ #endif
+ }
++void aurora_set_picture(const AuroraPicture* picture) {
++#ifdef AURORA_ENABLE_GX
++  if (picture) aurora::webgpu::set_picture(*picture);
++#else
++  (void)picture;
++#endif
++}
+ void aurora_preserve_frame_buffer(bool preserve) {
+ #ifdef AURORA_ENABLE_GX
+   aurora::gfx::set_preserve_frame_buffer(preserve);
+--- a/lib/webgpu/gpu.hpp
++++ b/lib/webgpu/gpu.hpp
+@@ -67,6 +67,8 @@
+ wgpu::BindGroup create_copy_bind_group(const TextureWithSampler& source);
+ void set_resampler(AuroraSampler sampler) noexcept;
+ AuroraSampler get_resampler() noexcept;
++void set_picture(const AuroraPicture& picture) noexcept;
++bool picture_active() noexcept;   // any adjustment is not neutral: the present pass runs the resample shader
+ Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
+                                     uint32_t content_height) noexcept;
+ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport);
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -6,6 +6,7 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdlib>
++#include <mutex>
+ #include <span>
+ #include <string>
+ #include <string_view>
+@@ -95,13 +96,32 @@
+   uint32_t samplerMode = 0;
+   float frameWidth = 0.f;
+   float frameHeight = 0.f;
++  float brightness = 1.f;
++  float contrast = 1.f;
++  float vibrance = 1.f;
++  float sharpness = 0.f;
++  uint32_t crt = 0;
++  float crtCurve = 1.f;
+ };
+ 
++// The host's picture adjustments (aurora_set_picture), set from any thread, read by the render worker.
++std::mutex g_pictureMutex;
++AuroraPicture g_picture{1.f, 1.f, 1.f, 0.f, 0, 1.f};
++bool picture_neutral(const AuroraPicture& p) noexcept {
++  return p.brightness == 1.f && p.contrast == 1.f && p.vibrance == 1.f && p.sharpness <= 0.f && p.crt == 0;
++}
++
+ constexpr std::string_view resampleShaderSource = R"(
+ struct Uniforms {
+     sampler_mode: u32,
+     frame_width: f32,
+     frame_height: f32,
++    brightness: f32,
++    contrast: f32,
++    vibrance: f32,
++    sharpness: f32,
++    crt: u32,
++    crt_curve: f32,
+ };
+ 
+ struct VertexOutput {
+@@ -180,10 +200,118 @@
+ }
+ 
+ // END AREA SAMPLER REGION
++
++// BEGIN PICTURE ADJUSTMENTS (aurora_set_picture)
++
++// Contrast-adaptive sharpening on the source's own texels: the cross of neighbours around the sample sets how far
++// the centre may be pushed, so flat areas and hard edges are left alone and soft detail gains contrast.
++fn sharpen(uv: vec2<f32>, centre: vec3<f32>, amount: f32) -> vec3<f32> {
++    let texel = 1.0 / vec2<f32>(textureDimensions(t));
++    let n = textureSampleLevel(t, s, uv + vec2<f32>(0.0, -texel.y), 0.0).rgb;
++    let so = textureSampleLevel(t, s, uv + vec2<f32>(0.0, texel.y), 0.0).rgb;
++    let w = textureSampleLevel(t, s, uv + vec2<f32>(-texel.x, 0.0), 0.0).rgb;
++    let e = textureSampleLevel(t, s, uv + vec2<f32>(texel.x, 0.0), 0.0).rgb;
++    let lo = min(centre, min(min(n, so), min(w, e)));
++    let hi = max(centre, max(max(n, so), max(w, e)));
++    let room = clamp(min(lo, vec3<f32>(1.0) - hi) / max(hi, vec3<f32>(0.0001)), vec3<f32>(0.0), vec3<f32>(1.0));
++    let weight = -sqrt(room) * mix(0.125, 0.2, amount);
++    let sharpened = (centre + (n + so + w + e) * weight) / (1.0 + 4.0 * weight);
++    return clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0));
++}
++
++// The home television's glass: the picture's coordinates bent outwards; `face` is 0 outside the tube.
++fn crt_curve(uv: vec2<f32>, curve: f32, face: ptr<function, f32>) -> vec2<f32> {
++    var q = uv * 2.0 - vec2<f32>(1.0);
++    q = q * (vec2<f32>(1.0) + curve * vec2<f32>(q.y * q.y, q.x * q.x));
++    q = q / (1.0 + curve * 0.5);
++    let px = 4.0 / max(vec2<f32>(uniforms.frame_width, uniforms.frame_height), vec2<f32>(1.0));
++    let edge = smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), (vec2<f32>(1.0) - abs(q)) / px);
++    let corner = max(abs(q) - vec2<f32>(1.0 - 0.045), vec2<f32>(0.0)) / 0.045;
++    *face = edge.x * edge.y * clamp((1.0 - length(corner)) / (max(px.x, px.y) / 0.045), 0.0, 1.0);
++    *face = *face * (1.0 - 0.35 * curve * dot(q, q) * 0.5);
++    return q * 0.5 + vec2<f32>(0.5);
++}
++
++fn to_linear(c: vec3<f32>) -> vec3<f32> { return pow(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(2.4)); }
++
++// One scanline of the console's 480: the picture along the line at its centre, a little soft along the line.
++fn crt_line(uv: vec2<f32>, line: f32, soft: f32) -> vec3<f32> {
++    let y = (line + 0.5) / 480.0;
++    let dx = soft / 640.0;
++    let a = textureSampleLevel(t, s, vec2<f32>(uv.x - dx, y), 0.0).rgb;
++    let b = textureSampleLevel(t, s, vec2<f32>(uv.x, y), 0.0).rgb;
++    let c = textureSampleLevel(t, s, vec2<f32>(uv.x + dx, y), 0.0).rgb;
++    return to_linear(0.25 * a + 0.5 * b + 0.25 * c);
++}
++
++// A beam with a Gaussian profile that widens with brightness and keeps its light (a thin beam is brighter at its
++// centre), so mid tones keep their level and highlights fill in between the lines.
++fn crt_beam(c: vec3<f32>, d: f32, thin: f32, thick: f32, pixel: f32) -> vec3<f32> {
++    let level = sqrt(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
++    var sigma = mix(vec3<f32>(thin), vec3<f32>(thick), level);
++    sigma = sqrt(sigma * sigma + vec3<f32>(pixel * pixel / 12.0));
++    return c * exp(-0.5 * d * d / (sigma * sigma)) / (sigma * 2.5066);
++}
++
++fn crt_mask(pos: vec2<f32>, depth: f32, home: bool) -> vec3<f32> {
++    var m: vec3<f32>;
++    if (home) {
++        // Shadow mask: the triads shift by half a cell every other row.
++        let row = u32(pos.y) / 2u;
++        let x = (u32(pos.x) + select(0u, 1u, (row & 1u) == 1u)) % 3u;
++        m = select(select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), x == 1u), vec3<f32>(1.0, 0.0, 0.0), x == 0u);
++    } else {
++        let x = u32(pos.x) % 3u;
++        m = select(select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), x == 1u), vec3<f32>(1.0, 0.0, 0.0), x == 0u);
++    }
++    return mix(vec3<f32>(1.0), m, depth) / (1.0 - depth * 2.0 / 3.0);
++}
+ 
++fn crt_pixel(pos: vec2<f32>, uv: vec2<f32>, home: bool) -> vec3<f32> {
++    let per_line = max(uniforms.frame_height / 480.0, 0.01);
++    // Too few output pixels per scanline cannot show the gaps: the beam eases back toward a flat line.
++    let ease = clamp(per_line - 1.0, 0.0, 1.0);
++    let thin = mix(0.62, select(0.24, 0.34, home), ease);
++    let thick = mix(0.62, select(0.43, 0.55, home), ease);
++    let y = uv.y * 480.0 - 0.5;
++    let upper = floor(y);
++    let d = y - upper;
++    let soft = select(0.6, 1.2, home);
++    let a = crt_line(uv, upper, soft);
++    let b = crt_line(uv, upper + 1.0, soft);
++    let pixel = 1.0 / per_line;
++    var c = crt_beam(a, d, thin, thick, pixel) + crt_beam(b, 1.0 - d, thin, thick, pixel);
++    if (home) {
++        // Light scattered in the glass.
++        let h = vec2<f32>(1.6 / 640.0, 1.6 / 480.0);
++        let halo = to_linear(0.25 * (textureSampleLevel(t, s, uv - h, 0.0).rgb + textureSampleLevel(t, s, uv + h, 0.0).rgb +
++                                     textureSampleLevel(t, s, uv + vec2<f32>(h.x, -h.y), 0.0).rgb +
++                                     textureSampleLevel(t, s, uv + vec2<f32>(-h.x, h.y), 0.0).rgb));
++        c = mix(c, max(c, halo), 0.14);
++    }
++    let mask_depth = select(0.30, 0.45, home) * clamp(uniforms.frame_width / 1200.0, 0.4, 1.0);
++    c = c * crt_mask(pos, mask_depth, home);
++    return pow(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
++}
++
++fn grade(c: vec3<f32>) -> vec3<f32> {
++    var g = c * uniforms.brightness;
++    g = (g - vec3<f32>(0.5)) * uniforms.contrast + vec3<f32>(0.5);
++    let lum = dot(g, vec3<f32>(0.2126, 0.7152, 0.0722));
++    g = mix(vec3<f32>(lum), g, uniforms.vibrance);
++    return clamp(g, vec3<f32>(0.0), vec3<f32>(1.0));
++}
++
++// END PICTURE ADJUSTMENTS
++
+ @fragment
+ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+-    var color = textureSample(t, s, in.uv);
++    var uv = in.uv;
++    var face = 1.0;
++    if (uniforms.crt == 2u && uniforms.crt_curve > 0.0) {
++        uv = crt_curve(in.uv, 0.10 * uniforms.crt_curve, &face);
++    }
++    var color = textureSampleLevel(t, s, uv, 0.0);
+     if (uniforms.sampler_mode == 1u) {
+         color = sample_area(in.position);
+     } else if (uniforms.sampler_mode == 2u) {
+@@ -192,7 +320,7 @@
+         // any pattern symmetric about the line centre (a cos, a triangle) gives
+         // the two output rows of a 960-tall window the same value and flattens
+         // into a uniform dim. The grille is a three-phosphor triad.
+-        let scanline = mix(1.0, 0.72, step(0.5, fract(in.uv.y * 480.0)));
++        let scanline = mix(1.0, 0.72, step(0.5, fract(uv.y * 480.0)));
+         let phase = u32(in.position.x) % 3u;
+         let grille = vec3<f32>(select(0.9, 1.0, phase == 0u),
+                                select(0.9, 1.0, phase == 1u),
+@@ -203,7 +331,15 @@
+         let saturated = mix(vec3<f32>(lum), color.rgb, 1.25);
+         color = vec4(clamp(saturated, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+     }
+-    return vec4(color.rgb, 1.0);
++    var rgb = color.rgb;
++    if (uniforms.sharpness > 0.0) {
++        rgb = mix(rgb, sharpen(uv, rgb, uniforms.sharpness), clamp(uniforms.sharpness * 1.5, 0.0, 1.0));
++    }
++    if (uniforms.crt == 1u || uniforms.crt == 2u) {
++        rgb = crt_pixel(in.position.xy, uv, uniforms.crt == 2u);
++    }
++    rgb = grade(rgb) * face;
++    return vec4(rgb, 1.0);
+ }
+ )"sv;
+ 
+@@ -368,6 +504,23 @@
+ 
+ AuroraSampler get_resampler() noexcept { return g_Resampler; }
+ 
++void set_picture(const AuroraPicture& picture) noexcept {
++  AuroraPicture p = picture;
++  p.brightness = std::clamp(p.brightness, 0.25f, 2.f);
++  p.contrast = std::clamp(p.contrast, 0.25f, 2.f);
++  p.vibrance = std::clamp(p.vibrance, 0.f, 2.f);
++  p.sharpness = std::clamp(p.sharpness, 0.f, 1.f);
++  p.crt = p.crt <= 2 ? p.crt : 0;
++  p.crt_curve = std::clamp(p.crt_curve, 0.f, 3.f);
++  std::lock_guard lock{g_pictureMutex};
++  g_picture = p;
++}
++
++bool picture_active() noexcept {
++  std::lock_guard lock{g_pictureMutex};
++  return !picture_neutral(g_picture);
++}
++
+ Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
+                                     uint32_t content_height) noexcept {
+   if (surface_width == 0 || surface_height == 0 || content_width == 0 || content_height == 0) {
+@@ -687,10 +840,21 @@
+     g_resampledFrameBuffer = create_render_texture(width, height, false);
+   }
+ 
++  AuroraPicture picture;
++  {
++    std::lock_guard lock{g_pictureMutex};
++    picture = g_picture;
++  }
+   const ResampleUniformBlock uniform{
+       .samplerMode = sampler_mode(g_Resampler),
+       .frameWidth = static_cast<float>(width),
+       .frameHeight = static_cast<float>(height),
++      .brightness = picture.brightness,
++      .contrast = picture.contrast,
++      .vibrance = picture.vibrance,
++      .sharpness = picture.sharpness,
++      .crt = picture.crt,
++      .crtCurve = picture.crt_curve,
+   };
+   AURORA_ASSERT(gfx::render_worker::is_worker_thread(), "Present resample queue write must run on the render worker");
+   g_queue.WriteBuffer(g_ResampleUniformBuffer, 0, &uniform, sizeof(uniform));

@@ -46,7 +46,7 @@ sync_tree() {
   # The runner this frontend was last brought up against. Play mode needs the runner's automatic input delay
   # (--net-delay auto, netplay_bridge::Setup::delay_auto), which is newer than 1c556fc and not committed yet: until
   # it is, the files on disk are used. Pin this to the commit that contains them (MU_SYNC_REF=<commit> meanwhile).
-  local ref="${MU_SYNC_REF:-0353e64}" stage="$work/sync-stage"
+  local ref="${MU_SYNC_REF:-483bbe1}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
@@ -102,9 +102,14 @@ sync_tree() {
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
   mkdir -p "$gen/app"
-  for f in input_sdl.cpp input_script.cpp audio_sdl.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
+  for f in input_sdl.cpp input_script.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
     cmp -s "$repo/port/runtime/host/$f" "$gen/app/$f" || cp "$repo/port/runtime/host/$f" "$gen/app/$f"
   done
+  # The sound output follows the game's speed (online time sync; patches/0110).
+  rm -rf "$gen/audiosrc"; mkdir -p "$gen/audiosrc/port/runtime/host"; cp "$repo/port/runtime/host/audio_sdl.cpp" "$gen/audiosrc/port/runtime/host/"
+  patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0110-audio-follows-game-speed.patch"
+  cmp -s "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp" || cp "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp"
+  rm -rf "$gen/audiosrc"
   # The app's in-game menu (patches/0104: pages a host adds, greyed rows, the Quit action, a HUD extra) and its sign-in
   # and notice screens (patches/0105: built off the console too, controllers through the host's input path).
   rm -rf "$gen/appsrc"; mkdir -p "$gen/appsrc/port/runtime/host"
@@ -113,6 +118,18 @@ sync_tree() {
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0105-switch-signin-off-console.patch"
   for f in game_menu.cpp game_menu.h switch_signin.cpp; do cmp -s "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f" || cp "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f"; done
   rm -rf "$gen/appsrc"
+  # Aurora (build/sdk/aurora, the Switch-patched source both picture variants compile) with this frontend's Aurora
+  # patches (patches/01xx-aurora-*.patch), as a build-time copy; build/sdk itself is not changed.
+  if [ -f "$repo/build/sdk/aurora/CMakeLists.txt" ]; then
+    rm -rf "$gen/aurora-stage"; cp -R "$repo/build/sdk/aurora" "$gen/aurora-stage"
+    for p in "$here"/patches/01*-aurora-*.patch; do [ -f "$p" ] && patch -s -p1 -d "$gen/aurora-stage" < "$p"; done
+    rsync -rlpc --delete "$gen/aurora-stage/" "$gen/aurora/"; rm -rf "$gen/aurora-stage"
+  fi
+  # melee-unlocked's Training overlay names the fighters' common actions (port/runtime/gx/training_overlay.cpp): the table
+  # is taken from the fetched tree at build time for the Training panel (src/overlay_draw.cpp).
+  sed -n '/^const char\* const kActionNames\[\] = {/,/^};/p' "$work/mu/port/runtime/gx/training_overlay.cpp" > "$gen/action_names.inc.new" 2>/dev/null || true
+  [ -s "$gen/action_names.inc.new" ] || echo 'const char* const kActionNames[] = {""};' > "$gen/action_names.inc.new"
+  if cmp -s "$gen/action_names.inc.new" "$gen/action_names.inc"; then rm -f "$gen/action_names.inc.new"; else mv "$gen/action_names.inc.new" "$gen/action_names.inc"; fi
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"
