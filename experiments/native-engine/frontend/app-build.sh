@@ -6,6 +6,7 @@
 # The disc is not read by the build (the engine reads it on the console); the argument is accepted because
 # update-host.py passes it.
 #
+# On an x86 build computer the aarch64 image runs under qemu (apt install qemu-user-static): same GCC 15.2, slower.
 # Needs, besides Docker (every container runs with a time limit and no network, except the one git clone below):
 #   - the images mu-arm-gcc15 (docker build -t mu-arm-gcc15 -f experiments/native-engine/linux-gcc15.Dockerfile
 #     experiments/native-engine) and melee-nx-netplay-build (the app's own builder image, made by install.sh);
@@ -22,7 +23,7 @@ step() { printf '\n== app-build: %s\n' "$*"; }
 for need in build/sdk/SDK_MANIFEST.json build/switch-aurora/_deps/imgui-src; do
   [ -e "$need" ] || { echo "app-build: missing $need: run install.sh once on this computer (it builds the app's SDK and Aurora's sources)" >&2; exit 1; }
 done
-docker image inspect mu-arm-gcc15 >/dev/null 2>&1 || { step "the aarch64 Linux image"; timeout 1800 docker build -t mu-arm-gcc15 -f experiments/native-engine/linux-gcc15.Dockerfile experiments/native-engine; }
+docker image inspect mu-arm-gcc15 >/dev/null 2>&1 || { step "the aarch64 Linux image"; timeout 7200 docker build --platform linux/arm64 -t mu-arm-gcc15 -f experiments/native-engine/linux-gcc15.Dockerfile experiments/native-engine; }
 
 step "melee-unlocked at its pinned commit"; bash experiments/native-engine/fetch.sh
 step "the game image";                      bash experiments/native-engine/build.sh game
