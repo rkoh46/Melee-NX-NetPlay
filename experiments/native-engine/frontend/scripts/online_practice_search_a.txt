@@ -1,0 +1,7 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_A): a search started from the Practice menu's Search page
+# in Training (features/search.cpp). The run goes to Training by itself (--feature-test training:20, Falco) and starts the
+# Unranked search two seconds into the Training match (--feature-test practice-search:unranked, the page's Unranked row);
+# nothing is pressed. When side b (the default menu script) is found the game goes back to Slippi's character select by
+# itself, still locked in as Falco, and the match is played.
+@scene 1C 02
+100

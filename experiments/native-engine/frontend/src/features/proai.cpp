@@ -314,6 +314,7 @@ MenuView menu_view() {
   v.hint = hint;
   v.unlocked = menu.unlocked;
   v.style = style;
+  v.port = menu.port;
   return v;
 }
 void menu_result(bool close, bool changed, bool stronger_changed) {

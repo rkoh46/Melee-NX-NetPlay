@@ -5,6 +5,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "practice_menu.h"   // build-time copy (build/native-engine-gfx/gen/proai)
 #include "practice_state.h"
+#include "native_practice_model.h"   // upstream's connect code rules (fetched tree, compiled with the menu)
+
+#include <cstdio>
+#include <string>
 
 #include <imgui.h>
 
@@ -28,12 +32,35 @@ void practice_menu_draw(float display_w, float display_h, float game_x0, float g
   f.stick_y = v.stick_y;
   f.keyboard = false;              // the controller drives it (no keyboard on the console)
   f.hint = v.hint && v.training;   // the corner hint in Training (upstream: every Training match unless turned off)
-  f.intro = false;                 // upstream's first-open banner is about its search, which this menu does not start
+  f.intro = false;                 // upstream disables its banner too (kBanner false); the corner hint stays
   f.unlocked = v.unlocked;
   f.time = ImGui::GetTime();
-  // The Search page: this app searches from Online Play (and keeps Training going there with L + R on the select).
-  f.search.available = false;
-  const practice_menu::Result r = practice_menu::frame(v.style, f);
+  // The Search page (features/search.cpp): Unranked, Direct and Teams from Training in the services program; elsewhere the
+  // page says to search from Online Play (patches/0113).
+  const proai::SearchView s = proai::search_view();
+  f.search.available = s.available;
+  f.search.can_start = s.can_start;
+  f.search.searching = s.searching;
+  f.search.mode = s.mode;
+  char elapsed[16];
+  std::snprintf(elapsed, sizeof elapsed, "%u:%02u", s.elapsed_ms / 60000, s.elapsed_ms / 1000 % 60);
+  f.search.elapsed = elapsed;
+  f.search.state = s.state == 1 ? "Starting the search" : s.state == 2 ? "Looking for an opponent" : s.state == 3 ? "Connecting to the opponent"
+                 : s.state == 4 ? "Connected" : "";
+  f.search.opponent = s.opponent;
+  static std::string last_note;
+  if (last_note != s.note) { last_note = s.note; if (!last_note.empty()) practice_menu::show_error(last_note); }
+  practice_menu::Result r = practice_menu::frame(v.style, f);
+  // Upstream's own rules for the typed codes (native_practice_model.cpp); a bad code stays on the keyboard with the reason.
+  if (r.start_unranked) { proai::search_ask(1, "", v.port); r.close = true; }
+  if (r.start_direct || r.start_teams) {
+    std::string code, error;
+    const bool ok = r.start_direct ? slippi::native_practice::normalize_direct_code(r.direct_code, &code, &error)
+                                   : slippi::native_practice::normalize_teams_code(r.direct_code, &code, &error);
+    if (!ok) practice_menu::show_error(error);
+    else { proai::search_ask(r.start_direct ? 2 : 3, code.c_str(), v.port); r.close = true; }
+  }
+  if (r.cancel_search) proai::search_stop();
   proai::menu_result(r.close, r.changed, r.stronger_changed);
 }
 }  // namespace fe

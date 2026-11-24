@@ -222,7 +222,8 @@ if(TARGET mu_features)
     target_include_directories(mu_proai SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   endif()
   if(NOT MU_FE_VARIANT STREQUAL "null")
-    add_library(mu_practice_menu OBJECT "${GEN}/proai/practice_menu.cpp" "${FE}/proai/practice_overlay.cpp")
+    add_library(mu_practice_menu OBJECT "${GEN}/proai/practice_menu.cpp" "${FE}/proai/practice_overlay.cpp"
+      "${MU}/port/runtime/hle/native_practice_model.cpp")   # upstream's connect code rules (the Search page)
     set_target_properties(mu_practice_menu PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
     target_include_directories(mu_practice_menu PRIVATE "${FE}/proai/include" "${FE}/proai" "${GEN}/proai" "${MU}/port/runtime/hle"
       "${MU}/port/runtime/abi")
