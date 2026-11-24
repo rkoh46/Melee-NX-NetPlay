@@ -373,6 +373,16 @@ in the first 40 ms run lost two thirds of its re-simulated frames; the other run
 way a suggestion arrives after the frame it is for has been simulated, so it cannot save a rollback. Not yet tried
 against a real Slippi player (real changes come at any time between polls).
 
+### Quick chat (0.4.3)
+
+Slippi's D-pad chat on the online character select works as in Slippi: the game sends 0xBB, the netplay object sends the
+message to the opponent, and the receiver's game shows it from the match state (0xB3; message 0x84 on the wire). The
+netplay host logs each step (`net: chat: the game sends quick chat message 0x88`, `our message 0x88 went out`, on the
+other side `message 0x88 received from player 2 (shown by the game)`). Test: `MU_PADS_A=scripts/online_unranked_chat.txt
+MU_TWO_SCREENS=1 ./test-online-linux.sh DISC 3000` (side a presses D-pad Up, Up after the match, back on the character
+select and still connected; side b has its own X screen, `shots/b-NNN.png`): side b showed "Mock 2: ggs" (screenshot),
+two to five messages per run depending on when the match ended, the match itself identical on both sides.
+
 ### Feature modules: training, replays, options, mod discs, 120 Hz
 
 `src/features/*.cpp` and `../runner/features/*.cpp` register through `src/feature_hooks.h` (commands by

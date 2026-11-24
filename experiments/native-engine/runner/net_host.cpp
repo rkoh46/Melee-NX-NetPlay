@@ -149,6 +149,7 @@ int32_t net_slippi_command(uint8_t command, const uint8_t* payload, uint32_t siz
   if (command == 0xB4 && payload && size >= 1) net.ranked_refused = payload[0] == 0;
   if (command == 0xB4 && net.ranked_refused) { say("net: %s", netplay_bridge::ranked_refusal()); return 0; }
   if (command == 0xBA) net.ranked_refused = false;            // CMD_CLEANUP_CONNECTION
+  if (command == 0xBB && payload && size >= 1) say("net: chat: the game sends quick chat message 0x%02X", payload[0]);   // CMD_SEND_CHAT_MESSAGE
   if (command == 0xF0 && payload && size == 4) {
     if (net_tracking()) { if (options.engine_store) net_engine.keep_reference(int32_t(net_be32(payload))); else mu_rollback::remember(); }
     return 0;
@@ -200,6 +201,11 @@ int32_t net_slippi_command(uint8_t command, const uint8_t* payload, uint32_t siz
             options.retry_seconds ? "" : " (--net-retry SECONDS keeps trying)");
       }
     }
+  }
+  // The match state's chat bytes (Slippi 3.7.0's MSRB: 10 our message as sent, 11 a message received, 12 from which player).
+  if (command == 0xB3 && reply.size() > 12) {
+    if (reply[10]) say("net: chat: our message 0x%02X went out", reply[10]);
+    if (reply[11]) say("net: chat: message 0x%02X received from player %u (shown by the game)", reply[11], reply[12] + 1u);
   }
   if (command == 0xB3 && net.ranked_refused && reply.size() > 357 + 64) {
     reply[0] = 5;                                             // MM_ERROR_ENCOUNTERED
