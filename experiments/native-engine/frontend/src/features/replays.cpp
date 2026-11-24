@@ -178,6 +178,7 @@ uint64_t recorded_matches = 0;
 void write_recording() {
   if (written || !stream.active()) return;
   written = true;
+  if (!save_replays) return;                      // recorded only for the spectator server
   std::vector<uint8_t> file = stream.encode();
   if (file.empty()) { say("replay: recording failed: %s", stream.error().c_str()); return; }
   const std::time_t start = stream.start_time() ? std::time_t(stream.start_time()) : std::time(nullptr);
@@ -418,7 +419,7 @@ void h_replay_event(uint8_t command, const uint8_t* payload, uint32_t size) {
   if (playing) { playback_event(command, payload, size); return; }
   if (command == 0x36) {
     write_recording();                            // a recording never finished (a reset): kept as it is
-    if (!save_replays) { stream = slippi::NativeReplayStream{}; return; }
+    if (!save_replays && !spectator_on()) { stream = slippi::NativeReplayStream{}; return; }
     std::vector<uint8_t> start(payload, payload + size);
     const bool net = size >= 0x2F8 && (start[0x1A3] == 0x08 || start[0x2BD] != 0);
     std::vector<uint8_t> codes;
@@ -439,13 +440,16 @@ void h_replay_event(uint8_t command, const uint8_t* payload, uint32_t size) {
     stream.set_feature_options(net || vanilla() || !h ? 0u : h->game_options() & 0x00007FF0u);
     stream.set_feature_options2(net || !h ? 0u : h->game_options2());
     stream.set_feature_options3(net || !h ? 0u : h->game_options3());
-    if (!stream.begin_slippi(start, codes, int64_t(std::time(nullptr)))) say("replay: cannot start the recording: %s", stream.error().c_str());
+    // The spectator server (spectator.cpp) gets the live copy: start_game, the command table and every event as the
+    // file gets it, end_game after Game End (the order Slippi Dolphin's EXI device sends them).
+    if (spectator_on()) { spectator_start_game(); stream.set_event_sink(spectator_write); }
+    if (!stream.begin_slippi(start, codes, int64_t(std::time(nullptr)))) { say("replay: cannot start the recording: %s", stream.error().c_str()); spectator_end_game(false); }
     else say("replay: recording %s match%s", net ? "an online" : "an offline", MU_HAVE_RECORDING_CODES ? "" : " (no code list in this build)");
     return;
   }
   if (!stream.active() || stream.ended()) return;
   if (!stream.append(command, payload, size)) say("replay: cannot record event %02X: %s", command, stream.error().c_str());
-  if (command == 0x39) write_recording();         // at GAME!, on the writer thread
+  if (command == 0x39) { spectator_end_game(false); write_recording(); }   // at GAME!, on the writer thread
 }
 
 void h_replay_finished() {
@@ -587,7 +591,7 @@ void tables(MuHostApi* host, MuGameApi*) {
   }
   // The game records an offline VS match only when MELEE_SOURCE_RECORD is "1" (shim/mu_replay.c reads it with the
   // C library's getenv, which the loader binds to this program's); online matches are always recorded.
-  setenv("MELEE_SOURCE_RECORD", save_replays && !playing ? "1" : "0", 1);
+  setenv("MELEE_SOURCE_RECORD", (save_replays || spectator_wanted()) && !playing ? "1" : "0", 1);
   host->replay_start = h_replay_start;
   host->replay_frame = h_replay_frame;
   host->replay_stock_steal = h_replay_stock_steal;
@@ -657,7 +661,7 @@ void register_replays() {
                   }});
   add_menu_entry({"Replays", "Compress replays (.slpz)", [] { return std::string(compress_replays ? "On" : "Off"); }, [](int) { compress_replays = !compress_replays; }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("compressreplays", compress_replays ? "1" : "0"); }});
-  add_menu_entry({"Replays", "Save every match", [] { return std::string(save_replays ? "On" : "Off"); }, [](int) { save_replays = !save_replays; setenv("MELEE_SOURCE_RECORD", save_replays && !playing ? "1" : "0", 1); }, nullptr,
+  add_menu_entry({"Replays", "Save every match", [] { return std::string(save_replays ? "On" : "Off"); }, [](int) { save_replays = !save_replays; setenv("MELEE_SOURCE_RECORD", (save_replays || spectator_wanted()) && !playing ? "1" : "0", 1); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("savereplays", save_replays ? "1" : "0"); }});
 }
 }  // namespace fe::features

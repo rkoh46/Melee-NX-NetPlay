@@ -13,6 +13,7 @@ namespace fe::features {
 void register_options();
 void register_training();
 void register_replays();
+void register_spectator();
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -37,6 +38,13 @@ void training_scene_changed();
 bool replay_playing();               // a .slp is being played back
 bool replay_word(int which, uint32_t* value);   // the recorded option words during playback (0..2)
 bool replay_pad_hook(MuPadStatus pads[4]);      // playback controls; true when the pads must not reach the game as they are
+
+// spectator.cpp: the Slippi spectator server (settings.ini slippi_spectator 1)
+bool spectator_wanted();             // switched on in settings.ini (the server starts with the run)
+bool spectator_on();                 // the server thread runs
+void spectator_write(const uint8_t* data, uint32_t size);   // one recording event, command byte first (any thread)
+void spectator_start_game();
+void spectator_end_game(bool dolphin_closed);
 
 // mods.cpp (play mode's mod layer; the modules may ask it)
 }  // namespace fe::features

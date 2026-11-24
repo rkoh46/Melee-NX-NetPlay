@@ -175,6 +175,16 @@ if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
   # here that name leads to the system's zstd (Linux) or devkitPro's portlib (Switch), so header and library match.
   file(WRITE "${CMAKE_BINARY_DIR}/zstdshim/zstd/zstd.h" "#include <zstd.h>\n")
   target_include_directories(mu_features PRIVATE "${CMAKE_BINARY_DIR}/zstdshim")
+  # spectator.cpp: the Slippi spectator server's own ENet (the netplay object's copy is local to that object) and
+  # nlohmann's JSON, both this repository's port/third_party.
+  set(_enet "${REPO}/port/third_party/enet")
+  set(MU_ENET_SOURCES "${_enet}/callbacks.c" "${_enet}/compress.c" "${_enet}/host.c" "${_enet}/list.c" "${_enet}/packet.c"
+    "${_enet}/peer.c" "${_enet}/protocol.c" "${_enet}/unix.c")
+  target_sources(mu_features PRIVATE ${MU_ENET_SOURCES})
+  set_source_files_properties(${MU_ENET_SOURCES} PROPERTIES
+    COMPILE_DEFINITIONS "HAS_FCNTL=1;HAS_POLL=1;HAS_INET_PTON=1;HAS_INET_NTOP=1;HAS_SOCKLEN_T=1;HAS_MSGHDR_FLAGS=1"
+    COMPILE_OPTIONS "-w;-include;arpa/inet.h")
+  target_include_directories(mu_features PRIVATE "${_enet}/include" "${REPO}/port/third_party")
   if(MU_FE_VARIANT STREQUAL "switch")
     target_include_directories(mu_features SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   endif()

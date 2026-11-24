@@ -44,6 +44,9 @@ the Aurora tree vendored there.
 | [VirtualFriend](https://github.com/agg23/virtualfriend) | The touch layout in `window_sdl.cpp` (not built for the Switch, kept for the shared source) | MIT |
 | [ControllerOverlays](https://github.com/datkat21/ControllerOverlays) | The GameCube controller artwork in `port/app/art/controller` | GPL-3.0 |
 | [Tracy](https://github.com/wolfpld/tracy) | Optional profiler Aurora fetches; off by default | BSD-3-Clause |
+| [zstd](https://github.com/facebook/zstd) | System or devkitPro portlib linked by the native-engine experiment for `.slpz` replays | BSD-3-Clause (or GPL-2.0) |
+| [slpz](https://github.com/AlexanderHarrison/slpz) (Alexander Harrison) | The `.slpz` format, through melee-unlocked's C++ port (`port/app/replay_slpz.cpp`, GPL-2.0-or-later) compiled from the fetched tree by `experiments/native-engine/frontend/src/features/replays.cpp`; nothing copied | MIT or Apache-2.0 (the tool); GPL-2.0-or-later (the port) |
+| melee-unlocked's Slippi spectator server | `experiments/native-engine/frontend/src/features/spectator.cpp` is adapted from its `port/runtime/hle/slippi_spectate.cpp`, a port of Slippi Dolphin's `SlippiSpectateServer` | GPL-2.0-or-later (both sources; header `SPDX-License-Identifier: GPL-2.0-or-later`), used here under GPL-3.0-or-later |
 
 ## Not in this repository
 
