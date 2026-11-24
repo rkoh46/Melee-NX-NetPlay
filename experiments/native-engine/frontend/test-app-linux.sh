@@ -16,6 +16,11 @@
 #   update   a fake build computer on 127.0.0.1 (python http.server) publishes the version after VERSION: the prompt, A, the download, the
 #            check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app closes; then the same version: no prompt
 #   overlaymenu  the menu's Overlays and Picture pages: one row changed on each (saved to settings.ini), screenshots
+#   controls the controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1)
+#            with a saved setup in launcher.ini (X and Y swapped): Start + D-pad Down + Z opens the menu (on the profiles page,
+#            MU_CONTROLS_TEST_PAGE), "Save as a new profile", the bindings page (A bound to Z by pressing it), the setup page
+#            (stick left/right inverted, then radius 90% with the inverted stick), Start closes; then the game gets Y for X, A for Z and the stick inverted
+#            and scaled (the menu's "the game gets" lines); launcher.ini padx.gc1 and the profile file are printed
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
@@ -187,6 +192,55 @@ EOF
       cd /out && /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
     echo "launcher.ini after the menu:"; grep -E "^(volume|hud|keyboard)=" "$dir/melee-nx-netplay/launcher.ini" || true
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
+    ;;
+  controls)
+    python3 -I - "$root/controls-script.txt" <<'PY'
+import sys
+lines = ["@scene 01 00"]
+t = 300
+def press(what, hold=4, gap=14):
+    global t
+    lines.extend([f"{t} {what}", f"{t+hold}"]); t += hold + gap
+press("START+DD+Z", 6, 40)                  # the chord: the menu opens on Controller profiles
+for i in range(4): press("sy=-127")         # down to "Save as a new profile"
+press("A", 4, 40)
+press("B", 4, 30)                           # back to the main page, on Controller profiles
+press("sy=127")                             # up: Controller bindings
+press("A", 4, 40)
+for i in range(2): press("sy=-127")         # row 2: A (row 1 is the hint)
+press("A", 4, 30)                           # capture starts (waits for A to be let go)
+press("Z", 6, 40)                           # A is now bound to Z
+press("B", 4, 30)                           # main page, on Controller bindings
+press("sy=127")                             # up: Controller setup
+press("Z", 4, 40)                           # Z is A now
+for i in range(2): press("sy=-127")         # Invert stick left/right
+press("sx=127", 4, 30)
+for i in range(4): press("sy=-127")         # Stick radius
+for i in range(10): press("sx=127", 3, 9)   # 100 -> 90: the menu reads the stick as the game will, so right is now left
+t += 60
+press("START", 4, 60)                       # close
+press("X", 6, 30)                           # the game gets Y (the saved swap)
+lines.extend([f"{t} sx=127", f"{t+10} sx=127 Y", f"{t+20} sx=127", f"{t+30}"]); t += 60   # stick right, inverted and scaled; Y gives X
+press("Z", 6, 30)                           # the game gets A and Z (the new binding; Z keeps its own); A opens Unranked
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    make_app "$dir" 1 1900 "$root/controls-script.txt" "padx.gc1=m2=2048,m3=1024"
+    run "$dir" 'shots 2; cd /out && MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
+    grep -E "controls:|menu: (opened|closed|the game gets)" "$dir/console.log" | cut -c1-160
+    echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
+    # Second start without the setup: the chord, "Load this profile" (GameCube 1, saved above with the X/Y swap), Start;
+    # then X reaches the game as Y again.
+    python3 -I - "$dir/controls-load-script.txt" <<'PY'
+import sys
+lines = ["@scene 01 00", "300 START+DD+Z", "306", "350 sy=-127", "354", "370 sy=-127", "374", "400 A", "404", "460 START", "464",
+         "520 X", "526"]
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    sed -i.bak -e '/^padx\./d' -e 's|^script=.*|script=/out/controls-load-script.txt|' -e 's/^frames=.*/frames=900/' "$dir/melee-nx-netplay/launcher.ini"
+    run "$dir" 'cd /out && MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
+    echo "second start:"; grep -E "controls:|menu: the game gets" "$dir/console2.log" | cut -c1-160
+    echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
+    for f in "$dir"/melee-nx-netplay/ControllerProfiles/*.profile; do [ -f "$f" ] && { echo "== $(basename "$f")"; grep -vE "^opt|^app" "$f" | tr '\n' ' '; echo; }; done
     ;;
   overlaymenu)
     # The in-game menu's Overlays and Picture pages (feature module pages 4 and 5, after Game, Training and Replays): down

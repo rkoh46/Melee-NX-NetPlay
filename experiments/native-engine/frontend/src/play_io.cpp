@@ -262,8 +262,7 @@ extern "C" int mu_frontend_pad_read(MuPadStatus out[4]) {
     {
       std::lock_guard<std::mutex> lock(fe::input_mutex);
       fe::last_poll_retrace.store(host::retrace_count(), std::memory_order_relaxed);
-      host::input_poll(pads);
-      if (fe::options.app) fe::app_pad_postprocess(pads);   // the player's remapping, deadzones (launcher.ini pad.<guid>)
+      host::input_poll(pads);   // the player's remapping and controller setup are applied inside (menu_frame below)
     }
     static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
     std::memcpy(out, pads, sizeof pads);
@@ -341,7 +340,6 @@ extern "C" int mu_net_suggest_read(int port, uint8_t out[8]) {
     fe::suggestion_read = true;
     host::input_poll(pads);
     fe::suggestion_read = false;
-    if (fe::options.app) fe::app_pad_postprocess(pads);
     if (!fe::menu_masks(pads)) return 0;
   }
   const host::PadState& p = pads[port];
@@ -383,13 +381,28 @@ void log_changes(const PadState pads[4], const char* who) {
 }
 }  // namespace
 void menu_frame(PadState pads[4]) {
+  // The app: the player's remapping and controller setup (app.cpp, controls.cpp) come first, so the menu, its hand-over
+  // masks and the chords see the pads as the game would. Lane 1: the input-suggestion reads keep their own filter state.
+  PadState unmapped[4];
+  if (fe::options.app) {
+    std::memcpy(unmapped, pads, sizeof unmapped);
+    fe::app_pad_postprocess(pads, fe::suggestion_read ? 1 : 0);
+  }
   if (fe::suggestion_read) return;                 // a read for an input suggestion: fe::menu_masks applies the masks
   if (fe::options.app) {
     if (!fe::running.load(std::memory_order_relaxed)) return;
+    fe::controls_chords(pads);                     // Start + D-pad Down / Up + Z (upstream's chords), Training's lone Start
     PadState raw[4];
     std::memcpy(raw, pads, sizeof raw);
     if (menu_was_open) log_changes(raw, "the menu reads");
-    app_menu_frame(pads);
+    if (fe::controls_capture_frame(unmapped)) {    // a binding is being captured: the press is not the menu's
+      PadState neutral[4];
+      for (int i = 0; i < 4; ++i) { neutral[i] = {}; neutral[i].err = pads[i].err; }
+      app_menu_frame(neutral);
+      for (int i = 0; i < 4; ++i) { pads[i] = neutral[i]; }
+    } else {
+      app_menu_frame(pads);
+    }
     const bool open = menu_is_open();
     if (menu_was_open && !open) {
       for (int i = 0; i < 4; ++i) {

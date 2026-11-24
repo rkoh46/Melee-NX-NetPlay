@@ -24,6 +24,7 @@ everything built from them live under `build/native-engine/` (gitignored) and ar
 | `reference/*.csv.gz` | The x86-64 reference state digests (9000 retraces per script), embedded in the runner so it can name the first differing retrace. Measurement output, not game data. |
 | `scripts/make_vs4_busy.py` | Generates the four-player script from `parity_vs_onett.txt`. |
 | `tools/compare_digests.py`, `tools/digest_hash.py` | Compare two digest CSVs row by row; hash one as the runner does. |
+| `tools/controls_check.cpp`, `.sh` | Checks of the app's controller setup (frontend/src/controls_core.h, controls_files.cpp) in the container: box coordinates, filters, bindings, profiles, Dolphin import. |
 | `addrprobe/` | The earlier address probe. |
 
 ## Design

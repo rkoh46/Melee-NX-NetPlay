@@ -299,6 +299,8 @@ void draw_stats(ImDrawList* dl, const overlay::Config& c, const overlay::Snapsho
 #endif
     }
     lines.push_back({line, IM_COL32(200, 206, 218, 255)});
+    // The system's controllers (Pro Controller, Joy-Con, the Switch Online GameCube controller): controls.cpp.
+    for (const std::string& l : controls_rate_lines()) lines.push_back({l, IM_COL32(200, 206, 218, 255)});
   }
   float widest = 0;
   for (auto& l : lines) widest = std::max(widest, text_width(size, l.first.c_str()));

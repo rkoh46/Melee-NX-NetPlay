@@ -137,6 +137,8 @@ else()
   # pass), the controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
   target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${FE}/overlay_draw.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
     "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
+  # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
+  target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # game_menu.cpp's menu_frame becomes app_menu_frame (play_io.cpp's menu_frame calls it in app mode). Off the console
   # it lays its rows out as on the console (MU_MENU_CONSOLE), so the Linux test sees the console's menu.
   set(_menu_defs "menu_frame=app_menu_frame;MELEE_PORT_VERSION=\"${MU_APP_VERSION}\"")

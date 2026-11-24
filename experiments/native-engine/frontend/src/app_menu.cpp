@@ -244,6 +244,9 @@ void app_menu_setup() {
     };
     extra.push_back(std::move(page));
   }
+  // The controller setup beyond the Controls page's button remap (controls.cpp): setup, bindings, profiles; last, so
+  // they sit right above Controls.
+  controls_menu_pages(&extra);
   host::menu_set_extra_pages(std::move(extra));
   say("app: in-game menu ready (L + R + Start): %zu settings pages, %zu feature pages", pages().size(), groups.size());
 }

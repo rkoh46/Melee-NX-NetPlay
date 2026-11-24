@@ -117,6 +117,7 @@ sync_tree() {
   for f in game_menu.cpp game_menu.h switch_signin.cpp; do cp "$repo/port/runtime/host/$f" "$gen/appsrc/port/runtime/host/$f"; done
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0104-game-menu-host-pages.patch"
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0105-switch-signin-off-console.patch"
+  patch -s -p1 -d "$gen/appsrc" < "$here/patches/0111-game-menu-open-page.patch"   # menu_open_extra (the Start + D-pad Up + Z chord)
   for f in game_menu.cpp game_menu.h switch_signin.cpp; do cmp -s "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f" || cp "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f"; done
   rm -rf "$gen/appsrc"
   # Aurora (build/sdk/aurora, the Switch-patched source both picture variants compile) with this frontend's Aurora
