@@ -581,6 +581,7 @@ void register_training() {
                   [] { return std::to_string(pc.rng_seed) + (pc.rng_mode == MU_PC_RNG_GAME ? " (not used)" : ""); },
                   [](int d) { pc.rng_seed = uint8_t(pc.rng_seed + (d < 0 ? 255 : 1)); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("practice_rng_seed", std::to_string(pc.rng_seed)); }});
+  add_slot_rows<0>(); add_slot_rows<1>(); add_slot_rows<2>();
   add_pc_rows(std::make_integer_sequence<int, int(sizeof kPcRows / sizeof kPcRows[0])>{});
   add_throw_row<0>(); add_throw_row<1>(); add_throw_row<2>(); add_throw_row<3>();
   add_menu_entry({"Training", "Practice CPU: every setting back to the defaults", nullptr, nullptr,
@@ -591,6 +592,5 @@ void register_training() {
                     say("training: practice CPU settings back to the defaults");
                   },
                   [](fe::features::MenuEntry::Write w) { w("practicecpu", to_text(pc)); w("practicecpu_preset", "-1"); }});
-  add_slot_rows<0>(); add_slot_rows<1>(); add_slot_rows<2>();
 }
 }  // namespace fe::features
