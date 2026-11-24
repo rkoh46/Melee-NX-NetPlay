@@ -150,6 +150,7 @@ enum class AppStart { Play, PlayOffline, Quit };
 // app_services.cpp in the services program with a picture; null (weak) in the others. The update check against
 // launcher.ini's update_host (prompt, download, swap), then the sign-in screen when `need_signin`.
 __attribute__((weak)) AppStart app_services_run(bool check_update, bool need_signin, const std::string& user_dir);
+extern std::string home_replay;               // play_main.cpp: a replay the home screen's Replay Viewer chose
 __attribute__((weak)) bool app_notice_run(const std::string& headline, const std::vector<std::string>& lines);
 
 // ---- frontend.cpp: the render thread before the game (app mode) ----

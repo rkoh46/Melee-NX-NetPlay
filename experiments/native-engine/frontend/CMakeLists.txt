@@ -133,19 +133,15 @@ else()
   # compiled from the verbatim copies build.sh sync makes in ${GEN}/app (see there).
   target_sources(mu_gx PRIVATE "${GEN}/gx_aurora.cpp"   # with patches/0106
     "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
-  # The app's in-game menu and HUD (game_menu.cpp with patches/0104, drawn by overlay_imgui.cpp through Aurora's ImGui
-  # pass), the controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
-  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${FE}/overlay_draw.cpp" "${GEN}/app/game_menu.cpp" "${GEN}/app/overlay_imgui.cpp"
+  # The app's in-game menu: melee-unlocked's settings panel (mu_panel.cpp, its drawing code from the fetched tree in
+  # ${GEN}/mu_ui, scripts/mu_ui_extract.py) behind the app's menu interface (game_menu.h, the build-time copy with
+  # patches/0104 and 0111; game_menu.cpp itself is no longer built). The HUD line through overlay_imgui.cpp, the
+  # controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
+  target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${FE}/overlay_draw.cpp" "${FE}/mu_panel.cpp" "${GEN}/app/overlay_imgui.cpp"
     "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
+  set_source_files_properties("${FE}/mu_panel.cpp" PROPERTIES INCLUDE_DIRECTORIES "${GEN}/mu_ui")
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
-  # game_menu.cpp's menu_frame becomes app_menu_frame (play_io.cpp's menu_frame calls it in app mode). Off the console
-  # it lays its rows out as on the console (MU_MENU_CONSOLE), so the Linux test sees the console's menu.
-  set(_menu_defs "menu_frame=app_menu_frame;MELEE_PORT_VERSION=\"${MU_APP_VERSION}\"")
-  if(NOT MU_FE_VARIANT STREQUAL "switch")
-    list(APPEND _menu_defs MU_MENU_CONSOLE)
-  endif()
-  set_source_files_properties("${GEN}/app/game_menu.cpp" PROPERTIES COMPILE_DEFINITIONS "${_menu_defs}")
   # overlay_imgui.cpp's empty controller list stands aside for app.cpp's (the SDL gamepads Aurora opened).
   set_source_files_properties("${GEN}/app/overlay_imgui.cpp" PROPERTIES COMPILE_DEFINITIONS
     "window_list_controllers=overlay_unused_list_controllers;window_capture_input=overlay_unused_capture_input;window_test_rumble=overlay_unused_test_rumble")
@@ -206,10 +202,10 @@ endif()
 # computer (self_update*.cpp) and the Slippi sign-in (switch_signin.cpp with patches/0105, slippi_login.cpp, HTTPS
 # through libcurl). The netplay object has its own copies of the last two, local to it.
 if(NOT MU_FE_VARIANT STREQUAL "null")
-  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${GEN}/app/switch_signin.cpp"
+  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${FE}/mu_home.cpp" "${GEN}/app/switch_signin.cpp"
     "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp")
   target_include_directories(mu_app_services PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${APPSRC}"
-    "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi")
+    "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi" "${GEN}/mu_ui")
   target_compile_definitions(mu_app_services PRIVATE MU_FE_AURORA=1 MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
   target_compile_options(mu_app_services PRIVATE -O2 -g -Wall -fno-strict-aliasing)
   target_link_libraries(mu_app_services PRIVATE aurora::core aurora::gx aurora::pad SDL3::SDL3-static)
@@ -273,11 +269,11 @@ function(mu_program target netplay_object suffix)
       # The runner's text console would take the display: see frontend_main.cpp.
       -Wl,--wrap=consoleInit -Wl,--wrap=consoleUpdate -Wl,--wrap=consoleExit)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME mu-native-gfx${suffix})
-    # The services program is the app: Melee-NX-NetPlay with the app's icon (build/icon.jpg when the app's build drew one,
-    # as port/CMakeLists.txt chooses it; the unbranded switch/icon.jpg otherwise).
+    # The services program is the app: melee-unlocked's own icon (build.sh sync converts its melee_unlocked.ico from the
+    # fetched tree into gen/mu_ui/icon.jpg); the unbranded switch/icon.jpg otherwise.
     set(_icon "${REPO}/switch/icon.jpg")
-    if(suffix AND EXISTS "${REPO}/build/icon.jpg")
-      set(_icon "${REPO}/build/icon.jpg")
+    if(suffix AND EXISTS "${GEN}/mu_ui/icon.jpg")
+      set(_icon "${GEN}/mu_ui/icon.jpg")
     endif()
     if(suffix)
       nx_generate_nacp(mu-native-gfx${suffix}.nacp NAME "Melee-NX-NetPlay" AUTHOR "Melee-NX-NetPlay" VERSION "${MU_APP_VERSION}")

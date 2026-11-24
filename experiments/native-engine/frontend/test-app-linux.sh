@@ -5,22 +5,24 @@
 # launcher.ini naming the disc (mounted read-only) and the test aids the app itself reads (script=, frames=).
 #   ./test-app-linux.sh /path/to/disc-folder CASE...
 # Cases:
-#   boot     no arguments, a made-up user.json: the game boots into its menus (Slippi's Online Play page)
-#   menu     as boot, and the controller script opens the in-game menu (L + R + Start), lowers the volume, lowers the music
-#            on the Game options page, turns the HUD on, turns on Training's "Inputs and frame advantage" (a feature module's
-#            row, saved as lab_overlay 1) and closes it; then a second start reads the changes back
-#   handover the menu with the D-pad, closed with B held for 12 retraces, then A in the game: the D-pad moves the cursor and
-#            changes the volume, the closing B never reaches the game (it stays on Online Play), the later A does (Unranked
-#            opens Slippi's character select, scene 8)
-#   signin   no user.json: the sign-in screen comes first; B (Play offline) through the test pad file starts the game offline
-#   update   a fake build computer on 127.0.0.1 (python http.server) publishes the version after VERSION: the prompt, A, the download, the
-#            check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app closes; then the same version: no prompt
-#   overlaymenu  the menu's Overlays and Picture pages: one row changed on each (saved to settings.ini), screenshots
-#   controls the controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1)
-#            with a saved setup in launcher.ini (X and Y swapped): Start + D-pad Down + Z opens the menu (on the profiles page,
-#            MU_CONTROLS_TEST_PAGE), "Save as a new profile", the bindings page (A bound to Z by pressing it), the setup page
-#            (stick left/right inverted, then radius 90% with the inverted stick), Start closes; then the game gets Y for X, A for Z and the stick inverted
-#            and scaled (the menu's "the game gets" lines); launcher.ini padx.gc1 and the profile file are printed
+#   (The home screen and the settings panel are melee-unlocked's, src/mu_home.cpp and src/mu_panel.cpp; the cases drive them through
+#   the test pad file, MELEE_PAD_FILE, and follow the panel's focus by its "settings: focus" log lines.)
+#   boot     no arguments, a made-up user.json: the home screen, A (PLAY): the game boots into its menus (Slippi's Online Play page)
+#   home     the home screen's pages (Play, Replay Viewer, Mods), the panel from its Settings page, PLAY
+#   panel    the panel in the game: each of its eight categories (screenshots)
+#   menu     the panel (L + R + Start): AUDIO Volume 100 -> 70, Music volume 100 -> 80, OVERLAYS Performance HUD on, the Practice
+#            chord opens GAME on Training: "Inputs and frame advantage" on (saved as lab_overlay 1); a second start reads them back
+#   handover the panel with the D-pad, closed with B held for 12 retraces, then A in the game: the closing B never reaches the game
+#            (it stays on Online Play), the later A does (Unranked opens Slippi's character select, scene 8)
+#   signin   no user.json: the home screen's Sign in opens the sign-in screen; B (Play offline) back to the home screen; PLAY: offline
+#   update   a fake build computer on 127.0.0.1 (python http.server) publishes the version after VERSION: offered on the home screen's
+#            Play page, "Update and restart", the download, the check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app
+#            closes; then the same version: nothing offered, PLAY
+#   overlaymenu  the panel's OVERLAYS page and VIDEO's Picture section: one row changed on each (saved to settings.ini), screenshots
+#   controls the controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1) with a
+#            saved setup in launcher.ini (X and Y swapped): Start + D-pad Down + Z opens the panel on Controller profiles
+#            (MU_CONTROLS_TEST_PAGE), "Save as a new profile", the A binding pressed onto Z, stick left/right inverted, Stick radius 90
+#            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
@@ -64,7 +66,7 @@ esac
 mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FIRST"
 run() {
   local dir=$1 body=$2
-  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -e LP_NUM_THREADS -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$here/../tools:/t:ro" -v "$dir:/out" \
+  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-app}-$case-$$-$RANDOM" --network none -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -e LP_NUM_THREADS -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$here/../tools:/t:ro" -v "$dir:/out" \
     -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99
@@ -74,6 +76,10 @@ run() {
       shot() { xwd -root -silent 2>/dev/null | convert xwd:- "/out/shots/$1.png" 2>/dev/null || true; }
       wait_log() { for i in $(seq $(( $3 * 10 ))); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; echo "TIMEOUT waiting for: $2" >> /out/harness.log; return 1; }
       pad() { printf "%s\n" "$1" > /out/pad.txt; }
+      # The test pad file (MELEE_PAD_FILE) drives the home screen and the settings panel: tap BUTTONS; focus LABEL [BUTTON] taps
+      # (D-pad down by default) until the panel names LABEL as the focused row ("settings: focus" in the log).
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep ${3:-0.5}; }
+      focus() { for i in $(seq 70); do [ "$(grep -a "settings: focus" ${LOG:-/out/console.log} | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1" >> /out/harness.log; return 1; }
       '"$body" || echo "test-app-linux: container ended with $?"
 }
 
@@ -93,222 +99,171 @@ for case in "$@"; do
   dir="$root/$case"
   case "$case" in
   boot)
+    # No arguments, a made-up user.json: melee-unlocked's launcher comes up on its Play page with PLAY focused; A starts the game.
     make_app "$dir" 1 1500 -
-    run "$dir" 'shots 4; cd /out && /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""; shots 4
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home; tap A; }
+      wait $app'
     ;;
   menu)
-    cat > "$root/menu-script.txt" <<'EOF'
-# The in-game menu from the main menu (scene 01 00): L + R + Start held, then the console's rows: Texture filtering,
-# Aspect ratio, Screen filter, Antialiasing, Volume (4 down), Online delay, Light shield, Stick, then the four settings
-# pages, the feature modules' three pages (Game, Training, Replays), Controls, Performance HUD, Resume, Quit.
-@scene 01 00
-300 L+R+START
-345
-360 sy=-127
-364
-372 sy=-127
-376
-384 sy=-127
-388
-396 sy=-127
-400
-410 sx=-127
-414
-424 sx=-127
-428
-438 sx=-127
-442
-452 sy=-127
-456
-464 sy=-127
-468
-476 sy=-127
-480
-488 sy=-127
-492
-504 A
-508
-520 sy=-127
-524
-532 sy=-127
-536
-544 sy=-127
-548
-560 sx=-127
-564
-574 sx=-127
-578
-600 B
-604
-616 sy=-127
-620
-628 sy=-127
-632
-640 sy=-127
-644
-652 sy=-127
-656
-664 sy=-127
-668
-676 sy=-127
-680
-688 sy=-127
-692
-700 sy=-127
-704
-716 sx=127
-720
-# up 3 to the Training page (a feature module's), A, down 4 to "Inputs and frame advantage", right: lab_overlay 1
-728 sy=127
-732
-740 sy=127
-744
-752 sy=127
-756
-768 A
-772
-784 sy=-127
-788
-796 sy=-127
-800
-808 sy=-127
-812
-820 sy=-127
-824
-836 sx=127
-840
-860 START
-864
-EOF
-    make_app "$dir" 1 2100 "$root/menu-script.txt"
-    run "$dir" 'cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+    # The settings panel in the game (L + R + Start on the main menu), through the test pad file: AUDIO > Volume 100 -> 70 (A, then
+    # left three times), Music volume 100 -> 80; OVERLAYS > Performance HUD on; the Practice chord (Start + D-pad Up + Z) opens GAME on
+    # its Training section: "Inputs and frame advantage" on (a feature module's row, saved as lab_overlay 1); Start closes it. A
+    # second start reads the changes back.
+    make_app "$dir" 1 4500 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "menu: opened" 120 && { sleep 2.5; shot menu-main; }
-      wait_log /out/console.log "play: settings: music" 60 && { sleep 0.3; shot menu-page; }
-      wait_log /out/console.log "menu: closed" 60 && { sleep 1.5; shot hud-on; }
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "L R START"; sleep 1.2; pad ""; sleep 1.5; shot menu-main
+      tap DD; tap A; focus Volume; tap A; tap DL; tap DL; tap DL; sleep 0.5; shot menu-volume; tap B
+      tap A; focus "Music volume"; tap DL; tap DL; sleep 0.5; shot menu-page; tap B
+      tap DD; tap DD; tap DD; tap A; focus "Performance HUD"; tap A; tap B; sleep 0.5
+      tap START; sleep 1
+      pad "START DU Z"; sleep 0.3; pad ""; sleep 1.5; focus "Inputs and frame advantage"; tap A; sleep 0.5; shot menu-training
+      tap START; sleep 2; shot hud-on
       wait $app
-      # Second start: what the menu wrote is read back.
-      sed -i "s/^script=.*//" /out/melee-nx-netplay/launcher.ini; sed -i "s/^frames=.*/frames=400/" /out/melee-nx-netplay/launcher.ini
+      # Second start: what the panel wrote is read back.
+      sed -i "s/^frames=.*/frames=400/" /out/melee-nx-netplay/launcher.ini
       cd /out && /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
     echo "launcher.ini after the menu:"; grep -E "^(volume|hud|keyboard)=" "$dir/melee-nx-netplay/launcher.ini" || true
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
+    grep -E "launcher.ini:|music [0-9]+%" "$dir/console2.log" | cut -c1-200 | head -3
     ;;
   controls)
-    python3 -I - "$root/controls-script.txt" <<'PY'
-import sys
-lines = ["@scene 01 00"]
-t = 300
-def press(what, hold=4, gap=14):
-    global t
-    lines.extend([f"{t} {what}", f"{t+hold}"]); t += hold + gap
-press("START+DD+Z", 6, 40)                  # the chord: the menu opens on Controller profiles
-for i in range(4): press("sy=-127")         # down to "Save as a new profile"
-press("A", 4, 40)
-press("B", 4, 30)                           # back to the main page, on Controller profiles
-press("sy=127")                             # up: Controller bindings
-press("A", 4, 40)
-for i in range(2): press("sy=-127")         # row 2: A (row 1 is the hint)
-press("A", 4, 30)                           # capture starts (waits for A to be let go)
-press("Z", 6, 40)                           # A is now bound to Z
-press("B", 4, 30)                           # main page, on Controller bindings
-press("sy=127")                             # up: Controller setup
-press("Z", 4, 40)                           # Z is A now
-for i in range(2): press("sy=-127")         # Invert stick left/right
-press("sx=127", 4, 30)
-for i in range(4): press("sy=-127")         # Stick radius
-for i in range(10): press("sx=127", 3, 9)   # 100 -> 90: the menu reads the stick as the game will, so right is now left
-t += 60
-press("START", 4, 60)                       # close
-press("X", 6, 30)                           # the game gets Y (the saved swap)
-lines.extend([f"{t} sx=127", f"{t+10} sx=127 Y", f"{t+20} sx=127", f"{t+30}"]); t += 60   # stick right, inverted and scaled; Y gives X
-press("Z", 6, 30)                           # the game gets A and Z (the new binding; Z keeps its own); A opens Unranked
-open(sys.argv[1], "w").write("\n".join(lines) + "\n")
-PY
-    make_app "$dir" 1 1900 "$root/controls-script.txt" "padx.gc1=m2=2048,m3=1024"
-    run "$dir" 'shots 2; cd /out && MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
+    # The controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1), a saved setup
+    # in launcher.ini (X and Y swapped), through the test pad file: Start + D-pad Down + Z opens the panel on the Controller profiles
+    # section (MU_CONTROLS_TEST_PAGE); "Save as a new profile"; up to the bindings, A bound to Z by pressing it; up to the setup,
+    # stick left/right inverted (Z, which is A now), Stick radius 100 -> 90 with the inverted stick; Start closes. Then the game gets
+    # Y for X, A for Z and the stick inverted and scaled (the "the game gets" lines). A second start loads the profile.
+    make_app "$dir" 1 3600 - "padx.gc1=m2=2048,m3=1024" home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles"; pad ""; shots 3
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
+      focus "Save as a new profile"; tap A; sleep 0.5
+      focus A DU; tap A; sleep 0.8; tap Z 0.3; sleep 1
+      focus "Invert stick left/right" DU; tap Z; sleep 0.8
+      focus "Stick radius"; for i in 1 2 3 4 5 6 7 8 9 10; do tap "sx=127" 0.12 0.35; done; sleep 0.5; shot setup
+      tap START; sleep 1.5
+      tap X 0.2; pad "sx=127"; sleep 0.2; pad "sx=127 Y"; sleep 0.2; pad "sx=127"; sleep 0.2; pad ""; sleep 1; tap Z 0.2
+      wait $app'
     grep -E "controls:|menu: (opened|closed|the game gets)" "$dir/console.log" | cut -c1-160
     echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
-    # Second start without the setup: the chord, "Load this profile" (GameCube 1, saved above with the X/Y swap), Start;
-    # then X reaches the game as Y again.
-    python3 -I - "$dir/controls-load-script.txt" <<'PY'
-import sys
-lines = ["@scene 01 00", "300 START+DD+Z", "306", "350 sy=-127", "354", "370 sy=-127", "374", "400 A", "404", "460 START", "464",
-         "520 X", "526"]
-open(sys.argv[1], "w").write("\n".join(lines) + "\n")
-PY
-    sed -i.bak -e '/^padx\./d' -e 's|^script=.*|script=/out/controls-load-script.txt|' -e 's/^frames=.*/frames=900/' "$dir/melee-nx-netplay/launcher.ini"
-    run "$dir" 'cd /out && MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
+    # Second start without the setup: the chord, "Load this profile" (GameCube 1, saved above with the X/Y swap), Start; then X
+    # reaches the game as Y again.
+    sed -i.bak -e '/^padx\./d' -e 's/^frames=.*/frames=2400/' "$dir/melee-nx-netplay/launcher.ini"
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" LOG=/out/console2.log; pad ""
+      cd /out && (/b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log) &
+      app=$!
+      wait_log /out/console2.log "online menu: row 1" 120 && sleep 3
+      pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
+      focus "Load this profile"; tap A; sleep 0.5; tap START; sleep 1.5; tap X 0.2
+      wait $app'
     echo "second start:"; grep -E "controls:|menu: the game gets" "$dir/console2.log" | cut -c1-160
     echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
     for f in "$dir"/melee-nx-netplay/ControllerProfiles/*.profile; do [ -f "$f" ] && { echo "== $(basename "$f")"; grep -vE "^opt|^app" "$f" | tr '\n' ' '; echo; }; done
     ;;
   overlaymenu)
-    # The in-game menu's Overlays and Picture pages (feature module pages 4 and 5, after Game, Training and Replays): down
-    # 15 rows from the first, A; on Overlays, right on the first row (input display on); B; down one more, A; on Picture,
-    # down two rows (Internal resolution) and right; B; Start closes the menu.
-    python3 -I - "$root/overlaymenu-script.txt" <<'PY'
-import sys
-lines = ["@scene 01 00", "300 L+R+START", "345"]
-t = 360
-for i in range(15): lines += [f"{t} sy=-127", f"{t+4}"]; t += 12
-lines += [f"{t+20} A", f"{t+24}"]; t += 120
-lines += [f"{t} sx=127", f"{t+4}"]; t += 120
-lines += [f"{t} B", f"{t+4}"]; t += 30
-lines += [f"{t} sy=-127", f"{t+4}", f"{t+20} A", f"{t+24}"]; t += 120
-for i in range(2): lines += [f"{t} sy=-127", f"{t+4}"]; t += 12
-lines += [f"{t} sx=127", f"{t+4}"]; t += 120
-lines += [f"{t} B", f"{t+4}", f"{t+40} START", f"{t+44}"]
-open(sys.argv[1], "w").write("\n".join(lines) + "\n")
-PY
-    make_app "$dir" 1 1800 "$root/overlaymenu-script.txt"
-    run "$dir" 'shots 1; cd /out && /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
+    # The panel's OVERLAYS page (Controller input display on) and its VIDEO page's Picture section (Internal resolution one step to
+    # the right), through the test pad file; each saved to settings.ini.
+    make_app "$dir" 1 3600 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "L R START"; sleep 1.2; pad ""; sleep 1.5
+      tap DD; tap DD; tap DD; tap DD; tap A; focus "Controller input display"; tap A; sleep 0.8; shot overlays; tap B
+      tap DU; tap DU; tap DU; tap DU; tap A; focus "Internal resolution"; tap DR; sleep 0.8; shot picture; tap B
+      tap START; sleep 3; shot closed
+      wait $app'
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
     ;;
   handover)
-    cat > "$root/handover-script.txt" <<'EOF'
-# The console's sequence: open the menu, D-pad down to Volume (4 rows), D-pad left 3 times (100 -> 70), close it with B
-# held for 12 retraces, then A in the game (on Online Play: Unranked).
-@scene 01 00
-300 L+R+START
-345
-360 DD
-364
-372 DD
-376
-384 DD
-388
-396 DD
-400
-410 DL
-414
-424 DL
-428
-438 DL
-442
-470 B
-482
-560 A
-566
-EOF
-    [ -z "${MU_HANDOVER_SCRIPT:-}" ] || cp "$MU_HANDOVER_SCRIPT" "$root/handover-script.txt"   # another sequence (diagnosis)
-    make_app "$dir" 1 1200 "$root/handover-script.txt" ${MU_HANDOVER_INI:-}
-    run "$dir" 'cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+    # Open the panel, D-pad down to AUDIO, A, Volume (A, then D-pad left three times: 100 -> 70), B back to the categories, then
+    # B held for 12 retraces closes it, then A in the game (on Online Play: Unranked). The closing B must not reach the game; the A must.
+    make_app "$dir" 1 2400 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "menu: opened" 120 && { sleep 2; shot menu-dpad; }
-      wait_log /out/console.log "menu: closed with" 60 && { sleep 1; shot after-close; }
-      wait_log /out/console.log "scene 8/0" 60 && { sleep 2; shot after-a; }
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "L R START"; sleep 1.2; pad ""; sleep 1.5
+      tap DD; tap A; focus Volume; tap A; tap DL; tap DL; tap DL; sleep 0.5; shot menu-dpad; tap B
+      pad B; sleep 0.2; pad ""; sleep 1
+      wait_log /out/console.log "menu: closed with" 10 && { sleep 1; shot after-close; }
+      sleep 1; tap A
+      wait_log /out/console.log "scene 8/0" 30 && { sleep 2; shot after-a; }
       wait $app'
     echo "launcher.ini volume: $(grep '^volume=' "$dir/melee-nx-netplay/launcher.ini")"
-    grep -E "menu:|play: scene|online menu" "$dir/console.log" | cut -c1-160
+    grep -E "menu: (opened|closed|L\+R)|play: scene|online menu" "$dir/console.log" | cut -c1-160
+    ;;
+  home)
+    # melee-unlocked's launcher as the home screen, driven by the test pad file only (MELEE_PAD_FILE): every page, the settings
+    # panel opened from its Settings page (a row changed there), then PLAY; screenshots shots/home-*.png.
+    make_app "$dir" 1 900 -
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.8; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home-play
+        tap B; tap DD; tap DD; sleep 3; shot home-replays; tap DD; sleep 1; shot home-mods
+        tap DU; tap DU; tap A; sleep 3; shot home-settings; tap A; sleep 2; shot home-settings-video
+        tap B; tap B; sleep 2; shot home-after-settings
+        tap DU; tap A; sleep 1; shot home-play-focus; tap A; }
+      wait_log /out/console.log "play: options" 60 && sleep 12 && shot game
+      wait $app'
+    ;;
+  panel)
+    # melee-unlocked's settings panel in the game, driven by the test pad file only: L + R + Start on the main menu, each of its
+    # eight categories (A, two rows down, B, down), Start closes it; screenshots shots/panel-*.png. The home screen is skipped.
+    make_app "$dir" 1 7000 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.8; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "play: options" 120 && sleep 20
+      shot game-before
+      pad "L R START"; sleep 1.2; pad ""; sleep 2; shot panel-home
+      for i in 0 1 2 3 4 5 6 7; do
+        tap A; sleep 2; shot "panel-$i"
+        tap DD; tap DD; sleep 0.5; shot "panel-$i-down"
+        tap B; sleep 1; tap DD
+      done
+      tap START; sleep 2; shot game-after
+      wait $app'
+    ;;
+  explore)
+    # Diagnosis: walks every category of the panel row by row (the log's "settings: focus" lines name each row in order).
+    python3 -I - "$root/explore-script.txt" <<'PY'
+import sys
+lines = ["@scene 01 00", "300 L+R+START", "345"]
+t = 380
+for cat in range(8):
+    lines += [f"{t} A", f"{t+4}", f"{t+5} # category {cat}"]; t += 40
+    for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 34): lines += [f"{t} DD", f"{t+4}"]; t += 12
+    lines += [f"{t} B", f"{t+4}"]; t += 40
+    lines += [f"{t} DD", f"{t+4}"]; t += 30
+open(sys.argv[1], "w").write("\n".join(l for l in lines if "#" not in l) + "\n")
+PY
+    make_app "$dir" 1 6000 "$root/explore-script.txt" home=0
+    run "$dir" 'cd /out && /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
+    grep -E "settings: focus|menu: (opened|closed)" "$dir/console.log"
     ;;
   signin)
+    # No user.json: the home screen says so on its Play page; Sign in (D-pad down from PLAY, A) opens the sign-in screen; B (Play
+    # offline) returns to the home screen; up to PLAY, A: the game starts offline (Online Play shows Log-in).
     make_app "$dir" 0 1200 -
     run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "the sign-in screen comes first" 120 && { sleep 4; shot signin; pad "B"; }
-      wait_log /out/console.log "sign-in: playing offline" 30 && rm -f /out/pad.txt
-      sleep 12; shot game-offline
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home-no-account; tap DD; tap A; }
+      wait_log /out/console.log "home: Sign in" 30 && { sleep 3; shot signin; tap B; }
+      wait_log /out/console.log "sign-in: playing offline" 30 && { sleep 2; tap DU; tap A; }
+      wait_log /out/console.log "home: PLAY" 30 && rm -f /out/pad.txt
+      sleep 14; shot game-offline
       wait $app'
     ;;
   update)
@@ -324,12 +279,14 @@ EOF
       sleep 1
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "update: the build computer has version" 60 && { sleep 3; shot prompt; pad "A"; sleep 0.5; pad ""; }
-      wait_log /out/console.log "the new version is" 60 && { sleep 2; shot installed; pad "A"; sleep 0.5; pad ""; }
+      wait_log /out/console.log "update: offered on the Play page" 60 && { sleep 3; shot prompt; tap DD; tap A; }
+      wait_log /out/console.log "the new version is" 60 && { sleep 2; shot installed; tap A; }
       wait $app
-      # The same version published: no prompt, the game starts.
+      # The same version published: no update offered, PLAY starts the game.
       sed -i "s/\"$NEWER\"/\"$SAME\"/" /out/server/latest.json
-      cd /out && /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log
+      cd /out && (/b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log) & app=$!
+      LOG=/out/console2.log wait_log /out/console2.log "update: the build computer has version" 60; sleep 2; wait_log /out/console2.log "home: drawn" 30 && { shot second-start; tap A; }
+      wait $app
       kill $server'
     echo "installed file now: $(shasum -a 256 "$dir/melee-nx-netplay/melee-nx-netplay.nro" | cut -c1-16) (published $(echo $sha | cut -c1-16)); backup: $(cat "$dir/melee-nx-netplay/melee-nx-netplay.nro.bak" 2>/dev/null)"
     ;;
@@ -349,7 +306,7 @@ for side, period, stick in (("a", 47, 80), ("b", 61, -80)):
 PY
     for side in a b; do
       user=1; hud=hud=1; [ $side = b ] && user=2
-      mkdir -p "$dir/$side"; make_app "$dir/$side" $user "${MU_ONLINE_FRAMES:-4200}" "$dir/pads-$side.txt" "$hud"
+      mkdir -p "$dir/$side"; make_app "$dir/$side" $user "${MU_ONLINE_FRAMES:-4200}" "$dir/pads-$side.txt" "$hud" home=0
     done
     run "$dir" 'shots 2
       (while true; do python3 /t/mock_matchmaking.py 8765 $MOCK_ARGS; sleep 0.2; done) > /out/mock.txt 2>&1 & mock=$!

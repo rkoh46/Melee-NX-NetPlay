@@ -40,6 +40,31 @@ case "$SAN" in
 esac
 [ -z "$SAN" ] || SAN_FLAGS="-fsanitize=$SAN -fno-omit-frame-pointer"
 
+# The NRO's icon from melee-unlocked's melee_unlocked.ico (fetched tree): its largest picture (a PNG inside the .ico) taken out
+# here, flattened on the launcher's rail navy and written as the 256x256 JPEG the NRO carries (gen/mu_ui/icon.jpg; the
+# services program, which is the app, uses it). Never committed.
+mu_icon() {
+  local ico="$src/mu/port/app/melee_unlocked.ico" png="$gen/mu_ui/mu_icon.png" jpg="$gen/mu_ui/icon.jpg"
+  [ -f "$ico" ] || { echo "missing port/app/melee_unlocked.ico in the fetched tree" >&2; exit 1; }
+  [ -f "$jpg" ] && [ "$jpg" -nt "$ico" ] && return 0
+  python3 -I - "$ico" "$png" <<'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+_, kind, count = struct.unpack_from("<HHH", data, 0)
+best = None
+for i in range(count):
+    w, h, _, _, _, _, size, offset = struct.unpack_from("<BBBBHHII", data, 6 + 16 * i)
+    w, h = w or 256, h or 256
+    if data[offset:offset + 8] == b"\x89PNG\r\n\x1a\n" and (best is None or w * h > best[0]):
+        best = (w * h, offset, size)
+if best is None:
+    sys.exit("mu_icon: no PNG picture in the .ico")
+open(sys.argv[2], "wb").write(data[best[1]:best[1] + best[2]])
+PY
+  dock 120 "$GFX_IMG" "convert $W/gen/mu_ui/mu_icon.png -background '#0B111E' -alpha remove -alpha off -resize 256x256 -gravity center -extent 256x256 -quality 92 $W/gen/mu_ui/icon.jpg"
+  echo "icon: melee-unlocked's melee_unlocked.ico -> $jpg"
+}
+
 sync_tree() {
   [ -d "$src/mu/.git" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
   [ -f "$src/out/melee_game.so" ] || { echo "run ../build.sh game first" >&2; exit 1; }
@@ -132,6 +157,17 @@ sync_tree() {
   sed -n '/^const char\* const kActionNames\[\] = {/,/^};/p' "$work/mu/port/runtime/gx/training_overlay.cpp" > "$gen/action_names.inc.new" 2>/dev/null || true
   [ -s "$gen/action_names.inc.new" ] || echo 'const char* const kActionNames[] = {""};' > "$gen/action_names.inc.new"
   if cmp -s "$gen/action_names.inc.new" "$gen/action_names.inc"; then rm -f "$gen/action_names.inc.new"; else mv "$gen/action_names.inc.new" "$gen/action_names.inc"; fi
+  # melee-unlocked's interface (src/mu_panel.cpp, src/mu_home.cpp): its panel and launcher code taken verbatim from the fetched
+  # tree, its Source Sans 3 fonts (SIL OFL 1.1, THIRD_PARTY_NOTICES.md) and its launcher artwork, embedded below. Build-time
+  # copies in gen/mu_ui only: nothing of it is committed.
+  python3 -I "$here/scripts/mu_ui_extract.py" "$src/mu" "$gen/mu_ui" >/dev/null
+  for f in port/runtime/gx/ui_sources/gd_melee/assets/kit/SourceSans3-Black.otf port/runtime/gx/ui_sources/gd_melee/assets/kit/SourceSans3-Bold.otf \
+           port/app/bailey_cut.bmp port/app/melee_mark.bmp; do
+    [ -f "$src/mu/$f" ] || { echo "missing $f in the fetched tree" >&2; exit 1; }
+    cmp -s "$src/mu/$f" "$gen/mu_ui/$(basename "$f")" || cp "$src/mu/$f" "$gen/mu_ui/$(basename "$f")"
+  done
+  # The NRO's icon: melee-unlocked's own (port/app/launcher.ico, its largest picture), as a 256x256 JPEG (build_nro).
+  mu_icon
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"
@@ -154,6 +190,12 @@ sync_tree() {
     i=0; for f in "$repo"/port/slippi_sys/GameFiles/GALE01/*; do i=$((i+1))
       echo ".balign 8"; echo "mu_sys_$i: .incbin \"port/slippi_sys/GameFiles/GALE01/$(basename "$f")\""; echo "mu_sys_${i}_end:"
       echo ".global mu_sys_$i"; echo ".global mu_sys_${i}_end"
+    done
+    # melee-unlocked's fonts and launcher art (gen/mu_ui, above): mu_ui.h
+    for pair in font_black:SourceSans3-Black.otf font_bold:SourceSans3-Bold.otf bailey:bailey_cut.bmp mark:melee_mark.bmp; do
+      n=${pair%%:*}; f=${pair#*:}
+      echo ".balign 8"; echo ".global mu_ui_$n"; echo "mu_ui_$n: .incbin \"$W/gen/mu_ui/$f\""
+      echo ".global mu_ui_${n}_end"; echo "mu_ui_${n}_end:"
     done
     echo '.section .note.GNU-stack,"",%progbits'
   } > "$gen/embedded.S"

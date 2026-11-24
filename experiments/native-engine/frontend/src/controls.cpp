@@ -13,6 +13,7 @@
 #include "host.h"                // shim: PadState, gcadapter_status, now_ns
 #include "host_services.h"       // melee-unlocked: linux_host::state_snapshot
 #include "mu_host.h"
+#include "mu_ui.h"                // practice_menu_toggle (weak: the Practice menu module)
 #include "app/game_menu.h"       // MenuExtraPage, menu_toggle, menu_open_extra (patches/0104, 0111)
 #include "input_config.h"
 #include "controls_core.h"
@@ -257,8 +258,10 @@ void controls_chords(void* pads_v) {
       else host::menu_toggle();
       say("controls: Start + D-pad Down + Z on port %d: the menu", i + 1);
     } else if (practice) {
-      if (host::menu_is_open()) host::menu_close(); else host::menu_open_extra("Training");
-      say("controls: Start + D-pad Up + Z on port %d: the Training page", i + 1);
+      // The Practice menu (feat/proai's practice_menu.cpp) when it is linked; the panel's Training section otherwise.
+      if (&fe::practice_menu_toggle) { if (host::menu_is_open()) host::menu_close(); fe::practice_menu_toggle(); }
+      else if (host::menu_is_open()) host::menu_close(); else host::menu_open_extra("Training");
+      say("controls: Start + D-pad Up + Z on port %d: %s", i + 1, &fe::practice_menu_toggle ? "the Practice menu" : "the Training section");
     }
     if (connected) host::settings_shortcut::hold_lone_start(training && !host::menu_is_open(), settings_down[i] || practice_down[i], raw, pads[i].button, start_waited[i]);
   }
