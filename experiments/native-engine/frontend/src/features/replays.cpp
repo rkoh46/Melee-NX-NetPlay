@@ -10,7 +10,8 @@
 // muOptions2, muOptions3 (the offline option words the match ran with, for playback) and modProfile.
 // Offline and online matches alike; online matches carry no offline options. Written when the match ends,
 // on a writer thread, to sdmc:/switch/melee-nx-netplay/Replays (Linux: <out>/Replays) as
-// Game_YYYYMMDDTHHMMSS.slp. settings.ini: savereplays 0 turns it off, replay_dir DIR moves it.
+// Game_YYYYMMDDTHHMMSS.slp. settings.ini: savereplays 0 turns it off, replay_dir DIR moves it, compressreplays 1
+// writes .slpz instead (the slpz tool's format, 8 to 12 times smaller; playback and the Replays page read both).
 //
 // Playback (--replay FILE|latest|N on the command line, or the Replays page of the in-game menu, which asks
 // play mode to start the game again with it). The game boots straight into the replay's match and asks for
@@ -42,6 +43,10 @@ static inline int gmtime_s(struct tm* out, const time_t* t) { return gmtime_r(t,
 // melee-unlocked (fetched tree), port/third_party/slippilib, named from its port/runtime/abi folder (on the include path)
 #include "../../third_party/slippilib/SlippiGame.h"
 #include "../../third_party/slippilib/SlippiGame.cpp"
+// melee-unlocked (fetched tree), port/app: .slpz, the slpz tool's compressed replays (Alexander Harrison, MIT or
+// Apache-2.0; upstream's port is GPL-2.0-or-later). Its "zstd/zstd.h" is a shim to the system's zstd (CMakeLists.txt).
+#include "../../app/replay_slpz.h"
+#include "../../app/replay_slpz.cpp"
 #if __has_include("native_recording_codes.h")
 #include "native_recording_codes.h"             // generated from the fetched tree (tools/native_recording_codes.py)
 #define MU_HAVE_RECORDING_CODES 1
@@ -69,6 +74,7 @@ namespace fe::features {
 namespace {
 // ---- settings ----
 bool save_replays = true;
+bool compress_replays = false;                  // settings.ini compressreplays 1: write .slpz (upstream's launcher.ini key)
 std::string replay_dir;                         // empty: the default folder
 std::string requested;                          // --replay FILE|latest|N
 
@@ -90,6 +96,7 @@ void make_dirs(const std::string& path) {
 bool setting(const std::string& key, const std::string& value) {
   if (key == "savereplays") save_replays = value != "0";
   else if (key == "replay_dir") replay_dir = value;
+  else if (key == "compressreplays") compress_replays = value != "0";
   else return false;
   return true;
 }
@@ -100,7 +107,9 @@ std::vector<std::string> list_replays() {
   if (DIR* d = opendir(dir().c_str())) {
     while (dirent* e = readdir(d)) {
       const std::string name = e->d_name;
-      if (name.size() < 5 || (name.compare(name.size() - 4, 4, ".slp") != 0)) continue;
+      const bool slp = name.size() > 4 && name.compare(name.size() - 4, 4, ".slp") == 0;
+      const bool slpz = name.size() > 5 && name.compare(name.size() - 5, 5, ".slpz") == 0;
+      if (name[0] == '.' || (!slp && !slpz)) continue;     // .slpz-playback.slp: the unpacked copy a .slpz plays from
       struct stat st{};
       if (stat((dir() + "/" + name).c_str(), &st) == 0) found.emplace_back(st.st_mtime, name);
     }
@@ -127,17 +136,26 @@ void writer_main() {
     auto job = std::move(write_queue.front());
     write_queue.pop_front();
     lock.unlock();
+    // compressreplays 1: the .slpz, written only when it unpacks to exactly the recording (otherwise the .slp).
+    const char* ext = ".slp";
+    size_t raw = job.second.size();
+    if (compress_replays) {
+      std::vector<uint8_t> packed, back;
+      if (slpz::compress(job.second, packed) && slpz::decompress(packed, back) && back == job.second) { job.second.swap(packed); ext = ".slpz"; }
+      else say("replay: could not compress the recording (it is written as .slp)");
+    }
     // Exclusive names: two matches in one second get _1, _2.
     std::string path;
     FILE* out = nullptr;
     for (unsigned suffix = 0; suffix < 1000 && !out; ++suffix) {
-      path = dir() + "/" + job.first + (suffix ? "_" + std::to_string(suffix) : std::string()) + ".slp";
+      path = dir() + "/" + job.first + (suffix ? "_" + std::to_string(suffix) : std::string()) + ext;
       if (access(path.c_str(), F_OK) == 0) continue;
       out = std::fopen(path.c_str(), "wb");
     }
     bool ok = false;
     if (out) { ok = std::fwrite(job.second.data(), 1, job.second.size(), out) == job.second.size(); ok = std::fclose(out) == 0 && ok; }
-    say("replay: %s %s (%zu bytes)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size());
+    if (raw != job.second.size()) say("replay: %s %s (%zu bytes, %zu as .slp)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size(), raw);
+    else say("replay: %s %s (%zu bytes)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size());
     lock.lock();
     ++writes_done;
     write_cv.notify_all();
@@ -294,9 +312,23 @@ uint32_t replay_codes(const std::vector<uint8_t>& list, uint8_t* ps_frozen_toggl
   return codes;
 }
 
-bool open_replay(const std::string& path) {
-  const std::vector<uint8_t> bytes = read_file(path);
-  if (bytes.empty()) { say("replay: cannot read %s", path.c_str()); return false; }
+bool open_replay(const std::string& given) {
+  std::vector<uint8_t> bytes = read_file(given);
+  if (bytes.empty()) { say("replay: cannot read %s", given.c_str()); return false; }
+  std::string path = given;
+  if (slpz::is_slpz(bytes.data(), bytes.size())) {
+    // A .slpz: unpacked once into the replay folder (the replay reader takes a file), then played from there.
+    std::vector<uint8_t> slp;
+    if (!slpz::decompress(bytes, slp)) { say("replay: %s is a damaged or newer .slpz", given.c_str()); return false; }
+    path = dir() + "/.slpz-playback.slp";
+    make_dirs(dir());
+    FILE* out = std::fopen(path.c_str(), "wb");
+    const bool ok = out && std::fwrite(slp.data(), 1, slp.size(), out) == slp.size();
+    if (out && std::fclose(out) != 0) { say("replay: cannot write %s", path.c_str()); return false; }
+    if (!ok) { say("replay: cannot write %s", path.c_str()); return false; }
+    say("replay: %s unpacked (%zu bytes -> %zu)", given.c_str(), bytes.size(), slp.size());
+    bytes.swap(slp);
+  }
   pb = Playback{};
   pb.path = path;
   for (int w = 0; w < 3; ++w) pb.words[w] = read_word(bytes, w);
@@ -561,7 +593,7 @@ void tables(MuHostApi* host, MuGameApi*) {
   host->replay_stock_steal = h_replay_stock_steal;
   host->replay_event = h_replay_event;
   host->replay_finished = h_replay_finished;
-  say("replay: recording %s to %s%s", save_replays ? "every match" : "off (savereplays 0)", dir().c_str(),
+  say("replay: recording %s to %s%s%s", save_replays ? "every match" : "off (savereplays 0)", dir().c_str(), compress_replays ? " as .slpz" : "",
       MU_HAVE_RECORDING_CODES ? "" : "; this build has no Slippi code list, recordings carry an empty one");
 }
 
@@ -623,6 +655,8 @@ void register_replays() {
                     pending_restart = {"--replay", dir() + "/" + menu_list[std::min(menu_pick, menu_list.size() - 1)]};
                     say("replay: %s asked for; play mode starts the game again with it", pending_restart[1].c_str());
                   }});
+  add_menu_entry({"Replays", "Compress replays (.slpz)", [] { return std::string(compress_replays ? "On" : "Off"); }, [](int) { compress_replays = !compress_replays; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("compressreplays", compress_replays ? "1" : "0"); }});
   add_menu_entry({"Replays", "Save every match", [] { return std::string(save_replays ? "On" : "Off"); }, [](int) { save_replays = !save_replays; setenv("MELEE_SOURCE_RECORD", save_replays && !playing ? "1" : "0", 1); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("savereplays", save_replays ? "1" : "0"); }});
 }

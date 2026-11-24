@@ -385,6 +385,7 @@ against a real Slippi player (real changes come at any time between polls).
 | `practicecpu_on 1`, `practicecpu_preset N`, `practicecpu HEX` | the Practice CPU (command 0xF6); the Training page also has "Go to Training" |
 | `shield_colorp1..4 RRGGBB`, `offline_delay 1` + `offline_delay_frames N`, `autolcancel 1`, `zelda_as_sheik 1` | offline only (shield colours: online the ports' own) |
 | `savereplays 0`, `replay_dir DIR` | every VS and online match is written to `sdmc:/switch/melee-nx-netplay/Replays/Game_YYYYMMDDTHHMMSS.slp` (Linux: `<out>/Replays`) |
+| `compressreplays 1` | replays are written as `.slpz` (the slpz tool's format, compiled from the fetched tree's `port/app/replay_slpz.cpp`; 5 to 18 times smaller), each checked to unpack to the recording first; `--replay` and the Replays page read both (a `.slpz` is unpacked to `Replays/.slpz-playback.slp` to play). Round trip: `../tools/slpz_roundtrip.sh DIR` |
 | `subframe 0|1|2`, `fps N` | presentation: Off / Predict / Interpolate sub-frames; `fps` caps presents per second (tests). The simulation stays at 60 Hz |
 | `input_suggestions 0` | Slippi 3.7.0 input suggestions off (default on; the Game page's row; from the next online game). See "Input suggestions" |
 
