@@ -451,7 +451,7 @@ fe::mod_downloads_available();                       // false in the program wit
 Another program (melee-unlocked-macOS) builds the same library with its own `Config`: `mods_dir`, `disc_path`,
 `catalog_json`, a `Fetcher` (`modinstall::curl_fetcher()` or its own) and optionally a `Platform` for free space.
 
-**The Mods page** (in-game menu, last page before Controls): `Mod` picks one of the catalog's mods (Left/Right), then
+**The Mods page** (in-game menu, the last host page, right above Controls; the main page's rows from Controls down are one lower than before): `Mod` picks one of the catalog's mods (Left/Right), then
 its state, size and licence, the action (Install / Install from mods/Downloads / Update to ... / Cancel / Play it at the
 next start), Remove (press A twice), for a mod that cannot be fetched its page and where to put the file, and `Mod
 profile *` (the profile the next start loads). Install and Remove are greyed while the session is online.
