@@ -67,7 +67,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
 | `test-app-linux.sh` | The app without a console: boot, menu, handover (the menu with the D-pad, B to close, then A), sign-in, update, online cases. |
-| `app-build.sh`, `update-host-native.patch`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
+| `app-build.sh`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
 | `patches/0108-aurora-imgui-draw-list-delete.patch`, `patches/0109-aurora-picture-options.patch` | Against a build-time copy of Aurora (`build/sdk/aurora` -> `build/native-engine-gfx/gen/aurora`, which both picture variants compile): ImGui's frozen draw lists are freed with `IM_DELETE` (they were made with `IM_NEW` and freed with `operator delete`: AddressSanitizer's alloc/dealloc mismatch, now on in the sanitizer runs); `aurora_set_picture` (brightness, contrast, vibrance, sharpening, the CRT looks) in the present pass. `build/sdk` is not changed. |
@@ -715,10 +715,11 @@ the current builder: Docker images `mu-arm-gcc15` (built by the script from `../
 `melee-nx-netplay-build`; `build/sdk` and `build/switch-aurora/_deps` (both left by one `install.sh` run); one network
 fetch of melee-unlocked v1.0.5 (`../fetch.sh`, pinned to `67868aa`; `MU_SOURCE=file://...` works offline); then
 `../build.sh game`, `../build.sh linux`, `../build.sh nro`, `MU_NET_SERVICES=1 ../build.sh nro`, `./build.sh sync`,
-`./build.sh nro`. `update-host-native.patch` (not applied here) makes `tools/update-host.py` publish only the `game`
-entry (`MELEE_NX_UPDATE_NROS=game`) with the version from `VERSION` (`MELEE_NX_UPDATE_VERSION_FILE`), and names the
-three `Environment=` lines for `builder/systemd/melee-nx-update.service` (the build command is the existing
-`MELEE_NX_UPDATE_BUILD`). 0.3.x consoles then offer 0.4.0 and install it in place of their NRO.
+`./build.sh nro`. `tools/update-host.py` publishes only the `game` entry with `MELEE_NX_UPDATE_NROS=game` and takes
+the version from this `VERSION` with `MELEE_NX_UPDATE_VERSION_FILE=experiments/native-engine/frontend/VERSION`; with
+`MELEE_NX_UPDATE_BUILD=<checkout>/experiments/native-engine/frontend/app-build.sh` these three `Environment=` lines go
+in a drop-in for `builder/systemd/melee-nx-update.service` (`systemctl --user edit melee-nx-update`). Without them the
+script publishes the recompiled app as before. 0.3.x consoles then offer 0.4.x and install it in place of their NRO.
 
 ### A HOME Menu icon (forwarder)
 

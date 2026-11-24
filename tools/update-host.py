@@ -34,6 +34,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PUBLISH = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "melee-nx-netplay/updates"
 NROS = {"game": ("dist/sd/switch/melee-nx-netplay/melee-nx-netplay.nro", "melee-nx-netplay"),
         "replays": ("dist/sd/switch/melee-nx-replays/melee-nx-replays.nro", "melee-nx-replays")}
+# The native-engine app (experiments/native-engine/frontend/app-build.sh) builds only the game, no Replays app:
+# MELEE_NX_UPDATE_NROS=game publishes that one. Its version is in experiments/native-engine/frontend/VERSION
+# (MELEE_NX_UPDATE_VERSION_FILE). Defaults: the two apps of install.sh and the repository's VERSION.
+NROS = {key: value for key, value in NROS.items() if key in os.environ.get("MELEE_NX_UPDATE_NROS", "game,replays").split(",")}
+VERSION_FILE = os.environ.get("MELEE_NX_UPDATE_VERSION_FILE", "VERSION")
 # What tools/update-slippi.py changes when it adopts a release on this computer.
 ADOPTED_PATHS = ["port/slippi_sys", "tools/slippi_pin.json", "tools/slippi_sys_manifest.json", "tools/port_source_pins.json"]
 
@@ -205,7 +210,7 @@ def main():
                 pending = None
             # any other status (no network, GitHub's rate limit): keep what was known
         pin = json.loads((ROOT / "tools/slippi_pin.json").read_text(encoding="utf-8"))
-        app_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        app_version = (ROOT / VERSION_FILE).read_text(encoding="utf-8").strip()
         inputs = source_fingerprint()
         commit = git("rev-parse", "HEAD").stdout.decode().strip()
 
