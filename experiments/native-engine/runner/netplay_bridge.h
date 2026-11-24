@@ -44,4 +44,9 @@ NETPLAY_API bool request_match(int mode, const std::string& connect_code, uint8_
 NETPLAY_API const char* ranked_refusal();
 NETPLAY_API bool has_services();
 NETPLAY_API uint64_t rollbacks_seen_by_device();
+// The round trip to the opponent as the app's device last measured it from the game's own pad acknowledgements
+// (every acknowledged frame of an online game), in ms; -1 before the first one.
+NETPLAY_API int ping_ms();
+// The input delay from the next game on: `frames` 1..9, or automatic (2..5 from the round trip at each game's start).
+NETPLAY_API void set_delay(int frames, bool automatic);
 }

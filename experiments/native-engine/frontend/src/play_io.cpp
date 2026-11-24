@@ -14,6 +14,7 @@
 #include "window.h"
 #include "jukebox.h"
 #include <dolphin/pad.h>
+#include "app/game_menu.h"       // menu_is_open (the build-time copy with patches/0104)
 #endif
 
 #include <atomic>
@@ -263,8 +264,63 @@ void app_menu_frame(PadState pads[4]);
 // input_poll calls this with every source merged. The app (app mode): the app's in-game menu, opened with
 // L + R + Start held for half a second, while the game runs. Plain play mode keeps the earlier way out:
 // L + R + Start held, without A (Melee's own L + R + A + Start is left alone), for a second and a half, ends the run.
+// Hand-over between the menu and the game (app mode). While the menu is open the game sees neutral pads (the
+// menu does that). Whatever is held at the moment it closes (the B or Start that closed it, a direction) is
+// swallowed until that button is let go, so the closing press never reaches the game; everything else goes through.
+// A few log lines record what the menu and the game were given around an open menu (console diagnosis).
+namespace {
+uint16_t swallow[4] = {};                // per port: buttons held when the menu closed, not yet released
+bool swallow_triggers[4] = {};
+bool menu_was_open = false;
+bool combo_hold[4] = {};                 // per port: the menu's L + R + Start is held (kept from the game until let go)
+uint16_t logged_buttons[4] = {};
+uint32_t log_until = 0;                  // retrace until which button changes after a close are logged
+void log_changes(const PadState pads[4], const char* who) {
+  for (int i = 0; i < 4; ++i) {
+    const uint16_t b = pads[i].err == 0 ? pads[i].button : 0;
+    if (b == logged_buttons[i]) continue;
+    logged_buttons[i] = b;
+    log("menu: %s, pad %d buttons %04X (stick %d %d)", who, i + 1, b, pads[i].stick_x, pads[i].stick_y);
+  }
+}
+}  // namespace
 void menu_frame(PadState pads[4]) {
-  if (fe::options.app) { if (fe::running.load(std::memory_order_relaxed)) app_menu_frame(pads); return; }
+  if (fe::options.app) {
+    if (!fe::running.load(std::memory_order_relaxed)) return;
+    PadState raw[4];
+    std::memcpy(raw, pads, sizeof raw);
+    if (menu_was_open) log_changes(raw, "the menu reads");
+    app_menu_frame(pads);
+    const bool open = menu_is_open();
+    if (menu_was_open && !open) {
+      for (int i = 0; i < 4; ++i) {
+        swallow[i] = raw[i].err == 0 ? raw[i].button : 0;
+        swallow_triggers[i] = raw[i].err == 0 && (raw[i].trig_l > 30 || raw[i].trig_r > 30);
+        logged_buttons[i] = 0;
+      }
+      log_until = retrace_count() + 600;
+      log("menu: closed with buttons %04X %04X %04X %04X held: kept from the game until let go", swallow[0], swallow[1], swallow[2], swallow[3]);
+    }
+    if (!open) {
+      for (int i = 0; i < 4; ++i) {
+        if (raw[i].err != 0) { swallow[i] = 0; swallow_triggers[i] = false; combo_hold[i] = false; continue; }
+        // The menu's own combo never reaches the game: held for the half second it takes to open the menu, L + R +
+        // Start left the game ignoring A and Start afterwards (Online Play page, reproduced on Linux without the menu
+        // opening). Melee's L + R + A + Start (A held) still goes through, as the menu leaves it alone.
+        const uint16_t b = raw[i].button;
+        if ((b & 0x1060) == 0x1060 && !(b & 0x0100)) combo_hold[i] = true;
+        else if (!(b & 0x1060)) combo_hold[i] = false;
+        if (combo_hold[i]) { pads[i].button &= uint16_t(~0x1060); pads[i].trig_l = 0; pads[i].trig_r = 0; }
+        swallow[i] &= raw[i].button;                       // released bits stop being swallowed (the controller's own state)
+        if (swallow_triggers[i] && raw[i].trig_l <= 30 && raw[i].trig_r <= 30) swallow_triggers[i] = false;
+        pads[i].button &= uint16_t(~swallow[i]);
+        if (swallow_triggers[i]) { pads[i].trig_l = 0; pads[i].trig_r = 0; }
+      }
+      if (retrace_count() < log_until) log_changes(pads, "the game gets");
+    }
+    menu_was_open = open;
+    return;
+  }
   bool held = false;
   for (int i = 0; i < 4; ++i) {
     if (pads[i].err != 0) continue;

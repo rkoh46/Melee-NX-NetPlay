@@ -82,6 +82,10 @@ sync_tree() {
   cp "$repo/port/runtime/gx/gx_aurora_bridge.cpp" "$gen/gxsrc/port/runtime/gx/gx_aurora_bridge.cpp"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0102-gx-core-native-memory.patch"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0103-gx-bridge-lines-points.patch"
+  # Sub-frame presentation (patches/0106: the features' presenter) in the renderer and the sub-frame solver.
+  cp "$repo/port/runtime/gx/gx_aurora.cpp" "$repo/port/runtime/gx/subframe.cpp" "$gen/gxsrc/port/runtime/gx/"
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0106-subframe-presentation.patch"
+  for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
@@ -143,6 +147,8 @@ sync_tree() {
     echo 'extern const size_t mu_embedded_sys_count = sizeof mu_embedded_sys / sizeof mu_embedded_sys[0];'
   } > "$gen/embedded_tables.cpp"
   python3 -I "$here/../tools/gen_api_names.py" "$work/mu/port/runtime/abi/mu_host.h" "$gen/api_names.cpp"   # the runner's host profiler
+  # The replay recorder's code list (src/features/replays.cpp), from the fetched tree's own generator.
+  python3 -I "$src/mu/tools/native_recording_codes.py" "$gen/native_recording_codes.h"
   echo "synced $work"
 }
 

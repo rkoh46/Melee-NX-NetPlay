@@ -54,7 +54,7 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
-| `test-app-linux.sh` | The app without a console: boot, menu, sign-in, update, online cases. |
+| `test-app-linux.sh` | The app without a console: boot, menu, handover (the menu with the D-pad, B to close, then A), sign-in, update, online cases. |
 | `app-build.sh`, `update-host-native.patch`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
@@ -317,6 +317,47 @@ before them, the netplay device, log lines queued, disc reads, stream bytes from
 is answered with that result), prints the layout line, restarts the title with `--relaunch` as the runner does, and
 ends with `play: cannot start: ...` otherwise.
 
+### Feature modules: training, replays, options, mod discs, 120 Hz
+
+`src/features/*.cpp` and `../runner/features/*.cpp` register through `src/feature_hooks.h` (commands by
+`slippi_command` byte, the host table, a per-retrace call, settings keys, menu rows, overlay lines). Play mode only.
+
+| settings.ini | What it does |
+|---|---|
+| `lab 1`, `lab_loop 1`, `lab_bubbles 1|2`, `lab_overlay 1` | Training Lab, offline Training: D-pad Right save state, Left load (hot-page store), Down record the dummy, Up play it back; collision bubbles over the model or alone; frame advantage (0xF4) as an overlay line |
+| `frame_advance 1` | L+R+Z freezes offline Training, Z steps one frame (held: repeats), D-pad moves the CPU while frozen |
+| `practicecpu_on 1`, `practicecpu_preset N`, `practicecpu HEX` | the Practice CPU (command 0xF6); the Training page also has "Go to Training" |
+| `shield_colorp1..4 RRGGBB`, `offline_delay 1` + `offline_delay_frames N`, `autolcancel 1`, `zelda_as_sheik 1` | offline only (shield colours: online the ports' own) |
+| `savereplays 0`, `replay_dir DIR` | every VS and online match is written to `sdmc:/switch/melee-nx-netplay/Replays/Game_YYYYMMDDTHHMMSS.slp` (Linux: `<out>/Replays`) |
+| `subframe 0|1|2`, `fps N` | presentation: Off / Predict / Interpolate sub-frames; `fps` caps presents per second (tests). The simulation stays at 60 Hz |
+
+`--replay FILE|latest|N` plays a replay (the game takes one only at boot): Start pauses, A steps, D-pad Left/Right
+5 s back/forward, Up 1/2 and 1/4 speed, Down fast forward; the end of the run compares the game's post-frame records
+with the file's. `--frame-mode off|predict|interpolate` and `--fps N` on the command line; `MU_FRAME_MODE`,
+`MU_PRESENT_FPS` in the environment for scripted runs.
+
+Presentation (`src/features/present/`, compiled with the renderer, not the module glob; `patches/0106` adds per-draw
+matrix overrides to `gx::AuroraBackend`, lets it present a frame again, and lets the sub-frame solver pair
+raw-captured draws). With sub-frames the decoder hands over every draw's full state (no deltas), the render
+thread runs `present::loop`, measures the refresh from presents back to back at start (`present: display refresh
+measured N Hz ...`, or `present: presents do not wait for a refresh ...; paced to the display's reported N Hz`)
+and draws each refresh at phase t = time since the newest game frame / 16.67 ms. A rollback load (0xB2), a Lab
+load or a replay jump is never blended across. Off mode keeps play mode's loop and repeats each frame
+round(refresh / 60) times through its present hook.
+
+Replay fidelity needs `../patches/decomp-0003` in the game image (`../fetch.sh` applies every `decomp-*.patch`; an
+image built before it records one uninitialised shield-flag byte of the second fighter that a playback cannot
+reproduce). Verification hooks (command line, play mode): `--feature-test training[:CHARACTER]` (Go to Training from
+the title screen), `--feature-test major:N` (ask the game for scene N: Event Match 43, Classic 3, Training 28),
+`--feature-test replay-controls` (presses the viewer's buttons on a timeline of its own, since a controller script
+stops while the replay is paused).
+
+Mod discs beyond 20XX (built on the PC with xdelta3 from each catalog archive's own patch, checked against
+`mods-catalog-2.json`): put the disc in `mods/<name>/` and set `mod_profile <name>`. Training Mode CE sets
+MU_GAME_OPTION_TMCE offline; an m-ex disc with added fighters (Akaneia, ACE) shows them on the character select;
+rogueMelee sets MU_MOD_ROGUE; Melee Maker sets MU_MOD_MAKER and gets its data through command 0xEE (no 32 MB cache:
+the game loads its moves into the match heap). Melee 3D loads as files only (upstream: Static Recomp only).
+
 ## The app: Melee-NX-NetPlay 0.4.0
 
 `out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" 0.4.0, the app's icon: `build/icon.jpg` when
@@ -356,8 +397,12 @@ emblems, hitboxes, 2D camera, grid), *Community codes* (each bit), *Computer pla
 the feature modules' pages, Controls (each SDL controller: remap, deadzones, trigger press point, swap sticks,
 rumble, test rumble), Performance HUD, Resume, Quit. Changes are written to `settings.ini` (keeping its comments) or
 `launcher.ini` at once; controller pages when the menu closes. Rows upstream only allows offline are greyed while the
-session is online ("Locked during online play"). \* = at the next start (the online delay too: the netplay object
-takes it when it starts, and has no call to change it later). Quit stops the game cleanly and closes the application
+session is online ("Locked during online play"). \* = at the next start. The online input delay applies from the next
+game (`netplay_bridge::set_delay`). The menu is driven with the stick or the D-pad. Hand-over to the game: the menu's
+L + R + Start never reaches the game (held, it left the game ignoring A and Start afterwards: seen on the console,
+reproduced on Linux without the menu opening), and whatever is held when the menu closes (the B that closed it) is
+kept from the game until it is let go; everything else goes through. The game keeps running behind the menu, as in
+the earlier app. The first ten seconds after a close log what the game gets (`menu: the game gets ...`). Quit stops the game cleanly and closes the application
 (HOME Menu), as the app's Quit does; returning to the Homebrew Menu is not offered because the graphics stack leaves
 threads behind in the process (see Run).
 
@@ -374,9 +419,17 @@ is finished at the next start. The comparison is `0.4.0` / Slippi `3.7.0` (the n
 **Feature modules**: the other modules plug in through `src/feature_hooks.h` (their interface): play mode calls
 `dispatch_tables` first in its tables hook, `dispatch_command` first in `mu_frontend_command`, `dispatch_retrace` each
 retrace, `dispatch_setting` for unknown settings.ini keys, `dispatch_run_end`, `menu_entries` (menu pages) and
-`hud_lines` (appended to the HUD). The calls are weak (`feature_calls.h`): `MU_FE_FEATURES=OFF ./build.sh ...` builds
-without the modules. Presentation pacing for sub-frame presenters: `fe::set_present_hook` (frontend.h; presents per
-game frame and a callback per extra present, render thread) and `fe::display_refresh_hz()` (SDL's display mode).
+`hud_lines` (drawn centred near the top in every play session: Training's frame advantage, frame advance, the practice
+CPU), `take_restart_request` (the Replays page's "Watch it": the game is started again in this process with `--replay
+FILE`, offline). A menu row's `persist` (feature_hooks.h) writes its settings.ini lines after a change. The modules
+are linked by default; `MU_FE_FEATURES=OFF ./build.sh ...` builds without them (the calls are weak, `feature_calls.h`).
+
+**Presentation** has one path: the render loop presents each finished game frame, and the presenter
+(`src/features/present`, `patches/0106`) either repeats it to the display's rate (`subframe 0`, through
+`fe::set_present_hook`) or, with sub-frames on (`subframe 1` Predict, `subframe 2` Interpolate), replaces the loop with
+its own (`present::loop`), which draws in-between poses at the measured refresh rate; the decoder then hands it every
+draw's full state. `fps N` caps the presented rate. The simulation stays at 60 Hz. `fe::display_refresh_hz()` is SDL's
+display mode. Scripted runs: `MU_FRAME_MODE=predict|interpolate` (test-linux.sh passes it).
 
 ### Publishing (the build computer)
 
@@ -470,13 +523,13 @@ modules not linked: `MU_FE_FEATURES=OFF`), one container each, loopback only:
 | After all of this: scripted `parity_vs_onett`, 9000 retraces, no graphics device and with a picture | digest IDENTICAL |
 | `test-online-linux.sh`, `test-net-linux.sh` | as before: final state identical on both sides |
 | NRO (`./build.sh nro`) | `melee-nx-netplay.nro` links; NACP name Melee-NX-NetPlay, version 0.4.0 |
+| After the first console session, with the feature modules linked (runner from the working tree: `netplay_bridge` ping and delay calls) | `handover`: the D-pad moves the menu and changes the volume (`volume=70`), B held 12 retraces closes it and is kept from the game (`closed with buttons 0200 held`), A then opens Unranked (scene 8 at retrace 569); before the fix the B reached the game and the later A was ignored. L + R + Start held 20 retraces without the menu opening left the game ignoring A too (the cause; now kept from the game). `menu`: also Training's "Inputs and frame advantage", saved as `lab_overlay 1` (a module's row through `persist`). `online`: ping on the HUD; confirmed states identical. Scripted `parity_vs_onett` IDENTICAL without a picture and with one, sub-frames off, predict and interpolate. `test-online-linux.sh`, `test-net-linux.sh`: final state identical |
 
 Not verified: anything on the console (the app's screens on NVK, the sign-in's keyboard and a real sign-in, the update
 over the home network, the layout screen and the forwarder restart, the Controls page with real controllers, rumble
 of SDL controllers, the shared pipeline cache, the card carried over from 0.3.x); a real Slippi match from the app;
-the feature modules linked into the app (they did not build at the time: `snapshot_store.h` is reached through
-runner/features of the working tree, which CMake now adds, and `present.cpp` needs `port/runtime/gx/subframe.cpp`
-and its dependencies).
+the Replays page's "Watch it" restart (wired, not run: no replay was recorded in these tests); Training's lines on
+screen (drawn only in Training mode, not looked at); 120 Hz on a display that has it.
 
 Not looked at: the Hack Pack's debug menu, hidden characters, playlists and stage variants beyond the first pick;
 TE's features in a match; whether upstream's Hack Pack support (which its own notes call "written but never run")
@@ -549,10 +602,8 @@ why is not known. The same costume's portrait on the character select screen is 
 - The app's adapter code looks for a GameCube adapter every two seconds from the simulation thread for as long as
   there is none; here it gets three looks and then one a minute until an adapter has answered once.
 - Plain `--play` has no in-game menu or HUD (the app has them); no Slippi music player.
-- The HUD's ping comes from the netplay object's log line `slippi: ping N ms` (every 600 frames, and only on the side
-  whose opponent is in port index 0): one side of a match shows it, the other does not. `netplay_bridge` keeps the
-  ping (`g_ping_ms`) but has no call that returns it; one `NETPLAY_API int ping_ms()` there (and one to change the input
-  delay) would fix both gaps.
+- The HUD's ping is `netplay_bridge::ping_ms()` (the device's round trip from the game's pad acknowledgements, both
+  sides). `build.sh sync` must take a runner that has it (`netplay_bridge.*` newer than `d53f7e7`; `MU_SYNC_REF`).
 
 ## Licensing
 

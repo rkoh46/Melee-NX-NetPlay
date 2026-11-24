@@ -109,7 +109,7 @@ endif()
 
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
-  "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GEN}/gx_aurora_bridge.cpp"
+  "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GEN}/gx_aurora_bridge.cpp" "${GEN}/subframe.cpp" "${GXSRC}/authored_pose.cpp" "${GXSRC}/gx_shader.cpp"
   "${FE}/shim/shim.cpp" "${FE}/frontend.cpp" "${FE}/play_io.cpp" "${FE}/settings.cpp" "${FE}/slippi_files.cpp"
   # This repository's VCDIFF decoder and Slippi link resolver (neither includes the app's host.h).
   "${REPO}/port/runtime/host/vcdiff.cpp" "${REPO}/port/runtime/hle/slippi_hsd_link.cpp")
@@ -117,7 +117,7 @@ add_library(mu_gx STATIC
 target_include_directories(mu_gx PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${REPO}/port/runtime/host"
   "${MU}/port/linux" "${MU}/port/runtime/abi"
   "${MU}/port/runtime/host")   # last: only for hackpack_source.h (settings.cpp); every other name is found before it
-target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle")   # slippi_hsd_link.h, jukebox.h
+target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle" "${REPO}/native")   # slippi_hsd_link.h, jukebox.h
 target_include_directories(mu_gx PRIVATE "${GEN}")   # app/game_menu.h: the build-time copy with patches/0104
 target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 # The app (app.cpp: folders, launcher.ini, controllers, HUD; app_menu.cpp: the in-game menu) and the feature hooks' calls.
@@ -128,7 +128,7 @@ if(MU_FE_VARIANT STREQUAL "null")
 else()
   # The renderer, and the app's controller input and sound output: unchanged sources of port/runtime/host,
   # compiled from the verbatim copies build.sh sync makes in ${GEN}/app (see there).
-  target_sources(mu_gx PRIVATE "${GXSRC}/gx_aurora.cpp"
+  target_sources(mu_gx PRIVATE "${GEN}/gx_aurora.cpp"   # with patches/0106
     "${GEN}/app/input_sdl.cpp" "${GEN}/app/input_script.cpp" "${GEN}/app/audio_sdl.cpp")
   # The app's in-game menu and HUD (game_menu.cpp with patches/0104, drawn by overlay_imgui.cpp through Aurora's ImGui
   # pass), the controller configuration (input_config.cpp) and the MetalFrontend the screens before the game take.
@@ -170,6 +170,7 @@ if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
     "${MU}/port/runtime/host" "${MU}/port/runtime/ppc" "${MU}/port/runtime/gx" "${MU}/native")
   target_compile_definitions(mu_features PRIVATE MU_FOREIGN_ELF MU_SQUAD=1 MELEE_NO_SLIPPI MELEE_PORT_VERSION="mu-native")
   target_compile_options(mu_features PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+  target_include_directories(mu_features PRIVATE "${GEN}")   # native_recording_codes.h
   if(MU_FE_VARIANT STREQUAL "switch")
     target_include_directories(mu_features SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
   endif()
@@ -195,6 +196,15 @@ if(NOT MU_FE_VARIANT STREQUAL "null")
   endif()
 endif()
 
+# The presenter (features/present: display-rate presentation, sub-frames): objects, so the weak references of the
+# feature modules and frontend.cpp find it. Built with the renderer's include directories and definitions.
+add_library(mu_present OBJECT "${FE}/features/present/present.cpp")
+target_include_directories(mu_present PRIVATE $<TARGET_PROPERTY:mu_gx,INCLUDE_DIRECTORIES>)
+target_compile_definitions(mu_present PRIVATE $<TARGET_PROPERTY:mu_gx,COMPILE_DEFINITIONS>)
+target_compile_options(mu_present PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+if(NOT MU_FE_VARIANT STREQUAL "null")
+  target_link_libraries(mu_present PRIVATE aurora::core aurora::gx)
+endif()
 # The program, twice: with the netplay object of ../build.sh (copied by build.sh sync: everything behind net_host,
 # its other symbols local), and with the services variant of that object when there is one.
 function(mu_program target netplay_object suffix)
@@ -205,6 +215,7 @@ function(mu_program target netplay_object suffix)
       target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_app_services>)   # the app's update and sign-in screens
     endif()
   endif()
+  target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_present>)
   if(TARGET mu_features)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_features>)
   endif()

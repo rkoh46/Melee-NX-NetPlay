@@ -27,6 +27,7 @@
 #include "gx_core.h"
 #include "gx_aurora_bridge.h"
 #include "frame_queue.h"
+#include "features/present/present.h"   // presentation at the display's rate, sub-frames (feature module, weak)
 #include "hostprof.h"                // the runner's host service profiler (--profile)
 #if MU_FE_AURORA
 #include "gx_aurora.h"
@@ -169,7 +170,7 @@ public:
     finished.fetch_add(1, std::memory_order_relaxed);
   }
   bool wants_raw_vertices() const override { return true; }   // Aurora consumes the hardware vertex format
-  bool wants_state_deltas() const override { return true; }
+  bool wants_state_deltas() const override { return !(present::linked() && present::wants_full_state()); }   // sub-frames need every draw's full state
   gx::FrameQueue queue;
   std::atomic<uint64_t> handoff_ns{0}, finished{0};
 };
@@ -336,13 +337,13 @@ const char* backend_label(::AuroraBackend backend) {
 }
 #endif
 
-void render_one(gx::Backend& backend, const gx::Frame& frame) {
+void render_one(gx::Backend& backend, const gx::Frame& frame, const gx::DrawMatrices* overrides = nullptr) {
   auto& r = st.render;
   if (r.failed) return;
   if (texture_dump.on) texture_dump.frame(frame);
   const uint64_t t0 = now_ns(), end0 = end_frame_ns, begin0 = begin_frame_ns;
   const char* error = nullptr; std::string text;
-  try { backend.submit_frame(frame); }
+  try { if (overrides) backend.submit_frame(frame, overrides); else backend.submit_frame(frame); }
   catch (const std::exception& e) { text = e.what(); error = text.c_str(); }
   catch (...) { error = "unknown exception"; }
   if (error) {
@@ -363,6 +364,15 @@ void render_one(gx::Backend& backend, const gx::Frame& frame) {
   r.most_draws = std::max(r.most_draws, frame.draws.size());
 }
 
+// The window's events, once per presented frame of the presenter's loop (features/present).
+void pump_window() {
+#if MU_FE_AURORA
+  for (auto* event = aurora_update(); event && event->type != AURORA_NONE; ++event)
+    if (event->type == AURORA_EXIT) linux_host::request_stop(0);
+    else if (event->type == AURORA_WINDOW_RESIZED || event->type == AURORA_DISPLAY_SCALE_CHANGED) { st.win_w = int(event->windowSize.width); st.win_h = int(event->windowSize.height); }
+#endif
+}
+void render_with(gx::Backend& backend, const gx::Frame& frame, const gx::DrawMatrices* overrides) { render_one(backend, frame, overrides); }
 PresentHook present_hook;
 std::atomic<double> refresh_hz{60.0};
 void render_loop(gx::Backend& backend, bool pump) {
@@ -523,7 +533,14 @@ void* render_main(void*) {
         if (std::sscanf(dump, "%u:%u:%u", &major, &minor, &after) == 3) aurora_backend->set_draw_dump(options.out_dir + "/draws.txt", uint8_t(major), uint8_t(minor), after);
       }
       // The app's in-game menu and HUD (game_menu.cpp, drawn through Aurora's ImGui pass as the app draws them).
-      if (options.app) aurora_backend->set_overlay([] { host::OverlayFrame overlay; if (host::game_overlay(overlay)) host::overlay_imgui_draw(overlay); });
+      // The feature modules' lines (frame advantage...) in every play session, the menu and HUD in the app.
+      if (options.play) aurora_backend->set_overlay([] {
+        host::OverlayFrame overlay;
+        if (options.app) host::game_overlay(overlay);
+        int w = 1280, h = 720; window_size(&w, &h);
+        feature_overlay(&overlay, w, h);
+        if (!overlay.shapes.empty() || !overlay.texts.empty()) host::overlay_imgui_draw(overlay);
+      });
       backend = std::move(aurora_backend);
       st.backend_name = "Aurora/Vulkan";
     }
@@ -554,7 +571,9 @@ void* render_main(void*) {
   }
   st.changed.notify_all();
   if (error.empty()) {
-    try { render_loop(*backend, aurora_up); }
+    // One presentation path: this loop presents each finished frame (and, through present_hook, again at a display
+    // rate above 60 Hz); with sub-frames on, the presenter's loop takes its place and draws the in-between poses.
+    try { if (present::linked() && present::wants_full_state()) present::loop(*backend, st.queue->queue, st.stop, aurora_up ? pump_window : nullptr, render_with); else render_loop(*backend, aurora_up); }
     catch (const std::exception& e) { say("picture: render thread stopped: %s", e.what()); st.queue->queue.finish(true); }
     catch (...) { say("picture: render thread stopped: unknown exception"); st.queue->queue.finish(true); }
   }

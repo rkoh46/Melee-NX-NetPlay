@@ -16,6 +16,8 @@
 
 #include "host.h"                // shim: PadState, the HUD queries
 #include "fixedmap.h"
+#include "netplay_bridge.h"      // the netplay device's round trip (ping_ms)
+#include "feature_calls.h"       // the feature modules' HUD lines
 #if MU_FE_AURORA
 #include "app/game_menu.h"       // menu_is_open (the build-time copy with patches/0104)
 #include "input_config.h"
@@ -82,7 +84,7 @@ int clamp_int(const std::string& text, int fallback, int low, int high) {
 }
 
 // ---- HUD ----
-std::atomic<int> hud_ping{-1}, hud_delay{0};
+std::atomic<int> hud_delay{0};
 std::atomic<uint64_t> hud_late{0};
 std::atomic<uint32_t> hud_work_x100{0};   // ms * 100
 [[maybe_unused]] bool menu_was_open = false;
@@ -93,7 +95,8 @@ bool app_wanted(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--app" || a == "--relaunch") continue;
-    if ((a == "--simulate-bad-layout" || a == "--base") && i + 1 < argc) { ++i; continue; }
+    // --replay FILE: the app started again by its Replays page ("Watch it"; play_main.cpp restarts in-process).
+    if ((a == "--simulate-bad-layout" || a == "--base" || a == "--replay") && i + 1 < argc) { ++i; continue; }
     return false;
   }
   return true;
@@ -228,11 +231,9 @@ void hud_frame(double work_ms) {
   hud_work_x100.store(uint32_t(std::max(0.0, work_ms) * 100.0), std::memory_order_relaxed);
   if (work_ms > 1000.0 / 60) hud_late.fetch_add(1, std::memory_order_relaxed);
 }
-// "[net] slippi: ping 23 ms" (every 600 frames of a match) and "slippi: automatic input delay 3 frames (...)".
+// "slippi: automatic input delay 3 frames (...)": the delay the netplay device chose for this game.
 void hud_log_line(const char* line) {
-  const char* at = std::strstr(line, "slippi: ping ");
-  if (at) { hud_ping.store(std::atoi(at + 13), std::memory_order_relaxed); return; }
-  at = std::strstr(line, "slippi: automatic input delay ");
+  const char* at = std::strstr(line, "slippi: automatic input delay ");
   if (at) hud_delay.store(std::atoi(at + 30), std::memory_order_relaxed);
 }
 uint32_t online_delay_frames() {
@@ -242,8 +243,7 @@ uint32_t online_delay_frames() {
 }
 
 // Once per retrace (simulation thread): what the menu changed in the controller pages is saved when it closes.
-void app_retrace(uint32_t, bool, bool online) {
-  if (!online) hud_ping.store(-1, std::memory_order_relaxed);
+void app_retrace(uint32_t, bool, bool) {
 #if MU_FE_AURORA
   if (!options.app) return;
   const bool open = host::menu_is_open();
@@ -259,6 +259,24 @@ void app_retrace(uint32_t, bool, bool online) {
 }
 
 #if MU_FE_AURORA
+// The feature modules' lines (Training's frame advantage, frame advance, the practice CPU) on screen whenever a module
+// has something to say, centred near the top, each in its own colour on a dark band. Render thread.
+void feature_overlay(void* frame, int ww, int wh) {
+  const auto lines = features::call_hud_lines();
+  if (lines.empty()) return;
+  auto& out = *static_cast<host::OverlayFrame*>(frame);
+  out.alpha = 1.0f;
+  const float unit = std::max(16.0f, float(wh) / 30.0f);
+  float y = float(wh) * 0.12f;
+  for (const auto& line : lines) {
+    if (line.text.empty()) continue;
+    const float w = std::min(float(ww) * 0.9f, unit * 0.55f * float(line.text.size()) + unit);
+    out.shapes.push_back({float(ww) * 0.5f - w * 0.5f, y - unit * 0.15f, float(ww) * 0.5f + w * 0.5f, y + unit * 1.15f, 0.0f, 0.0f, 0.0f, 0.55f, unit * 0.3f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+    const uint32_t c = line.rgba;
+    out.texts.push_back({float(ww) * 0.5f, y, unit, ((c >> 24) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, std::max(0.4f, (c & 0xFF) / 255.0f), 1, line.text, float(ww) * 0.88f});
+    y += unit * 1.45f;
+  }
+}
 namespace {
 // SDL gamepad and GUID of the controller Aurora's PAD put on `port` (nullptr: none, or the GameCube adapter).
 SDL_Gamepad* gamepad_on_port(int port) {
@@ -322,6 +340,7 @@ bool app_rumble_allowed(int port) {
 void app_pad_postprocess(void*) {}
 bool app_rumble_allowed(int) { return true; }
 void app_menu_setup() {}   // no menu without a picture
+void feature_overlay(void*, int, int) {}
 #endif
 }  // namespace fe
 
@@ -329,7 +348,8 @@ void app_menu_setup() {}   // no menu without a picture
 namespace host {
 double last_sim_frame_ms() { return fe::hud_work_x100.load(std::memory_order_relaxed) / 100.0; }
 uint64_t late_frame_count() { return fe::hud_late.load(std::memory_order_relaxed); }
-int online_ping_ms() { return fe::session_online() ? fe::hud_ping.load(std::memory_order_relaxed) : -1; }
+// The netplay device's own measurement, updated with every acknowledged frame of an online game (both sides).
+int online_ping_ms() { return fe::session_online() ? netplay_bridge::ping_ms() : -1; }
 const char* latency_warning() { return ""; }
 #if MU_FE_AURORA
 double window_refresh_rate() { return fe::display_refresh_hz(); }

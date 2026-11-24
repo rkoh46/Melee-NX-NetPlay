@@ -14,6 +14,8 @@ __attribute__((weak)) bool dispatch_setting(const std::string& key, const std::s
 __attribute__((weak)) void dispatch_run_end();
 __attribute__((weak)) const std::vector<MenuEntry>& menu_entries();
 __attribute__((weak)) std::vector<HudLine> hud_lines();
+__attribute__((weak)) bool take_restart_request(std::vector<std::string>* extra_args);   // replays.cpp: "Watch it"
+__attribute__((weak)) std::vector<std::string> replays_list();
 
 inline bool linked() { return &dispatch_retrace != nullptr; }
 inline void call_tables(MuHostApi* host, MuGameApi* game) { if (&dispatch_tables) dispatch_tables(host, game); }
@@ -25,4 +27,6 @@ inline bool call_setting(const std::string& key, const std::string& value) { ret
 inline void call_run_end() { if (&dispatch_run_end) dispatch_run_end(); }
 inline std::vector<MenuEntry> call_menu_entries() { return &menu_entries ? menu_entries() : std::vector<MenuEntry>{}; }
 inline std::vector<HudLine> call_hud_lines() { return &hud_lines ? hud_lines() : std::vector<HudLine>{}; }
+inline bool call_take_restart(std::vector<std::string>* extra) { return &take_restart_request && take_restart_request(extra); }
+inline std::vector<std::string> call_replays_list() { return &replays_list ? replays_list() : std::vector<std::string>{}; }
 }  // namespace fe::features

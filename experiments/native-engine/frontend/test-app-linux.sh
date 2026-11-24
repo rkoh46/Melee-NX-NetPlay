@@ -7,7 +7,11 @@
 # Cases:
 #   boot     no arguments, a made-up user.json: the game boots into its menus (Slippi's Online Play page)
 #   menu     as boot, and the controller script opens the in-game menu (L + R + Start), lowers the volume, lowers the music
-#            on the Game options page, turns the HUD on and closes it; then a second start reads the changes back
+#            on the Game options page, turns the HUD on, turns on Training's "Inputs and frame advantage" (a feature module's
+#            row, saved as lab_overlay 1) and closes it; then a second start reads the changes back
+#   handover the menu with the D-pad, closed with B held for 12 retraces, then A in the game: the D-pad moves the cursor and
+#            changes the volume, the closing B never reaches the game (it stays on Online Play), the later A does (Unranked
+#            opens Slippi's character select, scene 8)
 #   signin   no user.json: the sign-in screen comes first; B (Play offline) through the test pad file starts the game offline
 #   update   a fake build computer on 127.0.0.1 (python http.server) publishes 0.4.1: the prompt, A, the download, the
 #            check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app closes; then the same version: no prompt
@@ -70,7 +74,7 @@ for case in "$@"; do
     cat > "$root/menu-script.txt" <<'EOF'
 # The in-game menu from the main menu (scene 01 00): L + R + Start held, then the console's rows: Texture filtering,
 # Aspect ratio, Screen filter, Antialiasing, Volume (4 down), Online delay, Light shield, Stick, then the four settings
-# pages, Controls, Performance HUD, Resume, Quit.
+# pages, the feature modules' three pages (Game, Training, Replays), Controls, Performance HUD, Resume, Quit.
 @scene 01 00
 300 L+R+START
 345
@@ -120,10 +124,35 @@ for case in "$@"; do
 656
 664 sy=-127
 668
-680 sx=127
-684
-720 START
-724
+676 sy=-127
+680
+688 sy=-127
+692
+700 sy=-127
+704
+716 sx=127
+720
+# up 3 to the Training page (a feature module's), A, down 4 to "Inputs and frame advantage", right: lab_overlay 1
+728 sy=127
+732
+740 sy=127
+744
+752 sy=127
+756
+768 A
+772
+784 sy=-127
+788
+796 sy=-127
+800
+808 sy=-127
+812
+820 sy=-127
+824
+836 sx=127
+840
+860 START
+864
 EOF
     make_app "$dir" 1 2100 "$root/menu-script.txt"
     run "$dir" 'cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
@@ -137,6 +166,43 @@ EOF
       cd /out && /b/mu-native-gfx-linux-services > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
     echo "launcher.ini after the menu:"; grep -E "^(volume|hud|keyboard)=" "$dir/melee-nx-netplay/launcher.ini" || true
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
+    ;;
+  handover)
+    cat > "$root/handover-script.txt" <<'EOF'
+# The console's sequence: open the menu, D-pad down to Volume (4 rows), D-pad left 3 times (100 -> 70), close it with B
+# held for 12 retraces, then A in the game (on Online Play: Unranked).
+@scene 01 00
+300 L+R+START
+345
+360 DD
+364
+372 DD
+376
+384 DD
+388
+396 DD
+400
+410 DL
+414
+424 DL
+428
+438 DL
+442
+470 B
+482
+560 A
+566
+EOF
+    [ -z "${MU_HANDOVER_SCRIPT:-}" ] || cp "$MU_HANDOVER_SCRIPT" "$root/handover-script.txt"   # another sequence (diagnosis)
+    make_app "$dir" 1 1200 "$root/handover-script.txt" ${MU_HANDOVER_INI:-}
+    run "$dir" 'cd /out && (/b/mu-native-gfx-linux-services > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "menu: opened" 120 && { sleep 2; shot menu-dpad; }
+      wait_log /out/console.log "menu: closed with" 60 && { sleep 1; shot after-close; }
+      wait_log /out/console.log "scene 8/0" 60 && { sleep 2; shot after-a; }
+      wait $app'
+    echo "launcher.ini volume: $(grep '^volume=' "$dir/melee-nx-netplay/launcher.ini")"
+    grep -E "menu:|play: scene|online menu" "$dir/console.log" | cut -c1-160
     ;;
   signin)
     make_app "$dir" 0 1200 -

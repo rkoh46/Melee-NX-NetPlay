@@ -99,6 +99,7 @@ bool settings_change(const std::string& key, const std::string& value);   // set
 void settings_app_defaults(bool online_possible);                    // the app's defaults before settings.ini is read
 bool settings_online_now();                                          // the online rules are in force (simulation thread's view)
 bool settings_given(const std::string& key);                         // the key was in settings.ini
+void settings_write_key(const std::string& key, const std::string& value);   // writes a line (a feature module's key) without reading it
 void settings_set_quiet(const std::string& key, const std::string& value);   // sets it without writing the file
 const std::string& settings_path();
 // play_main.cpp
@@ -119,7 +120,8 @@ bool app_rumble_allowed(int port);
 void app_retrace(uint32_t retrace, bool fighting, bool online);   // simulation thread, once per retrace
 void app_menu_setup();                         // the in-game menu's settings and pages (Aurora builds)
 void hud_frame(double work_ms);                // simulation thread: the frame time the HUD shows
-void hud_log_line(const char* line);           // every queued log line: the ping and the input delay come from them
+void hud_log_line(const char* line);
+void feature_overlay(void* overlay_frame, int window_w, int window_h);   // the feature modules' HUD lines (host::OverlayFrame)           // every queued log line: the ping and the input delay come from them
 // The screens before the game (layout failure, disc missing, update, sign-in). Services program only for the
 // update and sign-in; false when the screen could not be shown (no picture).
 bool app_layout_screen(const char* reason);

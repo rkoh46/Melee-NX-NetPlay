@@ -45,6 +45,7 @@ bool menu_online = false;     // the services program with Slippi's menus and a 
 bool searching = false;       // between the game's "find a match" and its "clean the connection up" (simulation thread)
 bool online_now = false, in_match = false, tracked = false;
 std::atomic<bool> online_flag{false};   // online_now for other threads (the menu and the HUD)
+std::vector<std::string> restart_args;   // a feature module asked for the game to start again with these
 uint32_t last_match_frame = 0, match_count = 0, scene_major = 0xFFFFFFFF, scene_minor = 0;
 Clock::time_point last_retrace; bool have_last_retrace = false;
 
@@ -97,6 +98,11 @@ void observer(const MuStatePod& state, const linux_host::Counters& counters, voi
     features::call_retrace(info);
   }
   app_retrace(counters.retraces, fighting, online);
+  // The Replays page's "Watch it": the game is started again with the arguments the module returns.
+  if (restart_args.empty() && features::call_take_restart(&restart_args)) {
+    say("play: the game starts again with %zu more argument(s) (asked for by a feature module)", restart_args.size());
+    linux_host::request_stop(0);
+  }
   if (net_on) {
     // The state row the netplay host checks and records, and the frame's wall time (it takes the pacing wait out).
     char row[1400]; int n = 0;
@@ -145,7 +151,7 @@ void resim_phase(int32_t entering) {
   if (resim_original) resim_original(entering);
 }
 void tables_hook(MuHostApi* host, MuGameApi* game) {
-  if (host) features::call_tables(host, game);   // first, before anything below wraps the table (feature_hooks.h)
+  features::call_tables(host, game);   // first, before anything below wraps the table; also for the game's table (host null)
   if (host) {
     if (net_on) {
       const auto own_test_match = host->online_test_match;
@@ -346,12 +352,22 @@ int play_main() {
 #endif
   if (options.app) app_menu_setup();                       // the app's in-game menu (Aurora builds)
   Run run;
-  // The game runs its own main loop and expects a desktop-sized stack.
-  pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
-  pthread_t thread;
-  if (pthread_create(&thread, &attr, play_thread, &run) == 0) pthread_join(thread, nullptr);
-  else say("play: cannot create the simulation thread");
-  pthread_attr_destroy(&attr);
+  for (;;) {
+    // The game runs its own main loop and expects a desktop-sized stack.
+    pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
+    pthread_t thread;
+    if (pthread_create(&thread, &attr, play_thread, &run) == 0) pthread_join(thread, nullptr);
+    else say("play: cannot create the simulation thread");
+    pthread_attr_destroy(&attr);
+    if (restart_args.empty() || run.result != 0) break;
+    // Again in this process, offline (a replay): the netplay host has been shut down with the first run.
+    for (auto& a : restart_args) options.rest.push_back(a);
+    restart_args.clear();
+    if (net_on) { net_on = false; menu_online = false; settings_online(false); }
+    online_now = false; online_flag = false; in_match = false; tracked = false; scene_major = 0xFFFFFFFF; last_match_frame = 0;
+    run = Run{};
+    say("---- the game starts again ----");
+  }
   screens_stop();                                           // the game never attached (it could not start): Aurora shuts down
   fixedmap_release_all();
 #ifdef __SWITCH__

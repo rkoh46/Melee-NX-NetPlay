@@ -378,6 +378,7 @@ void settings_load(const std::string& path) {
 
 std::string settings_get(const std::string& key) { return get(key); }
 bool settings_given(const std::string& key) { return given.count(key) != 0; }
+void settings_write_key(const std::string& key, const std::string& value) { save(key, value); say("play: settings: %s %s (written to %s)", key.c_str(), value.c_str(), file_path.c_str()); }
 void settings_set_quiet(const std::string& key, const std::string& value) { set(key, value); }
 bool settings_change(const std::string& key, const std::string& value) {
   if (get(key).empty() && key != "mod_profile") return false;

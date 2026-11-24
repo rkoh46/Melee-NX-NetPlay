@@ -11,6 +11,7 @@
 #include "audio.h"
 #include "feature_calls.h"
 #include "host_services.h"       // melee-unlocked: linux_host::request_stop
+#include "netplay_bridge.h"      // set_delay: the input delay from the next game on
 #include <aurora/aurora.h>
 
 #include <algorithm>
@@ -136,7 +137,8 @@ void apply(const host::RuntimeSettings& s, host::MenuChange what) {
     case host::MenuChange::OnlineDelay:
       options.online_delay = s.online_delay <= 0 ? 0 : s.online_delay;
       app_ini_set("online_delay", s.online_delay <= 0 ? "auto" : std::to_string(s.online_delay));
-      say("menu: online input delay %s from the next start", s.online_delay <= 0 ? "automatic" : (std::to_string(s.online_delay) + " frames").c_str());
+      netplay_bridge::set_delay(s.online_delay, s.online_delay <= 0);   // the netplay device reads it at each game's start
+      say("menu: online input delay %s from the next match", s.online_delay <= 0 ? "automatic" : (std::to_string(s.online_delay) + " frames").c_str());
       break;
     case host::MenuChange::Widescreen:
       settings_change("widescreen", s.widescreen ? "1" : "0");
@@ -181,7 +183,6 @@ void app_menu_setup() {
   // Rows of the earlier renderer that mean nothing here: this renderer always draws the newest frame.
   host::menu_hide(host::MenuChange::FullSpeed);
   host::menu_hide(host::MenuChange::Graphics);
-  host::menu_set_label(host::MenuChange::OnlineDelay, "Online input delay *");
   host::menu_set_label(host::MenuChange::Widescreen, "Aspect ratio *");
   host::menu_set_quit([] {
     say("menu: quit");
@@ -193,7 +194,6 @@ void app_menu_setup() {
       const uint32_t delay = online_delay_frames();
       text = delay ? "delay " + std::to_string(delay) : std::string("delay auto");
     }
-    for (const auto& line : features::call_hud_lines()) { if (!text.empty()) text += "   "; text += line.text; }
     return text;
   });
   std::vector<host::MenuExtraPage> extra;
@@ -237,7 +237,9 @@ void app_menu_setup() {
       const auto& e = list[size_t(item)];
       if (dir == 0 && e.press) e.press();
       else if (e.change) e.change(dir ? dir : 1);
-      return false;   // the modules keep their own state
+      if (!e.persist) return false;   // nothing of this row is saved
+      e.persist([](const char* key, const std::string& value) { settings_write_key(key, value); });
+      return true;
     };
     extra.push_back(std::move(page));
   }

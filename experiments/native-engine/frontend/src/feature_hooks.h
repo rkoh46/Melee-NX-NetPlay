@@ -70,6 +70,10 @@ struct MenuEntry {
   std::string (*value)();
   void (*change)(int direction);
   void (*press)();
+  // After `change` or `press`: the settings.ini lines that hold the row's value now. `write(key, value)` once per key;
+  // play mode writes them into settings.ini, keeping its other lines and comments. Null: nothing is saved.
+  using Write = void (*)(const char* key, const std::string& value);
+  void (*persist)(Write write) = nullptr;
 };
 void add_menu_entry(const MenuEntry& entry);
 
