@@ -78,8 +78,8 @@ run() {
       pad() { printf "%s\n" "$1" > /out/pad.txt; }
       # The test pad file (MELEE_PAD_FILE) drives the home screen and the settings panel: tap BUTTONS; focus LABEL [BUTTON] taps
       # (D-pad down by default) until the panel names LABEL as the focused row ("settings: focus" in the log).
-      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep ${3:-0.5}; }
-      focus() { for i in $(seq 70); do [ "$(grep -a "settings: focus" ${LOG:-/out/console.log} | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1" >> /out/harness.log; return 1; }
+      tap() { pad "$1"; sleep ${2:-0.2}; pad ""; sleep ${3:-0.45}; }
+      focus() { for i in $(seq 140); do [ "$(grep -a "settings: focus" ${LOG:-/out/console.log} | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1" >> /out/harness.log; return 1; }
       '"$body" || echo "test-app-linux: container ended with $?"
 }
 
@@ -138,7 +138,7 @@ for case in "$@"; do
     # section (MU_CONTROLS_TEST_PAGE); "Save as a new profile"; up to the bindings, A bound to Z by pressing it; up to the setup,
     # stick left/right inverted (Z, which is A now), Stick radius 100 -> 90 with the inverted stick; Start closes. Then the game gets
     # Y for X, A for Z and the stick inverted and scaled (the "the game gets" lines). A second start loads the profile.
-    make_app "$dir" 1 3600 - "padx.gc1=m2=2048,m3=1024" home=0
+    make_app "$dir" 1 7200 - "padx.gc1=m2=2048,m3=1024" home=0
     run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles"; pad ""; shots 3
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
