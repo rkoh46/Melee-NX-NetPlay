@@ -236,7 +236,9 @@ void app_menu_setup() {
       const auto& list = feature_pages()[g].entries;
       if (item < 0 || item >= int(list.size())) return false;
       const auto& e = list[size_t(item)];
-      if (dir == 0 && e.press) e.press();
+      // The menu sends A on a row that shows a value as a change to the right: a row with only an action (a slot's
+      // "save", which shows Saved or Empty) takes it as the press.
+      if (e.press && (dir == 0 || !e.change)) e.press();
       else if (e.change) e.change(dir ? dir : 1);
       if (!e.persist) return false;   // nothing of this row is saved
       e.persist([](const char* key, const std::string& value) { settings_write_key(key, value); });
