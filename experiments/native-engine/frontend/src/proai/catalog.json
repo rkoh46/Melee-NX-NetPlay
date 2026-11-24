@@ -1,0 +1,1255 @@
+{
+ "version": 1,
+ "credit": "Phillip (slippi-ai) by Vlad Firoiu, MIT license; models from huggingface.co/vladfi/phillip-models (MIT)",
+ "index_updated": "2026-10-31T14:25:30Z",
+ "models": [
+  {
+   "file": "fox_d18_ditto_v4.onnx",
+   "sha256": "1d5137beb9d21d1f3f63d1cb3b0aa4b6e4c8824db088dda2ac53ecf4aa5170a6",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    1
+   ],
+   "delay": 18,
+   "names": {
+    "3": 4
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_ditto_v4.onnx",
+   "size": 21367974,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Aklo",
+    "SFAT"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_imitation_v3.onnx",
+   "sha256": "ce2ba072c88daa608b4a675979e866b95d9ddc7bda9240634b071d34277058f4",
+   "kind": "imitation",
+   "character": 1,
+   "opponents": [],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 1,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_imitation_v3.onnx",
+   "size": 21244744,
+   "trained_as": [],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_dk.onnx",
+   "sha256": "c1dbb59825d648eb895c4580400fcb3fb8b055b2237ce432e3b6097b0c334b10",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    3
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_dk.onnx",
+   "size": 21244925,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Aklo",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_falco_v4.onnx",
+   "sha256": "d4265fd71aa2c02ceb962d4b39f22c22c1013ee7f3dbbd9e1dca7281a4d2c535",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    22
+   ],
+   "delay": 18,
+   "names": {
+    "3": 4
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_falco_v4.onnx",
+   "size": 21368024,
+   "trained_as": [
+    "Cody",
+    "Aklo",
+    "Hax",
+    "SFAT"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_ics.onnx",
+   "sha256": "97b6f89a80e1a03445c14ebc3e31eff4a053f2488ce2a6435a42298953181c58",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    10
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_ics.onnx",
+   "size": 21244910,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_marth_v3.1.onnx",
+   "sha256": "b3e550de9c2d96310879b5dfec683d7a0f41552bb30d358489eb0ec9c9e0bfa4",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    18
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_marth_v3.1.onnx",
+   "size": 21244911,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_peach_v3.onnx",
+   "sha256": "4709196b52de9feb7c55995d5ff113e96b16963be686f41b530cc809543d69e3",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    9
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_peach_v3.onnx",
+   "size": 21244928,
+   "trained_as": [
+    "Cody",
+    "Aklo",
+    "Hax",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_pikachu.onnx",
+   "sha256": "b0ca13bea7b311912a73ab672e1f363e9f7a51691365547e787f031125b32ec2",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    12
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_pikachu.onnx",
+   "size": 21244912,
+   "trained_as": [
+    "Cody",
+    "Aklo",
+    "Hax"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_puff_v3.onnx",
+   "sha256": "bd2924636f0c172a1e64c33a51f598f8cd5fce61d538dbe87597de9a0d47767d",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    15
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_puff_v3.onnx",
+   "size": 21244932,
+   "trained_as": [
+    "Cody",
+    "Aklo",
+    "Hax",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_samus_v3.onnx",
+   "sha256": "325fa6be7c4c1cfc7aae3f78f6daa8bfe5f2f7e7551b5130e90ab9a7b9253e69",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    13
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_samus_v3.onnx",
+   "size": 21244894,
+   "trained_as": [
+    "Cody"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_sheik_v3.onnx",
+   "sha256": "209ec28dc1d5254e9c03f20f28e8114ecb2a5e33132573afe40002041e303c10",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    7
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_sheik_v3.onnx",
+   "size": 21244911,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d18_vs_yoshi_v3.onnx",
+   "sha256": "1127eda1611c1f2751ee039b37fe6e8239697be47a4c13e2b80ba4d47de3a0f9",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    14
+   ],
+   "delay": 18,
+   "names": {
+    "3": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_d18_vs_yoshi_v3.onnx",
+   "size": 21244928,
+   "trained_as": [
+    "Cody",
+    "Aklo",
+    "Hax",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_ditto_v6.2.onnx",
+   "sha256": "78a33d591ac4fb9403b6543ce876651ed7e100377928172dd0ffd4c4fba95478",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    1
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/fox_d21_ditto_v6.2.onnx",
+   "size": 89631659,
+   "trained_as": [
+    "Cody",
+    "Zamu",
+    "Hax",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_v6.2.onnx",
+   "sha256": "a2abe7c78797d33acee8924344584a10e8ce23767d1933ea6d1e44b4a7417b09",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    1,
+    2,
+    7,
+    9,
+    15,
+    17,
+    18,
+    22
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 2,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/fox_d21_v6.2.onnx",
+   "size": 89631918,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Aklo",
+    "SFAT",
+    "Zamu"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_vs_falco_v6.2.onnx",
+   "sha256": "80cad411b77f4a684551d37379371c0b50982251c53edb8e8f4b1e250087dd9c",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    22
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/fox_d21_vs_falco_v6.2.onnx",
+   "size": 89631848,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "SFAT",
+    "Zamu",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_vs_falcon_v6.1.onnx",
+   "sha256": "5310f7cdbf4c976e2463f5df4eb38b157d52fcc0ac039a6680e351e2f3bb866c",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    2
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/fox_d21_vs_falcon_v6.1.onnx",
+   "size": 89631852,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "Zamu",
+    "SFAT",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_vs_marth_v6.2.onnx",
+   "sha256": "49c894b64618eeaece4ded8bca582248b71b0ade5765b77bc2f0b23a41f88c93",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    18
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/fox_d21_vs_marth_v6.2.onnx",
+   "size": 89631817,
+   "trained_as": [
+    "Cody"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_vs_peach_v6.onnx",
+   "sha256": "3f30d636903593e30de88264d3fcbb7a1ba782015c2089591c812806af1bf509",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    9
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/fox_d21_vs_peach_v6.onnx",
+   "size": 89631848,
+   "trained_as": [
+    "Cody",
+    "Hax",
+    "SFAT",
+    "Zamu",
+    "Aklo"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_d21_vs_puff_v6.3.onnx",
+   "sha256": "411c797ff3f98c42089099c07a08b1137bc7eecbc557505fdf662484557a8c04",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    15
+   ],
+   "delay": 21,
+   "names": {
+    "3": 4
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/383dabfb9f9abee60fee2da56f75826cc0ee8ea8/fox_d21_vs_puff_v6.3.onnx",
+   "size": 89631853,
+   "trained_as": [
+    "Cody",
+    "Aklo",
+    "SFAT",
+    "Zamu",
+    "Hax"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "fox_delay_18_vs_falcon.onnx",
+   "sha256": "74388e613ad0560a621015f905828b487da14e1d3f0059d5d335393341cce65d",
+   "kind": "rl",
+   "character": 1,
+   "opponents": [
+    2
+   ],
+   "delay": 18,
+   "names": {
+    "3": 4
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/fox_delay_18_vs_falcon.onnx",
+   "size": 21245035,
+   "trained_as": [
+    "Cody"
+   ],
+   "pro_trained": {
+    "3": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_ditto_v3.onnx",
+   "sha256": "f0db27bfebf39b0cafa63f89e6c5f0147957bd32d3e3f402eaa6a0701fccf170",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    18
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_ditto_v3.onnx",
+   "size": 21367919,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_imitation_v3.onnx",
+   "sha256": "b5be07416770d8236a65a05b5e6969cebda426b022392d6cae6232dd4af72c50",
+   "kind": "imitation",
+   "character": 18,
+   "opponents": [],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 1,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_imitation_v3.onnx",
+   "size": 21367767,
+   "trained_as": [],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_falco_v3.onnx",
+   "sha256": "9cc5f5477630578c8e3f34b216d20d5d4ae144e6d12b0a6f39f3123ce5d07d7c",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    22
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_falco_v3.onnx",
+   "size": 21367940,
+   "trained_as": [
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": false
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_falcon.onnx",
+   "sha256": "05674a1211c1ada8898c5668fc7d0d720558458c69bd012bee54a06f45429af5",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    2
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_falcon.onnx",
+   "size": 21367953,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_fox_v3.1.onnx",
+   "sha256": "fbecfc9d472756c894ae2d39ce8bf44b36d2bfb3604bb305a3b1a1a329caa7a7",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    1
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_fox_v3.1.onnx",
+   "size": 21367939,
+   "trained_as": [
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": false
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_ics.onnx",
+   "sha256": "16004dfb9ccffe381b4745be3f021b2aea617abb4413e60e835d31d3d2fd74c7",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    10
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_ics.onnx",
+   "size": 21367948,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_peach.onnx",
+   "sha256": "a1158d112b819a892b835fd2c074ae7428fd75075d00aa906e8e3b7df8a30254",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    9
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_peach.onnx",
+   "size": 21367949,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_pikachu.onnx",
+   "sha256": "d4270e6e4a6a056f61d2a77a84a8e48fc3c2d9e87fd2968875b7684af7fa68b8",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    12
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_pikachu.onnx",
+   "size": 21367951,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_puff_v3.onnx",
+   "sha256": "f8f19c085b49a811d8d3f22dd74ddd9f683738149b7acdb0d9f4cfad057a114a",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    15
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_puff_v3.onnx",
+   "size": 21367946,
+   "trained_as": [
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": false
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_samus.onnx",
+   "sha256": "be16f1f5b1260e75f4ace027b81ce01b51bc29d5f287e8be4e737a1b82714328",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    13
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_samus.onnx",
+   "size": 21367948,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_sheik_v3.onnx",
+   "sha256": "169aef4ae4466c6562e726634165b9fd30e2ebe4713f7862b5fcdf9fc9851e66",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    7
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_sheik_v3.onnx",
+   "size": 21367940,
+   "trained_as": [
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": false
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d18_vs_yoshi_v3.onnx",
+   "sha256": "c2c93e9b5ce3a3b939a6ea58281bc21ce1313a8f6af1190be1efe761a72754ec",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    14
+   ],
+   "delay": 18,
+   "names": {
+    "1": 5
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/marth_d18_vs_yoshi_v3.onnx",
+   "size": 21367948,
+   "trained_as": [
+    "Zain",
+    "Kodorin",
+    "Master Player"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d21_ditto_v6.3.onnx",
+   "sha256": "d2534ac21239310002d825ad89e23bfdd2f2b4a336bcfe4dbe16ae60aa975ba2",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    18
+   ],
+   "delay": 21,
+   "names": {
+    "1": 3
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/marth_d21_ditto_v6.3.onnx",
+   "size": 89631792,
+   "trained_as": [
+    "Zain",
+    "Kodorin"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d21_v6.2.onnx",
+   "sha256": "f4b1f83d3ea3327018c9da4dc89d3dcf96241f0ae28813d6c547fd81b59bb74b",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    1,
+    2,
+    7,
+    9,
+    15,
+    17,
+    18,
+    22
+   ],
+   "delay": 21,
+   "names": {
+    "1": 3
+   },
+   "priority": 2,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/marth_d21_v6.2.onnx",
+   "size": 89631960,
+   "trained_as": [
+    "Zain",
+    "Kodorin"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d21_vs_falco_v6.3.onnx",
+   "sha256": "0dff820747da03e1a78fbfa209e0e57298279347362004f935808c4aaed449e4",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    22
+   ],
+   "delay": 21,
+   "names": {
+    "1": 3
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/marth_d21_vs_falco_v6.3.onnx",
+   "size": 89631890,
+   "trained_as": [
+    "Zain",
+    "Kodorin"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d21_vs_falcon_v6.3.onnx",
+   "sha256": "f4a485d0864e50e56edc107e4ff4c12bafa3ce0e843878f4c2f9727dd5439cf1",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    2
+   ],
+   "delay": 21,
+   "names": {
+    "1": 3
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/383dabfb9f9abee60fee2da56f75826cc0ee8ea8/marth_d21_vs_falcon_v6.3.onnx",
+   "size": 89631894,
+   "trained_as": [
+    "Zain",
+    "Kodorin"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d21_vs_fox_v6.5.onnx",
+   "sha256": "62029a4b9959cc61ffd09c0b0e75213a39e4bbaa75d110ef48818e483307f7ba",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    1
+   ],
+   "delay": 21,
+   "names": {
+    "1": 3
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/marth_d21_vs_fox_v6.5.onnx",
+   "size": 89631910,
+   "trained_as": [
+    "Zain"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "marth_d21_vs_luigi_v6.onnx",
+   "sha256": "6c6b2d6c69ea651c89b5310dbaa4fcdf05a428f76ffeed08909bd4fa6de50365",
+   "kind": "rl",
+   "character": 18,
+   "opponents": [
+    17
+   ],
+   "delay": 21,
+   "names": {
+    "1": 3
+   },
+   "priority": 4,
+   "heavy": true,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/efc56850da0c1f1313bea968b10533cd3b22c652/marth_d21_vs_luigi_v6.onnx",
+   "size": 89631912,
+   "trained_as": [
+    "Zain"
+   ],
+   "pro_trained": {
+    "1": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_ditto.onnx",
+   "sha256": "d71aa7d4eb4b19b110514c31c6cd7beb01c914ed7ddb81f230fc7f8c68095cdf",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    14
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_ditto.onnx",
+   "size": 21245106,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_imitation_v3.onnx",
+   "sha256": "96be8a68b82183f618056fc829e44f09c550bfd8d5734dfb535523628189ea3f",
+   "kind": "imitation",
+   "character": 14,
+   "opponents": [],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 1,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_imitation_v3.onnx",
+   "size": 21367775,
+   "trained_as": [],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_falco.onnx",
+   "sha256": "d2e87798bb77c5af12790c9492d4108324ab35f68fe5f6c8fca1d92e47afcc76",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    22
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_falco.onnx",
+   "size": 21245136,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_falcon.onnx",
+   "sha256": "e78c442667a629ea0b48e3ac78702f23fd42866652802a01b8dfe47acf3fd4ea",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    2
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_falcon.onnx",
+   "size": 21245145,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_fox_v3.onnx",
+   "sha256": "6b61ac31bfc3cc29e2084eb23d071ad01cf92cad422ab7ca101221634d8bbacb",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    1
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_fox_v3.onnx",
+   "size": 21245136,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_marth_v3.onnx",
+   "sha256": "dcde5cdc0118ae99617a0d3dc679b7e916024f98f654969b63991bed047aaf02",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    18
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_marth_v3.onnx",
+   "size": 21245140,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_peach_v3.onnx",
+   "sha256": "c3cc023a407ea4736685b1ad27162babb7d2266ba7cbd550f9471cd99a4e5596",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    9
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_peach_v3.onnx",
+   "size": 21367879,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_puff.onnx",
+   "sha256": "1870692b3b0bd813d1772988db5f777c909075290de51ba03140d72084d549dc",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    15
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_puff.onnx",
+   "size": 21245141,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  },
+  {
+   "file": "yoshi_d18_vs_sheik_v4.onnx",
+   "sha256": "b9e301e1b2047ccf4bf7d77a9aeb1557865fe2dc296ba45622de9c8110d063d4",
+   "kind": "rl",
+   "character": 14,
+   "opponents": [
+    7
+   ],
+   "delay": 18,
+   "names": {
+    "4": 0
+   },
+   "priority": 3,
+   "heavy": false,
+   "source": "https://huggingface.co/vladfi/phillip-models/resolve/ccd1088e7540c57e3a82cb6068358e14873f01c2/yoshi_d18_vs_sheik_v4.onnx",
+   "size": 21367879,
+   "trained_as": [
+    "Amsa"
+   ],
+   "pro_trained": {
+    "4": true
+   },
+   "likeness_ok": false,
+   "temperature": 1.0
+  }
+ ]
+}
