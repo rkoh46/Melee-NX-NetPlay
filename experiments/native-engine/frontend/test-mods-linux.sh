@@ -32,6 +32,10 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; shift
+# No case named: every case (a run that names none must not pass by running nothing).
+[ $# -gt 0 ] || set -- training-menu frozen vanilla-only vanilla-refuse mex rogue install squad practice-cpu dsp
+# The mod discs: MU_MODS_DIR, else the disc folder's mods/ when it has one.
+[ -n "${MU_MODS_DIR:-}" ] || { [ -d "$disc/mods" ] && export MU_MODS_DIR="$disc/mods"; } || true
 work="$repo/build/native-engine-gfx"; root="$work/run-mods-test"
 mkdir -p "$root"
 
