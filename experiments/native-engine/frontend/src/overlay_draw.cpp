@@ -17,6 +17,7 @@
 #include "frontend.h"
 #include "overlay_state.h"
 #include "replay_view.h"
+#include "proai/practice_state.h"   // practice_menu_draw (weak)
 #include "host.h"                // shim: gcadapter_status
 
 #include <aurora/aurora.h>
@@ -669,6 +670,8 @@ void overlay_draw(int ww, int wh) {
     features::replay_view(rv);
     if (rv.active) draw_replay(dl, rv, g);
   }
+  // The Practice menu (Start + D-pad Up + Z in offline Training; src/proai/practice_overlay.cpp), or its corner hint.
+  if (&practice_menu_draw) practice_menu_draw(float(ww), float(wh), g.x0, g.y0, g.x1, g.y1);
   overlay::Snapshot s;
   features::overlay_snapshot(s);
   if (!s.valid) return;

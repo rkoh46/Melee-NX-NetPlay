@@ -33,6 +33,13 @@
 #include <switch.h>
 #endif
 
+// The Practice menu (features/proai.cpp), weak: a build without the feature modules keeps the chord's earlier use.
+namespace fe::features {
+__attribute__((weak)) bool practice_menu_chord(int port);
+__attribute__((weak)) bool practice_menu_open();
+__attribute__((weak)) void practice_menu_pads(MuPadStatus pads[4]);
+}
+
 namespace fe {
 namespace {
 using namespace controls;
@@ -257,11 +264,20 @@ void controls_chords(void* pads_v) {
       else host::menu_toggle();
       say("controls: Start + D-pad Down + Z on port %d: the menu", i + 1);
     } else if (practice) {
-      if (host::menu_is_open()) host::menu_close(); else host::menu_open_extra("Training");
-      say("controls: Start + D-pad Up + Z on port %d: the Training page", i + 1);
+      // Offline Training: upstream's Practice menu (features/proai.cpp); elsewhere the in-game menu's Training page.
+      if (!host::menu_is_open() && &features::practice_menu_chord && features::practice_menu_chord(i)) {
+        say("controls: Start + D-pad Up + Z on port %d: the Practice menu", i + 1);
+      } else {
+        if (host::menu_is_open()) host::menu_close(); else host::menu_open_extra("Training");
+        say("controls: Start + D-pad Up + Z on port %d: the Training page", i + 1);
+      }
     }
-    if (connected) host::settings_shortcut::hold_lone_start(training && !host::menu_is_open(), settings_down[i] || practice_down[i], raw, pads[i].button, start_waited[i]);
+    const bool practice_open = &features::practice_menu_open && features::practice_menu_open();
+    if (connected) host::settings_shortcut::hold_lone_start(training && !host::menu_is_open() && !practice_open, settings_down[i] || practice_down[i], raw, pads[i].button, start_waited[i]);
   }
+  // While the Practice menu is open its controller is the menu's and the game gets neutral pads (features/proai.cpp).
+  static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
+  if (&features::practice_menu_pads) features::practice_menu_pads(reinterpret_cast<MuPadStatus*>(pads));
 }
 
 void controls_saved(void (*put)(const std::string&, const std::string&)) {

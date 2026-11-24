@@ -1,0 +1,145 @@
+Native engine app (experiments/native-engine/frontend): melee-unlocked's Practice menu (practice_menu.cpp) built into the
+app with MU_PROAI_FRONTEND. Nothing of Phillip's AI ships with the app: when it is not downloaded, the menu's
+"Fight a pro" row leads to its page, where "Download Phillip's AI (about N MB)" asks first (a page like upstream's
+"Stronger Pro AI" question: Download / Not now), and the pros' habit tables still play meanwhile. The Search row says
+that this app searches from Online Play (its own search starts there). After patches/0112.
+Applied to a build-time copy only (build/native-engine-gfx/gen/proai).
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/gx/practice_menu.cpp
++++ b/port/runtime/gx/practice_menu.cpp
+@@ -313,7 +313,11 @@
+ 
+ enum class Page : int {
+   Root, Queue, Code, Blocked, Cpu, Moves, Attacks, Defense, Oos, Hit, Di, Tech, Getup, After, Ledge, Tools,
+-  Presets, Setups, Replay, ReplaySettings, Ghosts, Jumps, Throws, Stronger, Count
++  Presets, Setups, Replay, ReplaySettings, Ghosts, Jumps, Throws, Stronger,
++#if defined(MU_PROAI_FRONTEND)
++  Download,   // Melee-NX-NetPlay (patches/0113): the question before Phillip's AI is downloaded
++#endif
++  Count
+ };
+ // The character select's number for a character name (a ghost's character), or -1.
+ int css_kind_of(const char* name) {
+@@ -349,6 +353,9 @@
+     case Page::ReplaySettings: return "Settings";
+     case Page::Ghosts: return "Fight a pro";
+     case Page::Stronger: return "Stronger Pro AI";
++#if defined(MU_PROAI_FRONTEND)
++    case Page::Download: return "Phillip's AI";
++#endif
+     case Page::Jumps: return "Jumps";
+     case Page::Throws: return "Throws";
+     default: return "";
+@@ -368,7 +375,9 @@
+   kActTeams = 500, kActBlocked = 600, kActWarmupBack = 650, kActWarmupAdjust = 651, kActGhostOff = 652,
+   // "Stronger Pro AI (Requires additional download)": the question after picking a pro, and the
+   // Fight a pro page's own download row.
+-  kActStrongerYes = 700, kActStrongerNotNow, kActStrongerAlways, kActStrongerNever, kActStrongerAll
++  kActStrongerYes = 700, kActStrongerNotNow, kActStrongerAlways, kActStrongerNever, kActStrongerAll,
++  // Melee-NX-NetPlay (patches/0113): nothing ships with the app; the base AIs download when the player says.
++  kActBaseAsk = 720, kActBaseYes, kActBaseNotNow
+ };
+ 
+ struct Row {
+@@ -562,9 +571,18 @@
+                                     gx::RenderOptions::live_warmup_watch() != 0));
+         }
+       }
++#if defined(MU_PROAI_FRONTEND)
++      // This app searches from Online Play (L + R on its select keeps Training going while it searches).
++      if (!s.available && !s.searching)
++        rows.push_back(action_row("Search", kActNone, "Online Play", "Search from Online Play. Hold L + R on its character select "
++                                  "to keep training while it searches.", false));
++      else
++#endif
++      {
+       std::string q = s.searching ? s.mode + " " + s.elapsed : (s.available ? "Off" : "Training only");
+       rows.push_back(page_row("Search", Page::Queue, q, s.searching ? "Searching. Keep training; the match starts when one is found."
+                                                                     : "Find a match while you train."));
++      }
+       const practice_cpu::Status st = practice_cpu::status();
+       std::string cpu = !c.enabled ? "Off" : (st.driving ? plan_text(st.plan) : "On");
+       {
+@@ -580,6 +598,13 @@
+           // cause read as a bare "Not available" (player report 11-20).
+           const char* why = !g_f.native_source ? "Source Port only: pick it as the engine in the launcher."
+                                                : phillip_ai::unavailable_reason();
++#if defined(MU_PROAI_FRONTEND)
++          // Not downloaded yet: the row leads to the page with the download question (and the habit tables).
++          if (why && phillip_ai::base_status().missing > 0) {
++            const phillip_ai::StrongerStatus b = phillip_ai::base_status();
++            rows.push_back(page_row("Fight a pro", Page::Ghosts, b.downloading ? "Downloading..." : "Download", why));
++          } else
++#endif
+           rows.push_back(action_row("Fight a pro", kActNone, why && why[0] == 'C' ? "Checking..." : "Not available",
+                                     why ? why : "Phillip's AI as a top player: Source Port.", false));
+         }
+@@ -766,6 +791,22 @@
+     }
+     case Page::Ghosts: {
+       const bool neural = neural_ghosts();
++#if defined(MU_PROAI_FRONTEND)
++      {
++        const phillip_ai::StrongerStatus b = phillip_ai::base_status();
++        if (b.missing > 0) {
++          char size[48], about[260];
++          std::snprintf(size, sizeof size, b.downloading ? "Downloading..." : "about %.0f MB", b.missing_mb);
++          std::snprintf(about, sizeof about, "Phillip's AI (slippi-ai by Vlad Firoiu, MIT) for each pro, from Hugging Face "
++                        "(vladfi/phillip-models). Downloaded only when you say, checked before it plays. %d of %d to get.",
++                        b.missing, b.total);
++          rows.push_back(action_row("Download Phillip's AI", kActBaseAsk, size, about, !b.downloading));
++        } else if (!neural) {
++          const char* why = phillip_ai::unavailable_reason();
++          if (why) rows.push_back(action_row("Phillip's AI", kActNone, why[0] == 'C' ? "Checking..." : "Not available", why, false));
++        }
++      }
++#endif
+       // A pro is playing: the way back to the game's own CPU, first on the page (player report 11-21: players could
+       // not find how to stop a pro; only CPU > Practice CPU turned it off).
+       if (!active_pro(c).empty())
+@@ -807,8 +848,20 @@
+                       "the next match on, on a PC fast enough for them.", s.missing, s.total);
+         rows.push_back(action_row("Download Stronger Pro AI", kActStrongerAll, size, about, s.missing > 0 && !s.downloading));
+       }
++      break;
++    }
++#if defined(MU_PROAI_FRONTEND)
++    case Page::Download: {
++      const phillip_ai::StrongerStatus b = phillip_ai::base_status();
++      char label[64], about[240];
++      std::snprintf(label, sizeof label, "Download (about %.0f MB)", b.missing_mb);
++      std::snprintf(about, sizeof about, "%d file%s from Hugging Face into ProAI on the SD card, in the background; each is "
++                    "checked (SHA-256) before it plays. Copying them there by hand works too.", b.missing, b.missing == 1 ? "" : "s");
++      rows.push_back(action_row(label, kActBaseYes, "", about, !b.downloading));
++      rows.push_back(action_row("Not now", kActBaseNotNow, "", "Nothing is downloaded. The pros' habit tables still play."));
+       break;
+     }
++#endif
+     case Page::Stronger: {
+       const phillip_ai::StrongerStatus s = phillip_ai::stronger_status(g_stronger_pro);
+       char label[64], about[240];
+@@ -1045,6 +1098,11 @@
+     }
+     return;
+   }
++#if defined(MU_PROAI_FRONTEND)
++  if (r.action == kActBaseAsk) { push(Page::Download); return; }
++  if (r.action == kActBaseYes) { phillip_ai::download_base(); pop(); return; }
++  if (r.action == kActBaseNotNow) { pop(); return; }
++#endif
+   if (r.action >= kActStrongerYes && r.action <= kActStrongerAll) {
+     const int pro = r.action == kActStrongerAll ? -1 : g_stronger_pro;
+     if (r.action == kActStrongerAlways) phillip_ai::set_stronger_choice(phillip_ai::kStrongerAlways);
+@@ -2100,7 +2158,11 @@
+     y += rail_card(dl, x, y, w, u, f.search.mode.c_str(), f.search.elapsed, true, true, a, 34.0f,
+                    f.search.opponent.empty() ? "searching" : "found", IM_COL32(69, 216, 112, 255), true) + 9 * u;
+   } else {
++#if defined(MU_PROAI_FRONTEND)
++    y += rail_card(dl, x, y, w, u, "Unranked", f.search.available ? "Off" : "Online Play", false, true, a) + 9 * u;
++#else
+     y += rail_card(dl, x, y, w, u, "Unranked", f.search.available ? "Off" : "Training only", false, true, a) + 9 * u;
++#endif
+   }
+   int n = 0;
+   for (const std::string& code : slippi::online::config().blocked_codes) n += code.empty() ? 0 : 1;
