@@ -55,6 +55,12 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `test-overlays-linux.sh` | The overlays and picture options in play mode with controller scripts and screenshots. |
 | `src/controls.cpp`, `src/controls_core.h`, `src/controls_files.*` | The controller setup beyond the button remap (see "Controller setup"): bindings, box mode, analog options, profiles, Dolphin import, chords, report rates. |
 | `patches/0111-game-menu-open-page.patch` | After 0104: `menu_open_extra`, the menu opened on a host page by its title (the Start + D-pad Up + Z chord). |
+| `src/proai/onnx_lite.*` | Fight a pro's inference engine: a minimal ONNX reader and the operators Phillip's policies use (Gemm on half-precision weights with NEON, LSTM-style gates, layer norm, sampling), no third-party runtime (see "Fight a pro and the Practice menu"). |
+| `src/proai/ort_lite.cpp`, `src/proai/include/` | The onnxruntime-shaped calls upstream's `phillip_ai.cpp` makes, on onnx_lite (not onnxruntime), and the thin headers upstream's `practice_menu.cpp` and `phillip_ai.cpp` are compiled on (host log and disc reads, ImGui 1.92's texture type over `aurora_imgui_add_texture`, inert warm-up settings). |
+| `src/proai/catalog.json`, `src/proai/proai_fetch_curl.cpp` | The app's Fight a pro catalog (`../tools/proai_catalog.py` from Hugging Face's index and the models' metadata), embedded; the downloads (services program, libcurl, SHA-256 checked). |
+| `src/features/proai.cpp`, `src/proai/practice_overlay.cpp`, `src/proai/practice_state.h` | Command 0xEA, the ProAI folder, upstream's practice_cpu / native_practice calls, the Practice menu's chord, controller and settings (simulation thread) and its drawing (render thread, from `overlay_draw.cpp`). |
+| `patches/0112-phillip-ai-own-engine.patch`, `patches/0113-practice-menu-download-question.patch` | Against build-time copies of upstream's `phillip_ai.cpp/.h` and `practice_menu.cpp` (`build/native-engine-gfx/gen/proai`): the own engine, the app's folder, the device timing, downloads only when chosen; the download question. |
+| `test-proai-linux.sh` | The Practice menu (four looks), Fight a pro in Training, the download from a local stand-in, with screenshots and onnxruntime run on the recorded steps. |
 | `src/replay_view.h`, `test-replays-linux.sh` | The replay viewer's overlay state (replays.cpp to overlay_draw.cpp and the render loop's repaint); the replay viewer, takeover, coach and Replays page in play mode with screenshots. |
 | `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots. |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
@@ -955,3 +961,26 @@ Our files are GPL-3.0-or-later, except `src/controls_core.h` and `src/controls_f
 `input_bindings.h`, `controller_profiles.cpp` and `dolphin_profile.cpp` and keep their GPL-2.0-or-later notice. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
+
+## Fight a pro and the Practice menu
+
+**Practice menu.** In an offline Training match, Start + D-pad Up + Z opens melee-unlocked's own Practice menu
+(`practice_menu.cpp`, patches/0113) in the look `practicestyle` picks (0 Main Menu bars, 1 Side rails, 2 Character
+select slots, 3 HUD strip; also on the in-game menu's Training page). The controller that opened it drives it (A pick,
+B back, Start close); the game gets neutral pads while it is open and whatever is held when it closes is kept from the
+game until let go. Its settings go to settings.ini when it closes. Outside an offline Training match the chord opens the
+in-game menu's Training page as before.
+
+**Fight a pro.** Practice menu > Fight a pro. The first time, "Download Phillip's AI (about 64 MB)" asks first
+(Download / Not now): the three base policies come from Hugging Face (vladfi/phillip-models, the pinned URLs in
+`src/proai/catalog.json`) into `sdmc:/switch/melee-nx-netplay/ProAI/`, each checked against its SHA-256 (or copy the
+`.onnx` files there by hand). Then each policy is timed on the console (`pro ai: <file> steps in N ms here: Fight a pro
+is on`, 14 ms is the limit as upstream); picking Zain, Cody Schwab or aMSa asks about "Stronger Pro AI" (the matchup
+policies, about 0.2 to 0.9 GB per pro; Not now / Always / Never) and starts Training again with the CPU as that pro's
+character, which Phillip plays (command 0xEA, offline only) with an 18-frame reaction delay on a worker thread (cores 0
+and 1 at priority 0x2C; `proai_threads 1..3` splits its large matrix products). Every 3600 steps the log says
+`pro ai: P2 N ms a step`; a step that misses its frame says `answer for frame N is late`. The engine:
+`src/proai/onnx_lite.cpp` (operators: Gemm, Add/Sub/Mul/Div/Max/Min, Where, comparisons, Sigmoid/Tanh/Gelu, Sqrt/Log/Neg,
+Clip, Cast, Reshape/Squeeze/Unsqueeze/Expand/Concat/Split/Gather, OneHot, ReduceMean/ReduceSum, ArgMax), checked
+against onnxruntime by `../tools/proai_check.sh MODELS_DIR` (and the app's own recorded steps,
+`MELEE_PRO_AI_RECORD=<file>`, by `../tools/proai_replay.py`).
