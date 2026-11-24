@@ -10,6 +10,7 @@
 //   - offline input delay (upstream port/runtime/host/offline_input_delay.*: offline_delay, offline_delay_frames);
 //   - automatic L-cancel (upstream port/runtime/host/lcancel.cpp, the automatic half; key autolcancel);
 //   - Zelda starts as Sheik (command 0xDE; key zelda_as_sheik);
+//   - offline Squad Strike (key squad_strike, off by default; patches/0006: the game asks test_getenv("MU_SQUAD_STRIKE"));
 //   - Slippi 3.7.0 input suggestions online (key input_suggestions, default on as upstream; the netplay object asks
 //     mu_net_suggest_setting at each online game's start: patches/net-0001, play_io.cpp mu_net_suggest_read).
 // Upstream's online rules: the input delay, Zelda as Sheik and the Training bits are offline only. Automatic
@@ -30,6 +31,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
+#include <sys/stat.h>
+
+extern const unsigned char fe_dsp_coef_free[];   // CMakeLists.txt: the fetched tree's free DSP coefficient table
+extern const unsigned fe_dsp_coef_free_size;
 
 namespace fe::features {
 namespace {
@@ -46,6 +53,8 @@ bool offline_delay_on = false;
 int offline_delay_frames = 4;            // 1..9
 bool auto_lcancel = false;
 bool zelda_sheik = false;
+bool squad_strike = false;
+bool dsp_lowpass = false;          // the console's DSP low-pass on voices (upstream MELEE_AUDIO_POLYPHASE, off by default as upstream)        // offline Squad Strike in ordinary VS (Z on the select adds fighters); patches/0006
 std::atomic<bool> input_suggestions{true};
 
 uint32_t colour_value(const std::string& value) {
@@ -58,6 +67,8 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "offline_delay_frames") offline_delay_frames = std::clamp(n, 1, 9);
   else if (key == "autolcancel") auto_lcancel = value == "1";
   else if (key == "zelda_as_sheik") zelda_sheik = value == "1";
+  else if (key == "squad_strike") squad_strike = value == "1";
+  else if (key == "dsp_lowpass") dsp_lowpass = value == "1";
   else if (key == "input_suggestions") input_suggestions = value != "0";
   else return false;
   return true;
@@ -72,6 +83,20 @@ uint32_t w_options() {
   if (replay_word(0, &recorded)) return (own & ~(kTeWord1 | MU_GAME_OPTION_TMCE)) | recorded;
   if (online() || vanilla()) return own;
   return own | training_option_bits() | (mods_tmce() ? MU_GAME_OPTION_TMCE : 0u);
+}
+// The Practice menu's Tools rows "Projectile hitboxes" (upstream: the Arcade look's switch from the Practice source, joined with the
+// settings' own, gx_core.h arcade sources): offline only, display only.
+uint32_t (*orig_display)() = nullptr;
+uint32_t w_display() {
+  uint32_t v = orig_display ? orig_display() : 0u;
+  if (!online() && !replay_playing() && !vanilla() && training_practice_display()) v |= MU_DISPLAY_OPTION_PROJECTILE_HITBOXES;
+  return v;
+}
+// The game's only way to read a host variable (MuHostApi.test_getenv). Answered: MU_SQUAD_STRIKE (patches/0006), "1" when the player
+// turned offline Squad Strike on and nothing online runs, and while a replay plays back (its recorded squads replay); nothing else.
+const char* w_test_getenv(const char* name) {
+  if (name && std::strcmp(name, "MU_SQUAD_STRIKE") == 0) return (squad_strike && !online() && !vanilla()) || replay_playing() ? "1" : "0";
+  return nullptr;
 }
 uint32_t w_options2() { uint32_t v = 0; return replay_word(1, &v) ? v : orig_options2 ? orig_options2() : 0u; }
 uint32_t w_options3() { uint32_t v = 0; return replay_word(2, &v) ? v : orig_options3 ? orig_options3() : 0u; }
@@ -240,6 +265,33 @@ void pad_read(MuPadStatus out[4]) {
   std::memcpy(g_out, out, sizeof g_out);
 }
 
+// ---- the DSP coefficient table (upstream ax_ucode.cpp polyphase_coefs, tools/package_release.py) ----
+// With dsp_lowpass 1 the voices go through the console's polyphase low-pass, which needs a coefficient table: a player's own
+// console dump in <app folder>/User/GC/dsp_coef.bin first, else the free table this program carries (Dolphin's free DSP ROM
+// table v0.2.1, GPL-2.0-or-later), written once to <app folder>/Sys/GC/dsp_coef.bin. The fetched ax_ucode.cpp reads the file
+// named by MELEE_DSP_COEF and logs its Adler-32. Off (the default, as upstream): Slippi-compatible conversion, no table read.
+void dsp_table() {
+  if (!dsp_lowpass) return;
+  std::string base = options.app && !options.base_dir.empty() ? options.base_dir : options.out_dir;
+  if (!base.empty() && base.back() != '/') base += '/';
+  std::string path = base + "User/GC/dsp_coef.bin";
+  const char* which = "the player's own table";
+  if (FILE* f = std::fopen(path.c_str(), "rb")) std::fclose(f);
+  else {
+    path = base + "Sys/GC/dsp_coef.bin";
+    which = "the free table (Dolphin's free DSP ROM v0.2.1)";
+    FILE* sys = std::fopen(path.c_str(), "rb");
+    if (sys) std::fclose(sys);
+    else if (fe_dsp_coef_free_size == 4096) {
+      for (const char* d : {"Sys", "Sys/GC"}) mkdir((base + d).c_str(), 0777);
+      if (FILE* w = std::fopen(path.c_str(), "wb")) { std::fwrite(fe_dsp_coef_free, 1, 4096, w); std::fclose(w); }
+    } else { say("options: dsp_lowpass: this build carries no free coefficient table; the low-pass stays off"); return; }
+  }
+  setenv("MELEE_DSP_COEF", path.c_str(), 1);
+  setenv("MELEE_AUDIO_POLYPHASE", "1", 1);
+  say("options: console low-pass on voices with %s (%s)", which, path.c_str());
+}
+
 // ---- tables, retrace, commands ----
 void tables(MuHostApi* host, MuGameApi* game) {
   if (game) g_game = game;                   // called twice: the host's table first, then the game's
@@ -248,12 +300,16 @@ void tables(MuHostApi* host, MuGameApi* game) {
   orig_options = host->game_options; host->game_options = w_options;
   orig_options2 = host->game_options2; host->game_options2 = w_options2;
   orig_options3 = host->game_options3; host->game_options3 = w_options3;
+  if (host->display_options) { orig_display = host->display_options; host->display_options = w_display; }
+  if (!host->test_getenv) host->test_getenv = w_test_getenv;
+  dsp_table();
   orig_pad_read = host->pad_read; host->pad_read = pad_read;
   host->shield_color = shield_color;
   say("options: shield colours %06X %06X %06X %06X%s, offline input delay %s (%d frames), automatic L-cancel %s, Zelda as Sheik %s",
       shield[0] & 0xFFFFFFu, shield[1] & 0xFFFFFFu, shield[2] & 0xFFFFFFu, shield[3] & 0xFFFFFFu,
       (shield[0] | shield[1] | shield[2] | shield[3]) ? "" : " (the ports' own)", offline_delay_on ? "on" : "off", offline_delay_frames,
       auto_lcancel ? "on" : "off", zelda_sheik ? "on" : "off");
+  say("options: offline Squad Strike %s", squad_strike ? "on (Z on the VS character select adds fighters)" : "off");
 }
 void on_retrace(const Retrace& info) {
   g_retrace = info.retrace;
@@ -316,6 +372,10 @@ void register_options() {
                   [](fe::features::MenuEntry::Write w) { w("offline_delay", offline_delay_on ? "1" : "0"); w("offline_delay_frames", std::to_string(offline_delay_frames)); }});
   add_menu_entry({"Game", "Zelda starts as Sheik", [] { return on_off(zelda_sheik); }, [](int) { zelda_sheik = !zelda_sheik; }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("zelda_as_sheik", zelda_sheik ? "1" : "0"); }});
+  add_menu_entry({"Game", "Console low-pass on voices (next start)", [] { return on_off(dsp_lowpass); }, [](int) { dsp_lowpass = !dsp_lowpass; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("dsp_lowpass", dsp_lowpass ? "1" : "0"); }});
+  add_menu_entry({"Game", "Squad Strike in VS (Z adds fighters, offline)", [] { return on_off(squad_strike); }, [](int) { squad_strike = !squad_strike; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("squad_strike", squad_strike ? "1" : "0"); }});
   add_menu_entry({"Game", "Input suggestions (online, next game)", [] { return on_off(input_suggestions.load()); },
                   [](int) { input_suggestions = !input_suggestions.load(); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("input_suggestions", input_suggestions.load() ? "1" : "0"); }});
