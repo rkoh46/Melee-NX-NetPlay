@@ -228,6 +228,18 @@ PY
     run "$dir" 'shots 2; cd /out && MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" /b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log'
     grep -E "controls:|menu: (opened|closed|the game gets)" "$dir/console.log" | cut -c1-160
     echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
+    # Second start without the setup: the chord, "Load this profile" (GameCube 1, saved above with the X/Y swap), Start;
+    # then X reaches the game as Y again.
+    python3 -I - "$dir/controls-load-script.txt" <<'PY'
+import sys
+lines = ["@scene 01 00", "300 START+DD+Z", "306", "350 sy=-127", "354", "370 sy=-127", "374", "400 A", "404", "460 START", "464",
+         "520 X", "526"]
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    sed -i.bak -e '/^padx\./d' -e 's|^script=.*|script=/out/controls-load-script.txt|' -e 's/^frames=.*/frames=900/' "$dir/melee-nx-netplay/launcher.ini"
+    run "$dir" 'cd /out && MU_CONTROLS_TEST_ADAPTER=1 MU_CONTROLS_TEST_PAGE="Controller profiles" /b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log'
+    echo "second start:"; grep -E "controls:|menu: the game gets" "$dir/console2.log" | cut -c1-160
+    echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
     for f in "$dir"/melee-nx-netplay/ControllerProfiles/*.profile; do [ -f "$f" ] && { echo "== $(basename "$f")"; grep -vE "^opt|^app" "$f" | tr '\n' ' '; echo; }; done
     ;;
   overlaymenu)

@@ -53,6 +53,8 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/app_services.cpp` | Services program only: the update from the player's build computer and the Slippi sign-in screen, drawn on the render thread before the game. |
 | `src/features/overlays.cpp`, `src/overlay_state.h`, `src/overlay_draw.cpp` | The on-screen overlays and picture options (see "Overlays and picture options"): settings, menu rows and what the game reports on the simulation thread; the drawing on the render thread through Aurora's ImGui pass. |
 | `test-overlays-linux.sh` | The overlays and picture options in play mode with controller scripts and screenshots. |
+| `src/controls.cpp`, `src/controls_core.h`, `src/controls_files.*` | The controller setup beyond the button remap (see "Controller setup"): bindings, box mode, analog options, profiles, Dolphin import, chords, report rates. |
+| `patches/0111-game-menu-open-page.patch` | After 0104: `menu_open_extra`, the menu opened on a host page by its title (the Start + D-pad Up + Z chord). |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
@@ -287,6 +289,60 @@ two at the next start): Low, Medium, High (the default), Ultra, or shows Custom.
 MU_APP_SETTINGS="playernicknames 1" ./test-app-linux.sh /path/to/disc-folder online overlaymenu
 ```
 
+### Controller setup
+
+`src/controls.cpp`, `src/controls_core.h`, `src/controls_files.*` (the app only): melee-unlocked's controller options on the
+console's two kinds of controller, SDL controllers (Pro Controller, Joy-Con, the Switch Online GameCube controller, pads the
+system accepts) and GameCube controllers on the adapter (one setup per adapter port). The processing is adapted from upstream's
+`input_bindings.h` (GPL-2.0-or-later, notice kept in the files); `box_melee.h` and `settings_chord.h` are compiled from the
+fetched tree unchanged. A controller whose setup equals its defaults is passed through untouched, and a setup only changes that
+controller's own pad, as pressing other buttons would: nothing new reaches the game or the other side online.
+
+- **Bindings** for all 27 upstream actions: on an SDL controller the twelve buttons stay the Controls page's remap, and the
+  menu's *Controller bindings* page adds C-stick and stick directions on buttons, L / R travel from a trigger or a button (with
+  upstream's per-binding level), Mod X / Mod Y, light and mid shield buttons and the stick modifier (walk, `Stick modifier
+  push`); an adapter port lists all 27 (upstream's gcadapter table: A and B swapped, L travel on X...). A or Right on a row,
+  then the control: bound (the menu ignores the press until it is let go, so it is not read through the new binding). Left
+  unbinds.
+- **Box mode**: binding Mod X or Mod Y turns the button-made stick and C-stick into the B0XX Melee coordinates with the
+  opposing-direction rule (upstream `box_melee.h`); Mod X + Mod Y makes the C buttons the D-pad. Here the light and mid shield
+  buttons work without box mode too (upstream: only in it). A box in its GameCube mode on the adapter, or in a mode the system
+  takes as a Pro Controller, already sends analog values from its firmware and needs none of this; the console's HID does not
+  offer a box in DInput or keyboard mode at all.
+- **Controller setup** page: stick and C-stick inversion per axis, stick radius (upstream's Radius), round deadzones in the
+  game's units, the snapback filter (SDL controllers only, as upstream: not on a GameCube controller), the adapter's L / R click
+  point (default: the trigger's own switch), L / R trigger caps (analog only, no click). An SDL controller's deadzone and press
+  point remain the Controls page's rows.
+- **Profiles** (*Controller profiles* page): `<app folder>/ControllerProfiles/NAME.profile` in upstream's format. Save as a new
+  profile ("Controller 1", "GameCube 1"...), save over, load, delete (A twice), default setup. `gcadapter` profiles carry
+  upstream's numbers, so one saved by melee-unlocked on a PC loads here and the other way round; SDL controllers get their own
+  kind (`sdlgamepad`, SDL button numbers). Levels and analog settings follow as `opt.` / `app.` lines, which upstream skips.
+- **Dolphin import**: copy a Dolphin `User/Config/Profiles/GCPad/NAME.ini` or `GCPadNew.ini` into `<app folder>/Dolphin/`; the
+  page lists each profile (each `[GCPadN]` of GCPadNew.ini), and *Import it into this controller* reads its SDL or XInput
+  bindings onto the selected SDL controller (keyboard profiles are refused: the console has none) and saves the result as the
+  profile "Dolphin NAME". Plain controls and `A | B` are read; stick axes become the stick swap and inversion; Dolphin's dead
+  zones, trigger threshold, modifier range and radius become the matching rows; anything else (modifier expressions, raw
+  `Button 3` joystick numbers) is counted as skipped (`controls: Dolphin ... imported ...: N bindings read, M not understood`).
+- **Chords** (upstream `settings_chord.h`): Start + D-pad Down + Z opens or closes the menu, Start + D-pad Up + Z opens it on the
+  Training page (upstream's Practice panel); the chord's buttons are kept from the game while it is held. In offline Training a
+  lone Start waits up to three polls for the rest of a chord, so Training's pause menu does not open under the page. L + R + Start
+  still opens the menu.
+- **Report rates** (`adapterrate 1`): beside the adapter's line, each Pro Controller, Joy-Con or Switch Online GameCube controller
+  with the rate at which the system's HID gives this program new states (new sampling numbers per second). Console only.
+- launcher.ini: `padx.<SDL GUID>=` or `padx.gc<port>=` (only what differs from the defaults), written when the menu closes.
+- The remap now runs before the in-game menu sees the pads (inside play_io's `menu_frame`, before it was after it), so the
+  menu, its hand-over masks and the chords see the pads as the game gets them; for the input-suggestion reads the box rule and
+  the snapback filter keep their own state.
+
+Tests: `../tools/controls_check.sh` (65 checks: box coordinates and the opposing-button rule, snapback, deadzone, radius,
+click and cap, adapter and SDL bindings, profile round trip and an upstream gcadapter profile, Dolphin XInput, SDL and keyboard
+profiles, GCPadNew.ini listing) and `./test-app-linux.sh DISC controls` (port 1's scripted pad read as adapter port 1 with
+`MU_CONTROLS_TEST_ADAPTER=1`; `MU_CONTROLS_TEST_PAGE` makes the Start + D-pad Down + Z chord open that page; a second start loads the saved profile).
+Results on Linux: A captured onto Z then Z gives the game A + Z, the saved X/Y swap, a full push right reaching the game as -114
+(inverted, radius 90 %), launcher.ini `padx.gc1=m0=16,m2=2048,m3=1024,inv=1,rad=90`, the profile loaded on the second start;
+after these changes the five reference scripts with `mu-native-gfx-null` and `parity_vs_onett` with a picture IDENTICAL,
+`test-app-linux.sh online` and `test-net-linux.sh` with `net check` equal on both sides.
+
 ### Mod profiles
 
 `mod_profile NAME` in settings.ini loads the layers of `<out>/mods/Profiles/NAME.ini` (upstream's form: `iso = file`
@@ -516,7 +572,7 @@ settings.ini), `offline=1` (no online services, no sign-in, no update check), `w
 does not set `widescreen`; default 1 as in the app), `filter` (live), `msaa`, `anisotropy` (at start), `trigger_range`,
 `stick_range` (console), `update_host`, `overclock=0`, `shader_warmup=0`, `shader_warmup_all=1`, `script`, `frames`,
 `menu_open`, `menu_page` (the app's test aids). New: `pad.<SDL GUID>=<port>;<map>` and `keyboard=<map>` (the menu's
-Controls page writes them, `input_config.h` format). Not used here: `scale`, `render_skip`, `draw_dump`, the app's
+Controls page writes them, `input_config.h` format); `padx.<SDL GUID>=` / `padx.gc<port>=` (the controller setup pages, see "Controller setup"). Not used here: `scale`, `render_skip`, `draw_dump`, the app's
 diagnosis keys. Every `settings.ini` key above is honoured; the app's default for `slippi_menus` is 1.
 
 **In-game menu** (the app's, `patches/0104`): Texture filtering \*, Aspect ratio \*, Screen filter, Antialiasing \*,
@@ -777,6 +833,7 @@ why is not known. The same costume's portrait on the character select screen is 
 
 ## Licensing
 
-Our files are GPL-3.0-or-later. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
+Our files are GPL-3.0-or-later, except `src/controls_core.h` and `src/controls_files.*`, which are adapted from melee-unlocked's
+`input_bindings.h`, `controller_profiles.cpp` and `dolphin_profile.cpp` and keep their GPL-2.0-or-later notice. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
