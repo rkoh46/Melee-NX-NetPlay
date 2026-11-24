@@ -85,6 +85,8 @@ void shutdown();
 // Slippi's time sync changes the frame rate (pacing is the host's, patches/0004); a program with its own sound output
 // gets each new speed here too (any thread; 1.0 normal, about 0.995..1.01 in a match).
 void set_speed_hook(void (*hook)(double speed));
+// State loads of online rollbacks so far (any thread may read it; the simulation thread counts).
+uint64_t rollbacks();
 
 // What a rollback snapshot covers right now: the game's ranges minus its exclusions, minus the
 // sound-driver ranges of the embedded image's build (melee_game.snapexcl). Also used by the

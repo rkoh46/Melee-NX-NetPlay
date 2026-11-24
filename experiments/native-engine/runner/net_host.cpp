@@ -498,4 +498,5 @@ void stop_tracking() {
 }
 void shutdown() { if (net.on) netplay_bridge::shutdown(); net.on = false; }
 void set_speed_hook(void (*hook)(double)) { speed_hook = hook; }
+uint64_t rollbacks() { return net.loads; }
 } // namespace net_host

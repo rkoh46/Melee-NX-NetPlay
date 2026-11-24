@@ -14,6 +14,7 @@ void register_options();
 void register_training();
 void register_replays();
 void register_spectator();
+void register_netoverlay();
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off

@@ -7,6 +7,7 @@
 #   MU_NET_CONTROLLERS=1          the controller scripts play the match instead of the game's generated test inputs
 #   MU_SUGGEST_LEAD_MS=N          with it: each script change is also read N ms before the poll that takes it, as a
 #                                 player's change between frames would be (sent as a Slippi input suggestion)
+#   MU_NET_INI=FILE              a settings.ini for both sides (a direct run takes the delay and the feature modules' keys)
 #   MU_NET_ARGS_A, MU_NET_ARGS_B  extra arguments for one side only (e.g. --net-clock-skew 0.4: time sync's frame-rate nudge)
 #   MU_NET_SUGGESTIONS=0|1        input suggestions off or on (default: on); MU_SUGGEST_TRACE=1 logs the first ones
 # Output: build/native-engine-gfx/run-net/{a,b}/ (console.log, digest-net-confirmed.csv) and shots/.
@@ -17,6 +18,7 @@ repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; frames="${2:-3000}"; shift $(( $# > 2 ? 2 : $# ))
 work="$repo/build/native-engine-gfx"; run="$work/run-net"
 rm -rf "$run"; mkdir -p "$run/a" "$run/b" "$run/shots"
+[ -z "${MU_NET_INI:-}" ] || { cp "$MU_NET_INI" "$run/a/settings.ini"; cp "$MU_NET_INI" "$run/b/settings.ini"; }
 # Two different pad scripts in the app's format: each side walks, jumps and attacks on its own rhythm.
 python3 -I - "$run" <<'PY'
 import sys
