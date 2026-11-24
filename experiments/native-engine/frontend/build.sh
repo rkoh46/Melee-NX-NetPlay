@@ -169,6 +169,23 @@ sync_tree() {
   # The NRO's icon: melee-unlocked's own (port/app/launcher.ico, its largest picture), as a 256x256 JPEG (build_nro).
   mu_icon
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
+  # Fight a pro and the Practice menu: melee-unlocked's phillip_ai.cpp and practice_menu.cpp, build-time copies with
+  # patches/0112 (the app's own inference engine, the app's ProAI folder, downloads only when chosen) and 0113 (the
+  # download question), compiled on src/proai/include's headers (CMakeLists.txt).
+  rm -rf "$gen/proaisrc"; mkdir -p "$gen/proaisrc/port/runtime/hle" "$gen/proaisrc/port/runtime/gx" "$gen/proai"
+  cp "$work/mu/port/runtime/hle/phillip_ai.cpp" "$work/mu/port/runtime/hle/phillip_ai.h" "$gen/proaisrc/port/runtime/hle/"
+  cp "$work/mu/port/runtime/gx/practice_menu.cpp" "$work/mu/port/runtime/gx/practice_menu.h" "$gen/proaisrc/port/runtime/gx/"
+  patch -s -p1 -d "$gen/proaisrc" < "$here/patches/0112-phillip-ai-own-engine.patch"
+  patch -s -p1 -d "$gen/proaisrc" < "$here/patches/0113-practice-menu-download-question.patch"
+  for f in hle/phillip_ai.cpp hle/phillip_ai.h gx/practice_menu.cpp gx/practice_menu.h; do
+    cmp -s "$gen/proaisrc/port/runtime/$f" "$gen/proai/$(basename "$f")" || cp "$gen/proaisrc/port/runtime/$f" "$gen/proai/$(basename "$f")"
+  done
+  rm -rf "$gen/proaisrc"
+  mkdir -p "$gen/abi"; cmp -s "$work/mu/port/runtime/abi/mu_ghost_ai.h" "$gen/abi/mu_ghost_ai.h" || cp "$work/mu/port/runtime/abi/mu_ghost_ai.h" "$gen/abi/"   # phillip_ai.h's ../abi
+  # The special moves' names the Practice menu's attack rows show (upstream hle/practice_cpu.cpp special_name's table).
+  sed -n '/static const char\* const names\[27\]\[4\] = {/,/^  };/p' "$work/mu/port/runtime/hle/practice_cpu.cpp" > "$gen/proai/special_names.inc.new" 2>/dev/null || true
+  [ -s "$gen/proai/special_names.inc.new" ] || echo 'static const char* const names[27][4] = {};' > "$gen/proai/special_names.inc.new"
+  if cmp -s "$gen/proai/special_names.inc.new" "$gen/proai/special_names.inc"; then rm -f "$gen/proai/special_names.inc.new"; else mv "$gen/proai/special_names.inc.new" "$gen/proai/special_names.inc"; fi
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"
   python3 -I "$here/../scripts/make_vs4_busy.py" "$work/mu/port/scripts/parity_vs_onett.txt" "$gen/scripts/vs4_busy.txt"

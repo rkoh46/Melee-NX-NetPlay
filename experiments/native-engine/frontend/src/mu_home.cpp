@@ -18,6 +18,7 @@
 #include "mu_ui.h"
 #include "feature_hooks.h"
 #include "feature_calls.h"
+#include "mu_mods.h"
 
 #include "host.h"
 #include "metal_frontend.h"
@@ -30,6 +31,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -50,7 +52,7 @@ __attribute__((weak)) std::vector<std::string> library_list();
 __attribute__((weak)) void replay_watch(const std::string& path);
 __attribute__((weak)) std::string replay_folder();
 }
-namespace fe { std::vector<std::string> mu_mod_profiles(); }   // mu_panel.cpp: the profiles its MODS page lists
+
 
 namespace fe {
 namespace {
@@ -177,8 +179,9 @@ struct Home {
   // Replay Viewer
   int replay_sel = 0, replay_scroll = 0;
   // Mods
-  int mod_sel = 0;
+  int mod_sel = 0, mod_scroll = 0, mod_button = 0;
   int frames = 0;
+  bool pad_reset = false;
 };
 
 std::string read_account(const std::string& user_dir, bool* ok) {
@@ -210,7 +213,6 @@ const features::MenuEntry* entry(const std::vector<features::MenuEntry>& list, c
   for (const auto& e : list) if (e.label && std::strcmp(e.label, label) == 0) return &e;
   return nullptr;
 }
-std::vector<std::string> mod_profiles() { return mu_mod_profiles(); }   // the settings panel's MODS list (settings.ini mod_profile)
 
 // ---- painting ----
 void paint_rail(ImDrawList* d, const Layout& L, const Fonts& f, const Home& h) {
@@ -257,7 +259,7 @@ void button(ImDrawList* d, const Layout& L, const Fonts& f, float x, float y, fl
   const ImVec2 a = L.p(x, y), b = L.p(x + w, y + hh);
   round_rect(d, a, b, L.u(primary ? 10 : 7), top, bot, border);
   if (focused) round_rect(d, L.p(x + 3, y + 3), L.p(x + w - 3, y + hh - 3), L.u(primary ? 8 : 5), NO_FILL, NO_FILL, primary ? C_PLAY_TEXT : C_ACC_HI);
-  text(d, f.bold, L.u(primary ? 21 : 12), a, b, ink, label, 1);
+  text(d, f.bold, L.u(primary && hh >= 40 ? 21 : 12), a, b, ink, label, 1);
 }
 
 // The Play page's focusable controls, in order.
@@ -396,25 +398,63 @@ void paint_replays(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
   text(d, f.body, L.u(11), L.p(CX + 380, by), L.p(CX + CW, by + 32), C_FAINT, "Up/Down pick", 2);
 }
 
+// The Mods page, as melee-unlocked's launcher draws its mod cards (launcher_mods.inl paint_page): a check, the name and the
+// latest version, the credits, the state (green once installed), the last line (what is happening, or the size and
+// licence) with a progress bar; the picked card carries its buttons (Get / Update / Cancel / Play it at the next start,
+// Remove). Under the cards: the profile the next start loads.
 void paint_mods(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
-  text(d, f.bold, L.u(10), L.p(CX, 32), L.p(CX + CW, 50), C_FAINT, "MOD PROFILES");
-  const std::vector<std::string> profiles = mod_profiles();
-  const std::string current = settings_get("mod_profile");
-  const int count = int(profiles.size()) + 1;
+  const COLORREF C_CARD = RGB(0x14, 0x1C, 0x2C), C_CARD_BORDER = RGB(0x27, 0x31, 0x4A);   // launcher_mods.inl's card colours
+  text(d, f.bold, L.u(10), L.p(CX, 26), L.p(CX + CW, 44), C_FAINT, "MODS");
+  text(d, f.body, L.u(11), L.p(CX, 44), L.p(CX + CW, 60), C_DIM, "Get downloads each mod from its official release and builds it from your own Melee disc.");
+  std::string error;
+  const std::vector<mu_mods::Card> cards = mu_mods::cards(&error);
+  const int count = int(cards.size()) + 1;   // the cards, then the profile row
   h.mod_sel = std::clamp(h.mod_sel, 0, count - 1);
-  for (int i = 0; i < count && i < 8; ++i) {
-    const int y = 58 + i * 34;
-    const std::string name = i == 0 ? "None (the retail game)" : profiles[size_t(i - 1)];
-    const bool active = i == 0 ? current.empty() : current == profiles[size_t(i - 1)];
-    const bool sel = !h.rail && h.mod_sel == i;
-    round_rect(d, L.p(CX, y), L.p(CX + CW, y + 30), L.u(7), active ? C_NAV_ON : C_FIELD, active ? C_NAV_ON : C_FIELD, sel ? C_ACC_HI : C_FIELD_BORDER);
-    dot(d, L, CX + 10, y + 11, active ? C_OK : C_FAINT);
-    text(d, f.body, L.u(12), L.p(CX + 28, y), L.p(CX + CW - 90, y + 30), active ? C_TEXT : C_DIM, name);
-    if (active) text(d, f.bold, L.u(10), L.p(CX + CW - 90, y), L.p(CX + CW - 12, y + 30), C_OK, "ACTIVE", 2);
+  if (!error.empty()) text(d, f.body, L.u(12), L.p(CX, 70), L.p(CX + CW, 90), C_WARN, error);
+  const int card_h = 92, gap = 6, visible = 3, top = 66;
+  if (h.mod_sel < h.mod_scroll) h.mod_scroll = h.mod_sel;
+  if (h.mod_sel >= h.mod_scroll + visible && h.mod_sel < int(cards.size())) h.mod_scroll = h.mod_sel - visible + 1;
+  h.mod_scroll = std::clamp(h.mod_scroll, 0, std::max(0, int(cards.size()) - visible));
+  for (int slot = 0; slot < visible && h.mod_scroll + slot < int(cards.size()); ++slot) {
+    const int k = h.mod_scroll + slot, y = top + slot * (card_h + gap);
+    const auto& c = cards[size_t(k)];
+    const auto& m = c.status.mod;
+    const bool sel = !h.rail && h.mod_sel == k;
+    round_rect(d, L.p(CX, y), L.p(CX + CW, y + card_h), L.u(10), C_CARD, C_CARD, sel ? C_ACC_HI : C_CARD_BORDER);
+    // draw_check
+    const ImVec2 cc = L.p(CX + 16 + 9, y + 14 + 9);
+    if (c.status.state == modinstall::State::Installed || c.status.state == modinstall::State::UpdateAvailable) {
+      d->AddCircleFilled(cc, L.u(9), col(C_OK), 20);
+      d->AddPolyline(std::array<ImVec2, 3>{L.p(CX + 21, y + 23), L.p(CX + 24, y + 26), L.p(CX + 29, y + 20)}.data(), 3, col(RGB(0x0E, 0x1A, 0x14)), 0, L.u(2));
+    } else d->AddCircle(cc, L.u(9), col(C_FAINT), 20, 1.0f);
+    const int tx = CX + 44, tw = CW - 44 - 16;
+    const float name_w = f.bold->CalcTextSizeA(L.u(14), FLT_MAX, 0, m.name.c_str()).x / L.s;
+    text(d, f.bold, L.u(14), L.p(tx, y + 8), L.p(tx + tw, y + 28), C_TEXT, m.name);
+    if (!m.version.empty() && name_w + 8 < tw) text(d, f.body, L.u(11), L.p(tx + name_w + 8, y + 8), L.p(tx + tw, y + 28), C_FAINT, "Latest " + m.version);
+    text(d, f.body, L.u(11), L.p(tx, y + 27), L.p(tx + tw, y + 42), C_FAINT, m.credits);
+    text(d, f.body, L.u(12), L.p(tx, y + 42), L.p(tx + tw, y + 58), c.state_ok ? C_OK : C_DIM, c.state);
+    const std::string last = c.status.percent >= 0 || c.status.state == modinstall::State::Working ? c.status.line : !c.get_it.empty() ? c.get_it : c.detail;
+    text(d, f.body, L.u(11), L.p(tx, y + 57), L.p(tx + tw, y + 72), c.status.failed ? C_WARN : C_DIM, last);
+    if (c.status.percent >= 0) {
+      round_rect(d, L.p(tx, y + 73), L.p(tx + tw, y + 77), L.u(2), C_FIELD, C_FIELD, NO_FILL);
+      const float done = float(tw) * std::clamp(c.status.percent, 0, 100) / 100.0f;
+      if (done > 4) round_rect(d, L.p(tx, y + 73), L.p(tx + int(done), y + 77), L.u(2), C_ACC_HI, C_ACC_LO, NO_FILL);
+    }
+    if (sel) {   // the picked card's buttons, at its foot
+      button(d, L, f, CX + CW - 16 - 120 - (c.can_remove ? 86 : 0), y + card_h - 22, 120, 18, c.primary.c_str(), true, h.mod_button == 0, !c.primary_enabled);
+      if (c.can_remove) button(d, L, f, CX + CW - 16 - 80, y + card_h - 22, 80, 18, c.remove_armed ? "Press A again" : "Remove", false, h.mod_button == 1, false);
+    }
   }
-  text(d, f.body, L.u(11), L.p(CX, 58 + 8 * 34 + 8), L.p(CX + CW, 58 + 8 * 34 + 60), C_FAINT,
-       "A profile is a list of mod files: switch/melee-nx-netplay/mods/Profiles/<name>.ini, or a folder of its own under mods. "
-       "It loads when the game starts, with its own memory card. Online play uses none.", 0, true);
+  // The profile the next start loads.
+  const int py = top + visible * (card_h + gap) + 2;
+  const std::string next = mu_mods::profile_next();
+  const bool psel = !h.rail && h.mod_sel == int(cards.size());
+  round_rect(d, L.p(CX, py), L.p(CX + CW, py + 30), L.u(7), C_FIELD, C_FIELD, psel ? C_ACC_HI : C_FIELD_BORDER);
+  dot(d, L, CX + 10, py + 11, next.empty() ? C_FAINT : C_OK);
+  text(d, f.body, L.u(12), L.p(CX + 28, py), L.p(CX + CW - 12, py + 30), C_TEXT,
+       "Next start: " + (next.empty() ? std::string("the retail game (no mod)") : next) + (psel ? "      < Left / Right >" : ""));
+  text(d, f.body, L.u(10), L.p(CX, py + 34), L.p(CX + CW, py + 50), C_FAINT,
+       "Up/Down: pick   Left/Right: button   A: press.   Saves stay when you remove a mod. Online play uses no mod.");
 }
 
 void paint_message(ImDrawList* d, const Layout& L, const Fonts& f, const Home& h) {
@@ -451,6 +491,7 @@ void start_download(Home& h, const std::string& update_host) {
   });
 }
 
+void profile_step(int dir);
 void activate(Home& h, int item, const std::string& update_host) {
   switch (h.page) {
     case PAGE_PLAY:
@@ -471,6 +512,7 @@ void activate(Home& h, int item, const std::string& update_host) {
           else if (r == host::SignInResult::PlayOffline) say("app: sign-in: playing offline");
           else { say("app: sign-in: quit"); h.done = true; h.result = AppStart::Quit; }
           h.account = read_account(h.user_dir, &h.signed_in);
+          h.pad_reset = true;   // what was pressed on the sign-in screen (its B) is not the home screen's
           break;
         }
         case PI_THEME: {
@@ -497,14 +539,24 @@ void activate(Home& h, int item, const std::string& update_host) {
       break;
     }
     case PAGE_MODS: {
-      const std::vector<std::string> profiles = mod_profiles();
-      const std::string v = h.mod_sel > 0 && h.mod_sel <= int(profiles.size()) ? profiles[size_t(h.mod_sel - 1)] : std::string();
-      if (v.empty()) { settings_write_key("mod_profile", ""); settings_set_quiet("mod_profile", ""); }
-      else settings_change("mod_profile", v);
-      say("home: mod profile %s", v.empty() ? "none" : v.c_str());
+      const std::vector<mu_mods::Card> cards = mu_mods::cards();
+      if (h.mod_sel < int(cards.size())) {
+        const auto& c = cards[size_t(h.mod_sel)];
+        if (h.mod_button == 1 && c.can_remove) mu_mods::remove(c.status.mod.id);
+        else if (c.primary_enabled) mu_mods::primary(c.status.mod.id);
+      } else profile_step(1);
       break;
     }
   }
+}
+
+// The profile row of the Mods page: the next start's profile, stepped through the choices.
+void profile_step(int dir) {
+  const std::vector<std::string> choices = mu_mods::profile_choices();
+  if (choices.empty()) return;
+  const auto it = std::find(choices.begin(), choices.end(), mu_mods::profile_next());
+  const int n = int(choices.size()), at = it == choices.end() ? 0 : int(it - choices.begin());
+  mu_mods::profile_set(choices[size_t(((at + dir) % n + n) % n)]);
 }
 
 // Moves the replay picker by `dir` (the library's own "Replay" row steps its picked game).
@@ -528,8 +580,15 @@ void home_job(void* frontend_v, void* user) {
   const std::string update_host = app_ini("update_host", "");
   // The Replay Viewer's library reads its folder on a worker thread: ask it now (its "Sort" row value pokes it).
   for (const auto& e : page_entries("Replays")) if (e.value) e.value();
+  auto next_frame = std::chrono::steady_clock::now();
   while (!h.done) {
+    // One frame a 60th of a second: the screen has nothing to animate faster, and a loop that spins as fast as the
+    // renderer returns kept the window system's connection busy (a stall seen under Xvfb with the software driver).
+    next_frame += std::chrono::microseconds(16667);
+    const auto now = std::chrono::steady_clock::now();
+    if (next_frame > now) std::this_thread::sleep_until(next_frame); else next_frame = now;
     if (!frontend.pump_events() || frontend.close_requested()) { h.result = AppStart::Quit; break; }
+    if (h.pad_reset) { pad.last = 0xFFFF; h.pad_reset = false; }
     const Edges e = pad.read();
     const bool panel = mu_ui::panel_open();
     if (panel) {
@@ -551,12 +610,19 @@ void home_job(void* frontend_v, void* user) {
         int count = 1;
         if (h.page == PAGE_PLAY) count = int(play_items(h).size());
         else if (h.page == PAGE_REPLAYS) count = 2;
-        else if (h.page == PAGE_MODS) count = int(mod_profiles().size()) + 1;
+        else if (h.page == PAGE_MODS) count = int(mu_mods::cards().size()) + 1;
         if (h.page == PAGE_REPLAYS) { if (e.up) replay_step(h, -1); if (e.down) replay_step(h, 1); if (e.left) h.focus = 0; if (e.right) h.focus = 1; }
-        else if (h.page == PAGE_MODS) { if (e.up) h.mod_sel = std::max(0, h.mod_sel - 1); if (e.down) h.mod_sel = std::min(count - 1, h.mod_sel + 1); }
+        else if (h.page == PAGE_MODS) {
+          if (e.up) { h.mod_sel = std::max(0, h.mod_sel - 1); h.mod_button = 0; }
+          if (e.down) { h.mod_sel = std::min(count - 1, h.mod_sel + 1); h.mod_button = 0; }
+          if (h.mod_sel == count - 1 && (e.left || e.right)) profile_step(e.left ? -1 : 1);
+          else if (e.right) h.mod_button = 1;
+          else if (e.left && h.mod_button == 1) h.mod_button = 0;
+          else if (e.left) { h.rail = true; h.focus = h.page; }
+        }
         else { if (e.up) h.focus = std::max(0, h.focus - 1); if (e.down) h.focus = std::min(count - 1, h.focus + 1); }
         if (h.page == PAGE_PLAY && h.focus >= 0 && h.focus < count && play_items(h)[size_t(h.focus)] == PI_BUILD && (e.left || e.right)) activate(h, PI_BUILD, update_host);
-        else if (e.left && h.page != PAGE_REPLAYS) { h.rail = true; h.focus = h.page; }
+        else if (e.left && h.page != PAGE_REPLAYS && h.page != PAGE_MODS) { h.rail = true; h.focus = h.page; }
         if (e.b) { h.rail = true; h.focus = h.page; }
         if (e.a) {
           if (h.page == PAGE_PLAY) activate(h, play_items(h)[size_t(std::clamp(h.focus, 0, count - 1))], update_host);

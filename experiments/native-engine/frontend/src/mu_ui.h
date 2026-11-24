@@ -34,13 +34,8 @@ void panel_home_mode(bool on);   // the home screen drives the panel (panel_feed
 bool panel_take_quit();          // Quit game was confirmed while the home screen drove the panel
 void panel_open_on(const std::string& page_title);   // opens the panel (on the category holding that page)
 void panel_close();
-// Practice menu hook (branch feat/proai): when practice_menu.cpp links these, Start + D-pad Up + Z and the panel's
-// "Practice menu" row hand over to it; without them the chord opens the panel on its Training section.
+// The Practice menu (features/proai.cpp's practice_menu_chord, weak): the panel's GAME > Training section has a
+// "Practice menu" row when it is linked; Start + D-pad Up + Z goes to it directly (controls.cpp).
 bool practice_available();
 }  // namespace fe::mu_ui
 
-namespace fe {
-// Weak: defined by the Practice menu module when it is linked (feat/proai). Simulation thread.
-bool practice_menu_toggle() __attribute__((weak));
-bool practice_menu_is_open() __attribute__((weak));
-}  // namespace fe

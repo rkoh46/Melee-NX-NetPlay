@@ -1,0 +1,236 @@
+Native engine app (experiments/native-engine/frontend): melee-unlocked's phillip_ai.cpp ("Fight a pro") built into the
+app with MU_PROAI_FRONTEND: the policies run on the app's own engine (src/proai/onnx_lite.cpp, behind the
+onnxruntime-shaped calls of src/proai/include/onnxruntime_c_api.h) instead of a loaded onnxruntime; the ProAI folder is
+the app's (sdmc:/switch/melee-nx-netplay/ProAI/); every policy is timed on the console before it plays (upstream's
+check for a processor without AVX); nothing downloads unless the player chose it (the base policies through
+download_base, the matchup policies through "Stronger Pro AI", which here covers every matchup policy); the policy
+workers get the console's core and priority. Applied to a build-time copy only (build/native-engine-gfx/gen/proai).
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/hle/phillip_ai.cpp
++++ b/port/runtime/hle/phillip_ai.cpp
+@@ -18,10 +18,17 @@
+ #include <onnxruntime_c_api.h>
+ 
+ namespace yougame { bool active(); }   // yougame_link.h: launched by the YouGame desktop app
++#if defined(MU_PROAI_FRONTEND)
++// Melee-NX-NetPlay (patches/0112): the policies run on the app's own engine (onnx_lite, behind the onnxruntime-shaped
++// calls of src/proai/include/onnxruntime_c_api.h), from the app's ProAI folder (sdmc:/switch/melee-nx-netplay/ProAI/),
++// downloaded only when the player asks (features/proai.cpp).
++std::string fe_proai_dir();       // features/proai.cpp
++void fe_proai_place_thread();     // features/proai.cpp: the console's core and priority for a policy's worker
++#endif
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+-#else
++#elif !defined(MU_PROAI_FRONTEND)
+ #include <dlfcn.h>
+ #ifdef __APPLE__
+ #include <mach-o/dyld.h>
+@@ -65,6 +72,9 @@
+ OrtEnv* g_env = nullptr;
+ int g_runtime = 0;   // 0 not tried, 1 ready, -1 missing
+ 
++#if defined(MU_PROAI_FRONTEND)
++std::string exe_dir() { return "./"; }
++#else
+ std::string exe_dir() {
+ #ifdef _WIN32
+   char exe[MAX_PATH] = {};
+@@ -83,8 +93,12 @@
+   dir.resize(dir.find_last_of("\\/") + 1);
+   return dir;
+ }
++#endif
+ 
+ std::string pro_dir() {
++#if defined(MU_PROAI_FRONTEND)
++  return fe_proai_dir();
++#endif
+   if (const char* v = std::getenv("MELEE_PRO_AI_DIR")) {
+     std::string d = v;
+     if (!d.empty() && d.back() != '/' && d.back() != '\\') d += '/';
+@@ -97,7 +111,11 @@
+ // processors) onnxruntime uses its SSE kernels: such a PC plays only once a timed check shows it
+ // steps a policy fast enough (light_ok below).
+ bool cpu_has_avx() {
+-#ifdef _WIN32
++#if defined(MU_PROAI_FRONTEND)
++  // The console's A57 cores: every policy is timed before it is offered, as upstream does on a processor without AVX.
++  // MELEE_PRO_AI_FAST=1 (tests on a fast machine) skips the light policies' check.
++  return std::getenv("MELEE_PRO_AI_FAST") != nullptr;
++#elif defined(_WIN32)
+   return IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE) != FALSE;
+ #else
+   return __builtin_cpu_supports("avx");
+@@ -107,6 +125,14 @@
+ bool runtime_ready() {
+   if (g_runtime) return g_runtime == 1;
+   g_runtime = -1;
++#if defined(MU_PROAI_FRONTEND)
++  const OrtApiBase* own = OrtGetApiBase();
++  g_ort = own->GetApi(ORT_API_VERSION);
++  if (OrtStatus* st = g_ort->CreateEnv(ORT_LOGGING_LEVEL_ERROR, "melee-pro-ai", &g_env)) { g_ort->ReleaseStatus(st); return false; }
++  host::log("pro ai: %s ready; each policy is timed on this console before it plays", own->GetVersionString());
++  g_runtime = 1;
++  return true;
++#else
+   if (!cpu_has_avx()) host::log("pro ai: this processor has no AVX; Fight a pro plays if a timed check shows it is fast enough");
+ #ifdef _WIN32
+   // The full path: Windows has its own, older onnxruntime.dll in System32 for Windows ML.
+@@ -134,6 +160,7 @@
+   host::log("pro ai: onnxruntime %s ready", base->GetVersionString());
+   g_runtime = 1;
+   return true;
++#endif
+ }
+ 
+ bool ok(OrtStatus* st, const char* what) {
+@@ -320,6 +347,10 @@
+     if (e.heavy && here && large == 0 && rank > stronger_rank) { stronger_rank = rank; stronger = &e; }
+     if (rank > best_rank && here && (!e.heavy || large > 0)) { best_rank = rank; best = &e; }
+   }
++#if defined(MU_PROAI_FRONTEND)
++  // Never a download the player did not choose: a better matchup policy is fetched by itself only after "Always".
++  if (choice == kStrongerAlways)
++#endif
+   if (wanted && wanted_rank > best_rank && !present(*wanted)) fetch_later(*wanted);
+   if (stronger && stronger_rank > best_rank) check_speed_later(*stronger);
+   return best_rank >= 0 ? best : nullptr;
+@@ -832,6 +863,9 @@
+   // priority, and a starved step would make the fighter's answer late and hold the frame up.
+   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+ #endif
++#if defined(MU_PROAI_FRONTEND)
++  fe_proai_place_thread();
++#endif
+   for (;;) {
+     Job job;
+     {
+@@ -899,6 +933,9 @@
+ #ifdef _WIN32
+     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);   // as a match's worker runs
+ #endif
++#if defined(MU_PROAI_FRONTEND)
++    fe_proai_place_thread();
++#endif
+     const Policy* pol = load_policy(file);
+     double ms = 1e9;
+     if (pol) {
+@@ -926,7 +963,12 @@
+     static const double limit = [] { const char* v = std::getenv("MELEE_PRO_AI_CHECK_MS"); return v ? std::atof(v) : 14.0; }();
+     if (light) {
+       g_light_ok = ms <= limit ? 1 : -1;
+-      host::log("pro ai: %s steps in %.1f ms here without AVX: Fight a pro %s", file.c_str(), ms,
++      host::log("pro ai: %s steps in %.1f ms here%s: Fight a pro %s", file.c_str(), ms,
++#if defined(MU_PROAI_FRONTEND)
++                "",
++#else
++                " without AVX",
++#endif
+                 ms <= limit ? "is on" : "stays off (too slow for this processor)");
+     } else {
+       g_large_ok = ms <= limit ? 1 : -1;
+@@ -969,6 +1011,19 @@
+ // Why Fight a pro is not offered, for the Practice menu's row (player report 11-20: a bare "Not available"
+ // said nothing). In the order the checks run: the ProAI files, the runtime that plays them, the processor.
+ const char* unavailable_reason() {
++#if defined(MU_PROAI_FRONTEND)
++  {
++    std::lock_guard<std::mutex> lk(g_mutex);
++    read_catalog();
++    bool any = false;
++    for (const Entry& e : g_catalog) if (e.kind == "imitation" && present(e)) { any = true; break; }
++    if (g_catalog_state != 1 || !any) return "Phillip's AI is not downloaded yet. A: download it.";
++    if (!runtime_ready()) return "Phillip's AI did not start.";
++  }
++  const int light = g_light_ok.load();
++  return light == 0 ? "Checking whether this console is fast enough for Phillip's AI..." :
++         light < 0 ? "This console is too slow to run Phillip's AI at full speed." : nullptr;
++#else
+   {
+     std::lock_guard<std::mutex> lk(g_mutex);
+     read_catalog();
+@@ -988,6 +1043,7 @@
+   const int light = g_light_ok.load();
+   return light == 0 ? "Checking whether this processor is fast enough for Phillip's AI..." :
+          light < 0 ? "This processor (no AVX) is too slow to run Phillip's AI at full speed." : nullptr;
++#endif
+ }
+ 
+ bool act(const MuGhostObs& o, MuGhostAct& out) {
+@@ -1062,7 +1118,11 @@
+   read_catalog();
+   StrongerStatus s;
+   for (const Entry& e : g_catalog) {
++#if defined(MU_PROAI_FRONTEND)
++    if (e.kind == "imitation" || (e.heavy && g_large_ok.load() < 0)) continue;
++#else
+     if (!e.heavy) continue;
++#endif
+     bool mine = pro < 0;
+     if (!mine && pro < (int)kPros) mine = e.name[pro] >= 0;
+     if (!mine) continue;
+@@ -1078,11 +1138,47 @@
+   std::lock_guard<std::mutex> catalog_lock(g_mutex);
+   read_catalog();
+   for (const Entry& e : g_catalog) {
++#if defined(MU_PROAI_FRONTEND)
++    if (e.kind == "imitation" || (e.heavy && g_large_ok.load() < 0) || present(e)) continue;
++#else
+     if (!e.heavy || present(e)) continue;
++#endif
+     if (pro >= 0 && (pro >= (int)kPros || e.name[pro] < 0)) continue;
+     // An explicit request retries failures without duplicating work already in the queue.
+     fetch_later(e, true);
+   }
+ }
+ 
++#if defined(MU_PROAI_FRONTEND)
++// The base policies (each pro's imitation policy, the ones upstream ships in its zip): downloaded when the player says.
++StrongerStatus base_status() {
++  std::lock_guard<std::mutex> catalog_lock(g_mutex);
++  read_catalog();
++  StrongerStatus s;
++  for (const Entry& e : g_catalog) {
++    if (e.kind != "imitation") continue;
++    bool offered = false;
++    for (unsigned pro = 0; pro < kPros; ++pro) offered |= e.name[pro] >= 0;
++    if (!offered) continue;
++    ++s.total;
++    if (!present(e)) { ++s.missing; s.missing_mb += e.size ? e.size / 1e6 : 21.0; }
++  }
++  std::lock_guard<std::mutex> lk(g_fetch_mutex);
++  s.downloading = g_fetching.load();
++  return s;
++}
++void download_base() {
++  std::lock_guard<std::mutex> catalog_lock(g_mutex);
++  read_catalog();
++  for (const Entry& e : g_catalog)
++    if (e.kind == "imitation" && !present(e)) fetch_later(e, true);
++}
++// The catalog again (after the app wrote it, or a manual copy): read at the next question.
++void catalog_changed() {
++  std::lock_guard<std::mutex> catalog_lock(g_mutex);
++  g_catalog.clear();
++  g_catalog_state = 0;
++}
++#endif
++
+ }  // namespace phillip_ai
+--- a/port/runtime/hle/phillip_ai.h
++++ b/port/runtime/hle/phillip_ai.h
+@@ -25,4 +25,11 @@
+ // Downloads every missing stronger policy of that pro (pro < 0: every pro), one after another in the
+ // background, each checked against its SHA-256. They play from the next match on.
+ void download_stronger(int pro);
++#if defined(MU_PROAI_FRONTEND)
++// Melee-NX-NetPlay (patches/0112): nothing ships with the app. The base policies (each pro's imitation policy, what
++// upstream's zip holds) download when the player asks; "stronger" are all the matchup policies.
++StrongerStatus base_status();
++void download_base();
++void catalog_changed();
++#endif
+ }  // namespace phillip_ai

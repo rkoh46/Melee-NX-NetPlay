@@ -14,6 +14,8 @@
 #                   stage select, then a Training match on an added stage picked on the select's second page
 #   rogue           the rogueMelee disc's profile (MU_MODS_DIR): 1-P Mode > Regular Match > All-Star, which Rogue Mode replaces
 #   vanilla-refuse  --vanilla-only with a disc that is not GALE01 revision 2 (an 8-byte stand-in made here): refused
+#   install         the app's Mods page with a controller script: rogueMelee's .xdelta in mods/Downloads, Install, "Play it at
+#                   the next start"; then play mode with that settings.ini starts Rogue Mode as the rogue case does
 # MU_MODS_DIR: a folder with mod profiles (mounted as <out>/mods) for vanilla-only. Output:
 # build/native-engine-gfx/run-mods-test/<case>/ (console.log, host.log, settings.ini, shots/). MU_TEST_LIMIT: time limit in s.
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -137,6 +139,58 @@ PY
     printf 'GALE01\0\001' > "$dir/not-retail.iso"
     : > "$dir/settings.ini"
     run "$dir" 300 1 "--vanilla-only" /out/not-retail.iso
+    ;;
+  install)
+    # The settings panel's MODS page (src/mu_panel.cpp over src/mu_mods.cpp) driven through the test pad file in the app: rogueMelee (a link-only catalog entry: its
+    # file is put in mods/Downloads as the player would), Install, then "Play it at the next start"; the installer builds
+    # the disc from the vanilla disc and checks it against the catalog. Then play mode with the settings.ini the page
+    # wrote: 1-P Mode > Regular Match > All-Star, which Rogue Mode replaces on that disc (as the rogue case).
+    # The .xdelta comes from build/mod-downloads (tools/mod_install_test.sh fills it), else from the catalog's own URL.
+    cache="$repo/build/mod-downloads"; patch="$cache/rogueMelee-v3.xdelta"
+    want=b0e987a3944f71750694d89c7af94cbf04c3c88ad7ca7516945c37d8a9538b9e
+    if [ ! -f "$patch" ]; then
+      mkdir -p "$cache"
+      curl -fsSL --max-time 300 -o "$patch.part" https://github.com/hatsonhats/rogueMelee-v2/releases/download/v3/rogueMelee-v3.xdelta && mv "$patch.part" "$patch"
+    fi
+    [ "$(shasum -a 256 "$patch" | cut -c1-64)" = "$want" ] || { echo "rogueMelee-v3.xdelta does not match the catalog" >&2; exit 1; }
+    fresh "$dir"; app="$dir/melee-nx-netplay"; mkdir -p "$app/User/Slippi" "$app/mods/Downloads"
+    cp "$patch" "$app/mods/Downloads/"
+    # Start + D-pad Down + Z opens melee-unlocked's settings panel on its MODS page (MU_CONTROLS_TEST_PAGE=Mods), through the test
+    # pad file: the focus walks to rogueMelee's button ("Add file (mods/Downloads)": its file is there), A installs; once the log
+    # says it is installed, A on the same button ("Play it at the next start") chooses it. Start closes the panel.
+    printf '%s\n' "iso=/iso/GALE01.iso" "frames=6000" "home=0" > "$app/launcher.ini"
+    printf '{"uid":"mock-test-1","playKey":"mock-test-only","connectCode":"MOCK#001","displayName":"Mock 1"}\n' > "$app/User/Slippi/user.json"
+    timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-modinstall}-app-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
+      -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp -e MU_CONTROLS_TEST_PAGE=Mods -e MELEE_PAD_FILE=/out/pad.txt "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+        Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
+        export DISPLAY=:99
+        for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
+        pad() { printf "%s\n" "$1" > /out/pad.txt; }
+        tap() { pad "$1"; sleep 0.15; pad ""; sleep 0.5; }
+        last() { grep -a "settings: focus" /out/console.log | tail -1; }
+        wait_log() { for i in $(seq $(( $2 * 10 ))); do grep -aq "$1" /out/console.log 2>/dev/null && return 0; sleep 0.1; done; echo "TIMEOUT waiting for: $1" >> /out/harness.log; return 1; }
+        pad ""
+        cd /out && /b/mu-native-gfx-linux-services > /out/console.log 2>&1 &
+        pid=$!
+        (n=0; while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true; done) &
+        wait_log "online menu: row 1" 120 && sleep 3
+        pad "START DD Z"; sleep 0.3; pad ""; sleep 2
+        for i in $(seq 80); do [ "$(last)" = "settings: focus Add file (mods/Downloads)" ] && break; tap DD; done
+        tap A
+        wait_log "roguemelee: installed" 600 && { sleep 1; tap A; sleep 1; }
+        tap START
+        wait $pid; echo "exit code $?" >> /out/console.log' || echo "test-mods-linux: container ended with $?"
+    grep -hE "^mods|mods page|mod_profile" "$dir/console.log" "$app/Logs/latest.log" 2>/dev/null | sort -u | cut -c1-200 || true
+    echo "installed.txt: $(tr '\n' ' ' < "$app/mods/roguemelee/installed.txt" 2>/dev/null || echo missing)"
+    echo "disc: $(ls -l "$app/mods/roguemelee/roguemelee.iso" 2>/dev/null | awk '{print $5, $NF}' || echo missing)"
+    echo "settings.ini: $(grep '^mod_profile' "$app/settings.ini" 2>/dev/null || echo 'no mod_profile line')"
+    report "$dir"
+    # Then the match on the installed mod, in play mode with the app folder's mods and settings.ini.
+    dir="$root/install-play"; fresh "$dir"
+    cp "$app/settings.ini" "$dir/settings.ini"
+    printf '%s\n' "130 A" "140" "400 START" "410" "520 A" "524" "600 A" "604" "660 sy=-127" "664" "690 sy=-127" "694" "740 A" "744" \
+      "1000 sy=127" "1010" "1030 A" "1034" "1100 START" "1104" "1200 START" "1204" "1400 A" "1404" "1500 A" "1504" > "$dir/script.txt"
+    MU_MODS_DIR="$app/mods" run "$dir" 3000 3 ""
     ;;
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac

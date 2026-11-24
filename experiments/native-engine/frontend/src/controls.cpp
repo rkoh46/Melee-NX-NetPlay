@@ -13,7 +13,6 @@
 #include "host.h"                // shim: PadState, gcadapter_status, now_ns
 #include "host_services.h"       // melee-unlocked: linux_host::state_snapshot
 #include "mu_host.h"
-#include "mu_ui.h"                // practice_menu_toggle (weak: the Practice menu module)
 #include "app/game_menu.h"       // MenuExtraPage, menu_toggle, menu_open_extra (patches/0104, 0111)
 #include "input_config.h"
 #include "controls_core.h"
@@ -33,6 +32,13 @@
 #ifdef __SWITCH__
 #include <switch.h>
 #endif
+
+// The Practice menu (features/proai.cpp), weak: a build without the feature modules keeps the chord's earlier use.
+namespace fe::features {
+__attribute__((weak)) bool practice_menu_chord(int port);
+__attribute__((weak)) bool practice_menu_open();
+__attribute__((weak)) void practice_menu_pads(MuPadStatus pads[4]);
+}
 
 namespace fe {
 namespace {
@@ -258,13 +264,20 @@ void controls_chords(void* pads_v) {
       else host::menu_toggle();
       say("controls: Start + D-pad Down + Z on port %d: the menu", i + 1);
     } else if (practice) {
-      // The Practice menu (feat/proai's practice_menu.cpp) when it is linked; the panel's Training section otherwise.
-      if (&fe::practice_menu_toggle) { if (host::menu_is_open()) host::menu_close(); fe::practice_menu_toggle(); }
-      else if (host::menu_is_open()) host::menu_close(); else host::menu_open_extra("Training");
-      say("controls: Start + D-pad Up + Z on port %d: %s", i + 1, &fe::practice_menu_toggle ? "the Practice menu" : "the Training section");
+      // Offline Training: upstream's Practice menu (features/proai.cpp); elsewhere the in-game menu's Training page.
+      if (!host::menu_is_open() && &features::practice_menu_chord && features::practice_menu_chord(i)) {
+        say("controls: Start + D-pad Up + Z on port %d: the Practice menu", i + 1);
+      } else {
+        if (host::menu_is_open()) host::menu_close(); else host::menu_open_extra("Training");
+        say("controls: Start + D-pad Up + Z on port %d: the Training page", i + 1);
+      }
     }
-    if (connected) host::settings_shortcut::hold_lone_start(training && !host::menu_is_open(), settings_down[i] || practice_down[i], raw, pads[i].button, start_waited[i]);
+    const bool practice_open = &features::practice_menu_open && features::practice_menu_open();
+    if (connected) host::settings_shortcut::hold_lone_start(training && !host::menu_is_open() && !practice_open, settings_down[i] || practice_down[i], raw, pads[i].button, start_waited[i]);
   }
+  // While the Practice menu is open its controller is the menu's and the game gets neutral pads (features/proai.cpp).
+  static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
+  if (&features::practice_menu_pads) features::practice_menu_pads(reinterpret_cast<MuPadStatus*>(pads));
 }
 
 void controls_saved(void (*put)(const std::string&, const std::string&)) {

@@ -110,6 +110,31 @@ if(NOT MU_FE_VARIANT STREQUAL "switch")
   target_compile_definitions(mu_host PRIVATE MU_CARD_SIMPLE_COMMIT)
 endif()
 
+# ---- the mod installer (src/modinstall/: plain C++, also built for macOS by ../tools/mod_install_test.sh) ----
+# The LZMA SDK's decoders (public domain) from the fetched tree's port/third_party/lzma; zlib from the system or devkitPro;
+# nlohmann/json from this repository's port/third_party. The catalog is melee-unlocked's mods-catalog-2.json, built in.
+set(MU_MOD_CATALOG "${REPO}/build/native-engine/mu/mods-catalog-2.json")
+if(NOT EXISTS "${MU_MOD_CATALOG}")
+  message(FATAL_ERROR "missing ${MU_MOD_CATALOG}: run ../fetch.sh first")
+endif()
+file(READ "${MU_MOD_CATALOG}" _catalog)
+string(FIND "${_catalog}" ")mucatalog\"" _bad)
+if(NOT _bad EQUAL -1)
+  message(FATAL_ERROR "mods-catalog-2.json contains the raw-string delimiter")
+endif()
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/gen_mods/mods_catalog_json.h" CONTENT
+  "// Generated from melee-unlocked's mods-catalog-2.json (the fetched tree) by frontend/CMakeLists.txt.\n#pragma once\nstatic const char kModsCatalogJson[] = R\"mucatalog(@_catalog@)mucatalog\";\n" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MU_MOD_CATALOG}")
+add_library(mu_modinstall STATIC
+  "${FE}/modinstall/mi_hash.cpp" "${FE}/modinstall/mi_io.cpp" "${FE}/modinstall/mi_archive.cpp" "${FE}/modinstall/mi_lzma.cpp"
+  "${FE}/modinstall/mi_vcdiff.cpp" "${FE}/modinstall/mi_catalog.cpp" "${FE}/modinstall/mod_install.cpp"
+  "${MU}/port/third_party/lzma/LzmaDec.c" "${MU}/port/third_party/lzma/Lzma2Dec.c")
+target_include_directories(mu_modinstall PRIVATE "${MU}/port/third_party/lzma" "${REPO}/port/third_party")
+target_compile_options(mu_modinstall PRIVATE -O2 -g -Wall)
+if(MU_FE_VARIANT STREQUAL "switch")
+  target_include_directories(mu_modinstall SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+endif()
+
 # ---- this repository's GX decoder and renderer bridge, on a small host shim ----
 add_library(mu_gx STATIC
   "${GEN}/gx_core.cpp" "${GXSRC}/gx_texture.cpp" "${GEN}/gx_aurora_bridge.cpp" "${GEN}/subframe.cpp" "${GXSRC}/authored_pose.cpp" "${GXSRC}/gx_shader.cpp"
@@ -142,6 +167,11 @@ else()
   set_source_files_properties("${FE}/mu_panel.cpp" PROPERTIES INCLUDE_DIRECTORIES "${GEN}/mu_ui")
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
+  # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the
+  # Mods screens of melee-unlocked's interface over it (mu_mods.cpp: the home screen's Mods page, the panel's MODS).
+  target_sources(mu_gx PRIVATE "${FE}/mods_service.cpp" "${FE}/mu_mods.cpp")
+  target_include_directories(mu_gx PRIVATE "${CMAKE_BINARY_DIR}/gen_mods")
+  target_link_libraries(mu_gx PUBLIC mu_modinstall)
   # overlay_imgui.cpp's empty controller list stands aside for app.cpp's (the SDL gamepads Aurora opened).
   set_source_files_properties("${GEN}/app/overlay_imgui.cpp" PROPERTIES COMPILE_DEFINITIONS
     "window_list_controllers=overlay_unused_list_controllers;window_capture_input=overlay_unused_capture_input;window_test_rumble=overlay_unused_test_rumble")
@@ -198,12 +228,46 @@ else()
   message(STATUS "feature modules: none linked")
 endif()
 
+# Fight a pro (features/proai.cpp): the app's own inference engine (src/proai/onnx_lite.cpp; ort_lite.cpp gives it the
+# onnxruntime-shaped calls upstream's code makes) and melee-unlocked's phillip_ai.cpp (build-time copy with patches/0112),
+# compiled on src/proai/include's headers; the catalog (src/proai/catalog.json) embedded. The Practice menu
+# (practice_menu.cpp with patches/0113, drawn by src/proai/practice_overlay.cpp) needs Aurora's ImGui: picture variants.
+if(TARGET mu_features)
+  file(READ "${FE}/proai/catalog.json" _proai_catalog)
+  file(WRITE "${CMAKE_BINARY_DIR}/proai_catalog.cpp.new"
+    "// Generated from src/proai/catalog.json (CMakeLists.txt).\nextern const char fe_proai_catalog_json[];\nconst char fe_proai_catalog_json[] = R\"PROAICATALOG(${_proai_catalog})PROAICATALOG\";\n")
+  file(COPY_FILE "${CMAKE_BINARY_DIR}/proai_catalog.cpp.new" "${CMAKE_BINARY_DIR}/proai_catalog.cpp" ONLY_IF_DIFFERENT)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FE}/proai/catalog.json")
+  add_library(mu_proai OBJECT "${FE}/proai/onnx_lite.cpp" "${FE}/proai/ort_lite.cpp" "${GEN}/proai/phillip_ai.cpp" "${CMAKE_BINARY_DIR}/proai_catalog.cpp")
+  set_target_properties(mu_proai PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
+  target_include_directories(mu_proai PRIVATE "${FE}/proai/include" "${FE}/proai" "${GEN}/proai" "${MU}/port/runtime/hle" "${MU}/port/runtime/abi"
+    "${REPO}/port/third_party")
+  target_compile_definitions(mu_proai PRIVATE MU_PROAI_FRONTEND=1)
+  target_compile_options(mu_proai PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_proai SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+  if(NOT MU_FE_VARIANT STREQUAL "null")
+    add_library(mu_practice_menu OBJECT "${GEN}/proai/practice_menu.cpp" "${FE}/proai/practice_overlay.cpp")
+    set_target_properties(mu_practice_menu PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
+    target_include_directories(mu_practice_menu PRIVATE "${FE}/proai/include" "${FE}/proai" "${GEN}/proai" "${MU}/port/runtime/hle"
+      "${MU}/port/runtime/abi")
+    target_compile_definitions(mu_practice_menu PRIVATE MU_PROAI_FRONTEND=1)
+    target_compile_options(mu_practice_menu PRIVATE -O2 -g -Wall -fno-strict-aliasing -Wno-unused-function -Wno-unused-variable)
+    target_link_libraries(mu_practice_menu PRIVATE aurora::core)
+    if(MU_FE_VARIANT STREQUAL "switch")
+      target_include_directories(mu_practice_menu SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+    endif()
+  endif()
+endif()
+
 # The app's screens before the game, for the services program with a picture: the self-update from the player's build
 # computer (self_update*.cpp) and the Slippi sign-in (switch_signin.cpp with patches/0105, slippi_login.cpp, HTTPS
 # through libcurl). The netplay object has its own copies of the last two, local to it.
 if(NOT MU_FE_VARIANT STREQUAL "null")
   add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${FE}/mu_home.cpp" "${GEN}/app/switch_signin.cpp"
-    "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp")
+    "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp"
+    "${FE}/modinstall/mi_fetch_curl.cpp")   # the mod installer's downloads (mods_service.cpp finds it through a weak reference)
   target_include_directories(mu_app_services PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${APPSRC}"
     "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi" "${GEN}/mu_ui")
   target_compile_definitions(mu_app_services PRIVATE MU_FE_AURORA=1 MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
@@ -230,6 +294,10 @@ function(mu_program target netplay_object suffix)
   add_executable(${target} "${FE}/frontend_main.cpp" "${FE}/log_queue.cpp")
   if(suffix)
     target_sources(${target} PRIVATE "${FE}/services_check.cpp")   # the services program's start-up self-check
+    if(TARGET mu_proai)
+      target_sources(${target} PRIVATE "${FE}/proai/proai_fetch_curl.cpp")   # Fight a pro's downloads (libcurl)
+      set_source_files_properties("${FE}/proai/proai_fetch_curl.cpp" PROPERTIES INCLUDE_DIRECTORIES "${REPO}/port/runtime/host")
+    endif()
     if(TARGET mu_app_services)
       target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_app_services>)   # the app's update and sign-in screens
     endif()
@@ -237,6 +305,12 @@ function(mu_program target netplay_object suffix)
   target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_present>)
   if(TARGET mu_features)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_features>)
+  endif()
+  if(TARGET mu_proai)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_proai>)
+  endif()
+  if(TARGET mu_practice_menu)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_practice_menu>)
   endif()
   target_include_directories(${target} PRIVATE "${FE}" "${RUN}")
   target_link_libraries(${target} PRIVATE mu_gx mu_host mu_gx "${netplay_object}")

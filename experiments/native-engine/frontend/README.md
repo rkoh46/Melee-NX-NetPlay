@@ -49,19 +49,28 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/shim/` | The few host functions the decoder and the app's input and sound sources need, on melee-unlocked's host services. |
 | `src/switch_glue.cpp` | Two symbols the app's Switch layer expects. |
 | `src/app.cpp` | The app (no arguments): the app's folders, `launcher.ini`, the memory card's one-time backup, controller configuration (remapping, deadzones, rumble), the HUD's numbers, the window queries of the app's menu code, the layout and disc screens. |
-| `src/app_menu.cpp` | The app's in-game menu (`port/runtime/host/game_menu.cpp`) wired to this engine: the app's rows, four `settings.ini` pages, the feature modules' pages. |
-| `src/app_services.cpp` | Services program only: the update from the player's build computer and the Slippi sign-in screen, drawn on the render thread before the game. |
+| `src/app_menu.cpp` | The in-game menu's rows wired to this engine (the app's main rows, four `settings.ini` pages, the feature modules' pages, the controller setup), through the app's menu interface (`game_menu.h`); `src/mu_panel.cpp` draws them. |
+| `src/app_services.cpp` | Services program only: the screens before the game, which are melee-unlocked's launcher (`src/mu_home.cpp`), and a finished update's swap. |
+| `src/mu_panel.cpp`, `src/mu_home.cpp`, `src/mu_mods.*`, `src/mu_ui.h`, `scripts/mu_ui_extract.py` | melee-unlocked's interface on the Switch (see "melee-unlocked's interface" below): its settings panel in the game (its drawing code compiled from the fetched tree; the app's menu interface implemented behind it, so `game_menu.cpp` is no longer built), its launcher as the home screen before the game (its layout, palette, labels and artwork), the Mods screens over the mod installer. |
+| `patches/0112-aurora-imgui-host-gamepad.patch` | Against the build-time copy of Aurora: `aurora_imgui_host_gamepad`, so the panel's gamepad keys come from the app's controllers (melee-unlocked's `settings_imgui_input.h` feed) and ImGui navigates with them. |
 | `src/features/overlays.cpp`, `src/overlay_state.h`, `src/overlay_draw.cpp` | The on-screen overlays and picture options (see "Overlays and picture options"): settings, menu rows and what the game reports on the simulation thread; the drawing on the render thread through Aurora's ImGui pass. |
 | `test-overlays-linux.sh` | The overlays and picture options in play mode with controller scripts and screenshots. |
 | `src/controls.cpp`, `src/controls_core.h`, `src/controls_files.*` | The controller setup beyond the button remap (see "Controller setup"): bindings, box mode, analog options, profiles, Dolphin import, chords, report rates. |
-| `patches/0111-game-menu-open-page.patch` | After 0104: `menu_open_extra`, the menu opened on a host page by its title (the Start + D-pad Up + Z chord). |
+| `patches/0111-game-menu-open-page.patch` | After 0104: `menu_open_extra`, the menu opened on a host page by its title (the panel opens on that page's category). |
+| `src/proai/onnx_lite.*` | Fight a pro's inference engine: a minimal ONNX reader and the operators Phillip's policies use (Gemm on half-precision weights with NEON, LSTM-style gates, layer norm, sampling), no third-party runtime (see "Fight a pro and the Practice menu"). |
+| `src/proai/ort_lite.cpp`, `src/proai/include/` | The onnxruntime-shaped calls upstream's `phillip_ai.cpp` makes, on onnx_lite (not onnxruntime), and the thin headers upstream's `practice_menu.cpp` and `phillip_ai.cpp` are compiled on (host log and disc reads, ImGui 1.92's texture type over `aurora_imgui_add_texture`, inert warm-up settings). |
+| `src/proai/catalog.json`, `src/proai/proai_fetch_curl.cpp` | The app's Fight a pro catalog (`../tools/proai_catalog.py` from Hugging Face's index and the models' metadata), embedded; the downloads (services program, libcurl, SHA-256 checked). |
+| `src/features/proai.cpp`, `src/proai/practice_overlay.cpp`, `src/proai/practice_state.h` | Command 0xEA, the ProAI folder, upstream's practice_cpu / native_practice calls, the Practice menu's chord, controller and settings (simulation thread) and its drawing (render thread, from `overlay_draw.cpp`). |
+| `patches/0112-phillip-ai-own-engine.patch`, `patches/0113-practice-menu-download-question.patch` | Against build-time copies of upstream's `phillip_ai.cpp/.h` and `practice_menu.cpp` (`build/native-engine-gfx/gen/proai`): the own engine, the app's folder, the device timing, downloads only when chosen; the download question. |
+| `test-proai-linux.sh` | The Practice menu (four looks), Fight a pro in Training, the download from a local stand-in, with screenshots and onnxruntime run on the recorded steps. |
 | `src/replay_view.h`, `test-replays-linux.sh` | The replay viewer's overlay state (replays.cpp to overlay_draw.cpp and the render loop's repaint); the replay viewer, takeover, coach and Replays page in play mode with screenshots. |
-| `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots. |
+| `test-mods-linux.sh` | Training's random numbers and Practice CPU slots through the app's menu, and the vanilla-only session, with controller scripts and screenshots; `install`: the Mods page installs rogueMelee, then a match on it. |
+| `src/modinstall/`, `src/mods_service.*`, `src/mu_mods.*` | The mod installer (catalog, download, zip/7z, VCDIFF, checks, profiles) and its Mods screens (the home screen's Mods page, the panel's MODS) (see "Mod catalog, download and install"). |
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
 | `test-app-linux.sh` | The app without a console: boot, menu, handover (the menu with the D-pad, B to close, then A), sign-in, update, online cases. |
-| `app-build.sh`, `update-host-native.patch`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
+| `app-build.sh`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
 | `patches/0108-aurora-imgui-draw-list-delete.patch`, `patches/0109-aurora-picture-options.patch` | Against a build-time copy of Aurora (`build/sdk/aurora` -> `build/native-engine-gfx/gen/aurora`, which both picture variants compile): ImGui's frozen draw lists are freed with `IM_DELETE` (they were made with `IM_NEW` and freed with `operator delete`: AddressSanitizer's alloc/dealloc mismatch, now on in the sanitizer runs); `aurora_set_picture` (brightness, contrast, vibrance, sharpening, the CRT looks) in the present pass. `build/sdk` is not changed. |
@@ -374,6 +383,87 @@ the console `<out>` is `sdmc:/switch/mu-native`.
 `GameSetup_gui.dat` and `SlippiCSS_gui.dat` with their links into the disc resolved) and sets the game's
 Slippi-menus bit: the game then starts on its Online Play page. Nothing is sent anywhere by this.
 
+### Mod catalog, download and install
+
+The app installs the mods of melee-unlocked's catalog for the player, as melee-unlocked's launcher does
+(`port/app/launcher_mods.inl`, `launcher_mod_catalog.cpp` in the fetched tree), with this program's own code for every
+step. melee-unlocked runs `xdelta3.exe`, `7zr.exe` and `tar.exe`; here nothing from a mod or from another program is run.
+
+- **Catalog**: `mods-catalog-2.json` of the fetched tree, built in (`build/native-engine-gfx/<variant>/gen_mods/`). Checked
+  with melee-unlocked's rules: every field, https links, well-formed hashes, unique ids. **A mod gets automatic download
+  only when the catalog records a licence or a permission** (policy `licensed` or `permission_granted`: 20XX TE, Training
+  Mode CE, Akaneia, ACE, the 20XX Hack Pack). The others (Melee 3D, Melee Maker, rogueMelee: `link_only`; Animelee and
+  Animelee DBZ: MediaFire pages, which melee-unlocked's launcher cannot fetch either) are listed with their page: the
+  player downloads the file and puts it in `mods/Downloads/`, and Install takes it from there. MediaFire is not scraped.
+  melee-unlocked also asks GitHub's release API for the asset's digest and refreshes the catalog from its own GitHub;
+  here the catalog's pinned URL and SHA-256 are used (melee-unlocked's fallback when the API does not answer), and the
+  catalog changes with the fetched tree.
+- **Download**: HTTPS through libcurl (the services program; devkitPro's libcurl on the console, TLS through the console's
+  ssl service), redirects to https only, a size limit from the known size, continued with a range request after an
+  interruption or a cancel (`<name>.part`). Free space is checked before anything is fetched or written (the download plus
+  the finished disc).
+- **Checks**: the download's SHA-256; the player's disc against the vanilla NTSC 1.02 MD5 (read in full once, then kept
+  with the disc's size and time in `mods/.work/vanilla.txt`); the patch's SHA-256 and the finished disc's SHA-256 and MD5
+  against the catalog, while the bytes go by. A disc that does not match is deleted and the installed one kept.
+- **Archives**: zip (stored or deflated, zip64; zlib's inflate) and 7z (LZMA, LZMA2 or stored folders, encoded headers;
+  the LZMA SDK's decoders from the fetched tree's `port/third_party/lzma`), read as streams: the patch is applied straight
+  out of the archive, never unpacked to the SD card (ACE's patch alone is 1.3 GB). The first `.xdelta` entry is the
+  patch, as melee-unlocked's installer picks it. Entry CRC-32s are checked.
+- **Patch**: `src/modinstall/mi_vcdiff.cpp`, a VCDIFF decoder for xdelta3's patches: RFC 3284's code table and address
+  cache, source windows, the per-window Adler-32, and xdelta3's secondary compressors DJW (Hack Pack, Melee 3D, Melee
+  Maker) and LZMA (Training Mode CE, Akaneia; one xz stream per section kind that runs on across windows). It holds one
+  target window (at most 16 MiB from xdelta3; 64 MiB accepted) and reads the source disc through eight cached 1 MiB
+  blocks: the 1.4 GB disc is never in memory. (`port/runtime/host/vcdiff.cpp` decodes Slippi's small in-memory patches
+  and has no secondary compression.)
+- **Result**: `mods/<id>/<id>.iso` (20XX TE: `mods/te/20XXTE-v2d-r4-USA.gci`), which is the mod profile `<id>` that
+  `mods.cpp` loads (the folder form: every disc and save in `mods/<id>/`; the TE save is recognised there and switches
+  the native TE features on, any other save is copied to the profile's card `card-<id>`). `mods/<id>/installed.txt`
+  records the version and the SHA-256. A fetched archive is deleted once its disc is built; a file the player put in
+  `mods/Downloads/` stays. Remove deletes the disc or save and the record; the profile's memory card stays.
+- A mod disc never goes online: a session that can go online loads no profile (above).
+- On the console: Install runs on its own thread while the menu is open or the game runs; one job at a time. Measured on
+  the Mac (M-series, NVMe): 13 s for a disc from a small patch, 42 s for ACE. The console's SD card is slower; not yet
+  measured there.
+
+| Path | What it is |
+|---|---|
+| `src/modinstall/mod_install.h/.cpp` | The API: `modinstall::Manager`. |
+| `src/modinstall/mi_catalog.*` | The catalog and its rules; the known download and disc sizes (by SHA-256). |
+| `src/modinstall/mi_vcdiff.*`, `mi_lzma.*`, `mi_archive.*`, `mi_hash.*`, `mi_io.*` | VCDIFF with DJW and LZMA; LZMA/LZMA2 and xz; zip and 7z streams; SHA-256, MD5, CRC-32, Adler-32; files, `Platform` (free space) and `Fetcher` (HTTPS). Plain C++17 and POSIX file calls. |
+| `src/modinstall/mi_fetch_curl.*` | The `Fetcher` over libcurl (services program only). |
+| `src/mods_service.*` | The app's `Manager` (its folders, the built-in catalog, libcurl when linked) and the profile at the next start. |
+| `src/mu_mods.*` | The Mods screens' view and actions (the home screen's Mods page, the panel's MODS page); replaced the old menu's `mods_page.cpp`. |
+| `../tools/mod_install_test.sh` | The host test (macOS or Linux, native): rules, licence gate, free space, an interrupted download, every catalog mod built and compared. |
+| `test-mods-linux.sh install` | The Mods page with a controller script: rogueMelee installed, then a match on it. |
+
+**API** (`src/modinstall/mod_install.h`, `src/mods_service.h`), for any screen (the minimal page, or a launcher in
+melee-unlocked's look):
+
+```cpp
+modinstall::Manager& m = fe::mod_manager();          // the app's installer; plain C++, no Switch code
+m.catalog_ok(); m.catalog_error();                   // the built-in catalog passed melee-unlocked's rules
+std::vector<modinstall::ModStatus> mods = m.list();  // one per catalog entry, cheap enough for a few calls a second:
+//   .mod (CatalogMod: id, name, version, credits, license, page, url, asset_pattern, kind, policy, note,
+//         download_bytes, disc_bytes (0: not known)), .state (NotInstalled, Installed, UpdateAvailable, Working),
+//   .automatic (Install downloads it), .file_ready (its file is in mods/Downloads), .installed_version,
+//   .line (what is happening or how the last job ended), .percent (-1: none), .failed, .downloads_path
+m.install(id, &why);   // Install or Update: a job on the installer's thread (false: why it cannot start)
+m.cancel();            // stops the running job at the next block; a partial download is kept and continued later
+m.remove(id, &why);    // the disc or save and its record; the profile's memory card stays
+m.busy(); m.busy_id(); m.profiles();                 // profiles mods.cpp can load (folders and Profiles/*.ini)
+fe::mod_profile_next(); fe::mod_profile_set(name);   // settings.ini mod_profile: what the next start loads ("" none)
+fe::mod_profile_choices();                           // "" first, then m.profiles()
+fe::mod_downloads_available();                       // false in the program without services (no libcurl)
+```
+
+Another program (melee-unlocked-macOS) builds the same library with its own `Config`: `mods_dir`, `disc_path`,
+`catalog_json`, a `Fetcher` (`modinstall::curl_fetcher()` or its own) and optionally a `Platform` for free space.
+
+**The Mods page** (in-game menu, the last host page, right above Controls; the main page's rows from Controls down are one lower than before): `Mod` picks one of the catalog's mods (Left/Right), then
+its state, size and licence, the action (Install / Install from mods/Downloads / Update to ... / Cancel / Play it at the
+next start), Remove (press A twice), for a mod that cannot be fetched its page and where to put the file, and `Mod
+profile *` (the profile the next start loads). Install and Remove are greyed while the session is online.
+
 ### Netplay
 
 `--play --net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT` (and the runner's other netplay options: `--net-retry`,
@@ -626,6 +716,35 @@ Destination plays `AF.hps` / `CE.hps` instead of its single song `30.hps`). In V
 took the Z press (it adds the hovered fighter to a squad); `../patches/0005` leaves Z to the pack on its seven paired
 icons when the pack is loaded.
 
+## melee-unlocked's interface
+
+The app's in-game menu and its screens before the game are melee-unlocked's own (v1.0.5), as faithfully as the console
+allows. Nothing of it is committed: `build.sh sync` runs `scripts/mu_ui_extract.py` over the fetched tree, which copies the
+panel's code verbatim into `gen/mu_ui` (`pc_settings_visuals.inl`, `settings_page_navigation.h`, `settings_imgui_input.h`,
+`settings_search.h`, the GD Melee motion and text tables, and by first and last line the Clean side functions and blocks of
+`pc_settings.cpp`: category icons, title shards, category list, slide-in motion, page header, page entrance, smooth scroll,
+the ImGui style), the launcher's palette and layout constants and its accent theme, its fonts (Source Sans 3 Black and Bold,
+OFL) and its artwork (`bailey_cut.bmp`, `melee_mark.bmp`), and converts `melee_unlocked.ico` into the NRO's icon.
+
+- **In the game** (`src/mu_panel.cpp`): the panel in its default Clean side style. L + R + Start (half a second) or
+  Start + D-pad Down + Z opens it; D-pad or stick moves, A selects, B goes back a page, Start closes; Quit game asks first.
+  Categories VIDEO, AUDIO, GAME, CONTROLS, OVERLAYS, CUSTOMIZE, GECKO CODES, MODS: the app's rows are placed where melee-unlocked
+  has them (its section names), each drawn by its own widgets (toggle, combo, slider; a value the app's pages step is a
+  `< value >` field), and melee-unlocked's rows the Switch lacks are listed greyed under "Not on the Switch". Every change is
+  queued and applied on the simulation thread at the next controller read; the game gets neutral controllers while the panel
+  is open and nothing held when it closes (play_io.cpp's hand-over). The search box (needs a keyboard), the other five menu
+  styles and the mouse are left out. `menu_open_extra(title)` opens the category holding that page, and the focus walks down to
+  it as a player's D-pad would. Practice menu: a "Practice menu" row on GAME > Training when features/proai.cpp is linked.
+  Log lines: `settings: opened on ...`, `settings: <CATEGORY>`, `settings: focus <row>` (the tests follow these).
+- **Before the game** (`src/mu_home.cpp`): the launcher's rail (mark, Play, Settings, Replay Viewer, Mods, Bailey) and content
+  column at its 720 x 480 layout scaled to the screen (1.5 at 720p, 2.25 at 1080p). Play: the disc, GAME BUILD (Source Port or
+  Vanilla), PLAY, the version line with the build computer's update ("Update and restart": download, check, swap, then the app
+  closes), the Slippi account with Sign in (the app's sign-in screen, `switch_signin.cpp`), the mod profile, the launcher colour.
+  Settings opens the panel over it. Replay Viewer: the replays with the picked game's stats, Watch (the game starts with it,
+  offline), Delete. Mods: melee-unlocked's catalog cards over the mod installer (Get / Update / Cancel / Play it at the next
+  start / Remove, where to download a file yourself) and the profile the next start loads. launcher.ini `home=0` skips it
+  (test aid); `mu_palette` and `mu_accent` keep the two colours.
+
 ## The app: Melee-NX-NetPlay 0.4.2
 
 `out/melee-nx-netplay.nro` (the services program, NACP "Melee-NX-NetPlay" with the version in `VERSION`, 0.4.2, the app's icon: `build/icon.jpg` when
@@ -709,10 +828,11 @@ the current builder: Docker images `mu-arm-gcc15` (built by the script from `../
 `melee-nx-netplay-build`; `build/sdk` and `build/switch-aurora/_deps` (both left by one `install.sh` run); one network
 fetch of melee-unlocked v1.0.5 (`../fetch.sh`, pinned to `67868aa`; `MU_SOURCE=file://...` works offline); then
 `../build.sh game`, `../build.sh linux`, `../build.sh nro`, `MU_NET_SERVICES=1 ../build.sh nro`, `./build.sh sync`,
-`./build.sh nro`. `update-host-native.patch` (not applied here) makes `tools/update-host.py` publish only the `game`
-entry (`MELEE_NX_UPDATE_NROS=game`) with the version from `VERSION` (`MELEE_NX_UPDATE_VERSION_FILE`), and names the
-three `Environment=` lines for `builder/systemd/melee-nx-update.service` (the build command is the existing
-`MELEE_NX_UPDATE_BUILD`). 0.3.x consoles then offer 0.4.0 and install it in place of their NRO.
+`./build.sh nro`. `tools/update-host.py` publishes only the `game` entry with `MELEE_NX_UPDATE_NROS=game` and takes
+the version from this `VERSION` with `MELEE_NX_UPDATE_VERSION_FILE=experiments/native-engine/frontend/VERSION`; with
+`MELEE_NX_UPDATE_BUILD=<checkout>/experiments/native-engine/frontend/app-build.sh` these three `Environment=` lines go
+in a drop-in for `builder/systemd/melee-nx-update.service` (`systemctl --user edit melee-nx-update`). Without them the
+script publishes the recompiled app as before. 0.3.x consoles then offer 0.4.x and install it in place of their NRO.
 
 ### A HOME Menu icon (forwarder)
 
@@ -952,6 +1072,33 @@ why is not known. The same costume's portrait on the character select screen is 
 ## Licensing
 
 Our files are GPL-3.0-or-later, except `src/controls_core.h` and `src/controls_files.*`, which are adapted from melee-unlocked's
-`input_bindings.h`, `controller_profiles.cpp` and `dolphin_profile.cpp` and keep their GPL-2.0-or-later notice. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
+`input_bindings.h`, `controller_profiles.cpp` and `dolphin_profile.cpp` and keep their GPL-2.0-or-later notice. In the mod
+installer, the catalog checks of `src/modinstall/mi_catalog.cpp` follow melee-unlocked's `launcher_mod_catalog.cpp` and the
+DJW decoder in `src/modinstall/mi_vcdiff.cpp` is adapted from xdelta 3.1.0's `xdelta3-djw.h` (both GPL-2.0-or-later, used
+under GPL-3.0-or-later, credited in the files); the LZMA SDK's decoders (public domain) are compiled from the fetched tree
+and zlib is the system's or devkitPro's. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
+
+## Fight a pro and the Practice menu
+
+**Practice menu.** In an offline Training match, Start + D-pad Up + Z opens melee-unlocked's own Practice menu
+(`practice_menu.cpp`, patches/0113) in the look `practicestyle` picks (0 Main Menu bars, 1 Side rails, 2 Character
+select slots, 3 HUD strip; also on the in-game menu's Training page). The controller that opened it drives it (A pick,
+B back, Start close); the game gets neutral pads while it is open and whatever is held when it closes is kept from the
+game until let go. Its settings go to settings.ini when it closes. Outside an offline Training match the chord opens the
+in-game menu's Training page as before.
+
+**Fight a pro.** Practice menu > Fight a pro. The first time, "Download Phillip's AI (about 64 MB)" asks first
+(Download / Not now): the three base policies come from Hugging Face (vladfi/phillip-models, the pinned URLs in
+`src/proai/catalog.json`) into `sdmc:/switch/melee-nx-netplay/ProAI/`, each checked against its SHA-256 (or copy the
+`.onnx` files there by hand). Then each policy is timed on the console (`pro ai: <file> steps in N ms here: Fight a pro
+is on`, 14 ms is the limit as upstream); picking Zain, Cody Schwab or aMSa asks about "Stronger Pro AI" (the matchup
+policies, about 0.2 to 0.9 GB per pro; Not now / Always / Never) and starts Training again with the CPU as that pro's
+character, which Phillip plays (command 0xEA, offline only) with an 18-frame reaction delay on a worker thread (cores 0
+and 1 at priority 0x2C; `proai_threads 1..3` splits its large matrix products). Every 3600 steps the log says
+`pro ai: P2 N ms a step`; a step that misses its frame says `answer for frame N is late`. The engine:
+`src/proai/onnx_lite.cpp` (operators: Gemm, Add/Sub/Mul/Div/Max/Min, Where, comparisons, Sigmoid/Tanh/Gelu, Sqrt/Log/Neg,
+Clip, Cast, Reshape/Squeeze/Unsqueeze/Expand/Concat/Split/Gather, OneHot, ReduceMean/ReduceSum, ArgMax), checked
+against onnxruntime by `../tools/proai_check.sh MODELS_DIR` (and the app's own recorded steps,
+`MELEE_PRO_AI_RECORD=<file>`, by `../tools/proai_replay.py`).

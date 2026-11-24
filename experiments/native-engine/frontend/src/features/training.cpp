@@ -46,6 +46,10 @@ constexpr uint32_t kTrainingMajor = 0x1C;
 MuPcConfig pc = [] { MuPcConfig c; mu_pc_defaults(&c); c.enabled = 0; return c; }();
 int pc_preset = -1;                           // the preset applied last (-1 none, or the setting's own)
 MuPcConfig slots[3]; bool slot_valid[3] = {};   // practicecpuslot1..3
+// The Practice menu (proai.cpp, drawn on the render thread) reads and changes pc and the slots: this guards them there
+// and where the simulation thread hands pc to the game (0xF6) and reads the CPU's reports.
+std::mutex pc_mutex;
+bool pc_driving = false; int pc_plan = 0, pc_kind = -1; uint32_t pc_status_frame = 0;
 
 std::string to_text(const MuPcConfig& c) {     // upstream practice_cpu.cpp to_text: the whole struct as hex
   static const char* hex = "0123456789abcdef";
@@ -144,6 +148,10 @@ int lab_advantage(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>&) 
 int practice_cpu(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& reply) {
   if (n == 1) return 0;                     // 20XX TE's Frozen Mode switch (mods.cpp)
   if (n == 2 || n == 3) {                   // what the CPU is doing: driving, plan[, kind]
+    {
+      std::lock_guard<std::mutex> lock(pc_mutex);
+      pc_driving = p[0] != 0; pc_plan = p[1]; pc_kind = n == 3 ? int(p[2]) : -1; pc_status_frame = retrace();
+    }
     char line[96];
     std::snprintf(line, sizeof line, "Practice CPU: %s", p[0] ? mu_pc_plan_name(p[1]) : "the game's own");
     std::lock_guard<std::mutex> lock(hud_mutex);
@@ -151,7 +159,8 @@ int practice_cpu(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& re
     cpu_text = line;
     return 1;
   }
-  MuPcConfig c = pc;
+  MuPcConfig c;
+  { std::lock_guard<std::mutex> lock(pc_mutex); c = pc; }
   // The game also keeps both to offline Training; here nothing that changes the simulation leaves the host online,
   // in a replay or in a vanilla session.
   if (online() || replay_playing() || vanilla()) { c.enabled = 0; c.rng_mode = MU_PC_RNG_GAME; }
@@ -371,6 +380,48 @@ bool training_go(int character, int costume, int cpu_character, int cpu_costume,
   return go_training_from(character, costume, cpu_character, cpu_costume, from_online);
 }
 bool training_entering() { return enter.on; }
+// The Practice menu's view of the Practice CPU (proai.cpp: upstream's practice_cpu::config / set_config / slot / status).
+MuPcConfig training_pc() { std::lock_guard<std::mutex> lock(pc_mutex); return pc; }
+void training_pc_set(const MuPcConfig& c) {
+  std::lock_guard<std::mutex> lock(pc_mutex);
+  pc = c;
+  pc_preset = c.preset >= 1 && c.preset <= mu_pc_preset_count() ? int(c.preset) - 1 : -1;
+}
+bool training_pc_slot(int index, MuPcConfig* out) {
+  std::lock_guard<std::mutex> lock(pc_mutex);
+  if (index < 0 || index > 2 || !slot_valid[index]) return false;
+  *out = slots[index];
+  return true;
+}
+void training_pc_set_slot(int index, const MuPcConfig& c) {
+  std::lock_guard<std::mutex> lock(pc_mutex);
+  if (index < 0 || index > 2) return;
+  slots[index] = c; slot_valid[index] = true;
+}
+void training_pc_status(bool* driving, int* plan, uint32_t* frame, int* kind) {
+  std::lock_guard<std::mutex> lock(pc_mutex);
+  *driving = pc_driving; *plan = pc_plan; *frame = pc_status_frame; *kind = pc_kind;
+}
+// settings.ini lines for the current Practice CPU (written by proai.cpp when the Practice menu closes after a change).
+void training_pc_persist(void (*write)(const std::string&, const std::string&)) {
+  MuPcConfig c; int preset; MuPcConfig s[3]; bool valid[3];
+  {
+    std::lock_guard<std::mutex> lock(pc_mutex);
+    c = pc; preset = pc_preset;
+    for (int i = 0; i < 3; ++i) { s[i] = slots[i]; valid[i] = slot_valid[i]; }
+  }
+  write("practicecpu", to_text(c));
+  write("practicecpu_on", c.enabled ? "1" : "0");
+  write("practicecpu_preset", std::to_string(preset));
+  write("lab", (c.tools & MU_PC_TOOL_DPAD) ? "1" : "0");
+  write("lab_bubbles", (c.tools & MU_PC_TOOL_HITBOXES_ONLY) ? "2" : (c.tools & MU_PC_TOOL_HITBOXES) ? "1" : "0");
+  write("lab_loop", (c.tools & MU_PC_TOOL_LOOP) ? "1" : "0");
+  write("lab_overlay", (c.tools & MU_PC_TOOL_OVERLAY) ? "1" : "0");
+  write("frame_advance", (c.tools & MU_PC_TOOL_FRAME_ADVANCE) ? "1" : "0");
+  write("practice_rng", std::to_string(c.rng_mode));
+  write("practice_rng_seed", std::to_string(c.rng_seed));
+  for (int i = 0; i < 3; ++i) if (valid[i]) write("practicecpuslot" + std::to_string(i + 1), to_text(s[i]));
+}
 void training_pad_hook(MuPadStatus pads[4]) { test_tick(); enter_tick(pads); frame_advance(pads); }
 void training_scene_changed() {
   if (snapshot_store::running() && !replay_playing()) snapshot_store::release("the scene ended");

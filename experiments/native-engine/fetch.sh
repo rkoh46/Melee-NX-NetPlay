@@ -32,6 +32,20 @@ apply() {   # $1 the git tree, $2 the patch
   elif git -C "$1" apply --check "$2" 2>/dev/null; then git -C "$1" apply "$2"; echo "$name" >> "$rec"; echo "apply $name"
   else echo "fetch: $name does not apply to $1 (if it is already in, add its name to $rec)" >&2; exit 1; fi
 }
+# A tree from before the record: patches go in in list order, so one that does not apply forward is already in when it
+# is itself reverse-applicable or a later patch of the list is (0002 under 0004). Written once into .mnx-applied.
+seed() {   # $1 the git tree, then the patches in order
+  local tree=$1 rec="$1/.mnx-applied" i j; shift; [ -f "$rec" ] && return 0
+  local list=("$@"); : > "$rec"
+  for ((i = 0; i < ${#list[@]}; i++)); do
+    git -C "$tree" apply --check "${list[i]}" 2>/dev/null && continue
+    for ((j = i; j < ${#list[@]}; j++)); do
+      if git -C "$tree" apply --reverse --check "${list[j]}" 2>/dev/null; then basename "${list[i]}" >> "$rec"; break; fi
+    done
+  done
+}
+seed "$tree" "$here"/patches/0*.patch
+seed "$tree/sourceport/extern/melee" "$here"/patches/decomp-*.patch
 for p in "$here"/patches/0*.patch; do apply "$tree" "$p"; done
 for p in "$here"/patches/decomp-*.patch; do apply "$tree/sourceport/extern/melee" "$p"; done
 echo "tree: $tree"

@@ -17,6 +17,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
 #include "mu_ui.h"
+#include "mu_mods.h"
 
 #include "app/game_menu.h"       // the menu interface this file implements (build-time copy, patches/0104 and 0111)
 #include "host.h"
@@ -79,6 +80,8 @@ static void draw_settings_icon(int index, ImVec2 p, ImU32 color);   // mu_panel_
 extern "C" const uint8_t mu_ui_font_black[], mu_ui_font_black_end[], mu_ui_font_bold[], mu_ui_font_bold_end[];
 extern "C" const uint8_t mu_ui_bailey[], mu_ui_bailey_end[], mu_ui_mark[], mu_ui_mark_end[];
 
+namespace fe::features { __attribute__((weak)) bool practice_menu_chord(int port); }   // features/proai.cpp: the Practice menu
+
 namespace fe {
 namespace {
 constexpr uint16_t BTN_LEFT = 0x0001, BTN_RIGHT = 0x0002, BTN_DOWN = 0x0004, BTN_UP = 0x0008, BTN_R = 0x0020, BTN_L = 0x0040,
@@ -117,7 +120,7 @@ bool g_step_armed = false;
 enum ControlsRow { C_DEVICE, C_REMAP, C_STICK_DZ, C_CSTICK_DZ, C_TRIGGER, C_SWAP, C_RUMBLE, C_TEST_RUMBLE, C_MODIFIER, C_RESET };
 
 // What the panel asked for, applied on the simulation thread (panel_service).
-enum class Act { Main, Extra, Controls, Remap, Quit, Ini, Setting, Practice };
+enum class Act { Main, Extra, Controls, Remap, Quit, Ini, Setting, Practice, ModPrimary, ModRemove, ModProfile };
 struct Action { Act act; int a = 0, b = 0, value = 0; std::string key, text; };
 std::vector<Action> g_actions;
 
@@ -239,7 +242,7 @@ void place(const std::string& page, int* cat, std::string* title) {
   static const P table[] = {
     {"Picture", 0, "Picture"}, {"Game options", 2, "Game"}, {"Picture and HUD", 2, "HUD"}, {"Community codes", 2, "Community codes"},
     {"Computer players", 2, "Computer players"}, {"Game", 2, "Input"}, {"Online", 2, "Online"}, {"Training", 2, "Training"},
-    {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Controller setup", 3, "Controller setup"},
+    {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Mods", 7, "Game mods"}, {"Controller setup", 3, "Controller setup"},
     {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}};
   for (const P& p : table) if (page == p.page) { *cat = p.cat; *title = p.title; return; }
   *cat = 2; *title = page;
@@ -371,7 +374,7 @@ std::array<Category, 8> build_rows(bool in_game) {
     }
   }
   // GAME, Training: the Practice menu (branch feat/proai), when it is linked.
-  if (&fe::practice_menu_toggle) {
+  if (&fe::features::practice_menu_chord) {
     Row p; p.label = "Practice menu"; p.kind = Kind::Action; p.action = Action{Act::Practice};
     p.hint = "Also Start + D-pad Up + Z.";
     Section& t = section(cats[2], "Training");
@@ -387,25 +390,40 @@ std::array<Category, 8> build_rows(bool in_game) {
     c.rows.push_back(choice("Launcher color", std::clamp(std::atoi(fe::app_ini("mu_accent", "0").c_str()), 0, 5),
                             {"Purple (default)", "Blue", "Green", "Amber", "Red", "Pink"}, h));
   }
-  // MODS: the mod profile (settings.ini mod_profile, read when the game starts).
+  // MODS: melee-unlocked's catalog through the app's mod installer (mu_mods.h), then the profile the next start loads.
   {
+    std::string error;
+    const std::vector<mu_mods::Card> list = mu_mods::cards(&error);
     Section& m = section(cats[7], "Game mods");
-    std::vector<std::string> names = {"None (the retail game)"};
-    const std::vector<std::string> profiles = mod_profiles();
-    for (const auto& p : profiles) names.push_back(p);
-    const std::string current = settings_get("mod_profile");
+    if (!error.empty()) { Row e; e.kind = Kind::Info; e.label = "Mod catalog"; e.text = error; m.rows.push_back(e); }
+    for (const auto& c : list) {
+      Row info; info.kind = Kind::Info; info.label = c.status.mod.name;
+      info.text = c.state + "\n" + c.detail + (c.get_it.empty() ? "" : "\n" + c.get_it);
+      m.rows.push_back(info);
+      Row p; p.kind = Kind::Action; p.label = c.primary + "###mod-main-" + c.status.mod.id; p.enabled = c.primary_enabled;
+      p.action = Action{Act::ModPrimary}; p.action.key = c.status.mod.id;
+      if (c.status.percent >= 0) p.hint = c.status.line;
+      m.rows.push_back(p);
+      if (c.can_remove) {
+        Row rm; rm.kind = Kind::Action; rm.label = std::string(c.remove_armed ? "Remove: press A again" : "Remove") + "###mod-remove-" + c.status.mod.id;
+        rm.action = Action{Act::ModRemove}; rm.action.key = c.status.mod.id;
+        m.rows.push_back(rm);
+      }
+    }
+    Section& n = section(cats[7], "Next start");
+    std::vector<std::string> names;
+    const std::vector<std::string> choices = mu_mods::profile_choices();
+    const std::string next = mu_mods::profile_next();
     int value = 0;
-    for (size_t i = 0; i < profiles.size(); ++i) if (profiles[i] == current) value = int(i) + 1;
-    if (!current.empty() && value == 0) { names.push_back(current + " (not found)"); value = int(names.size()) - 1; }
-    Action a{Act::Setting}; a.key = "mod_profile";
-    Row r = choice("Mod profile", value, names, a);
-    r.next_start = true;
-    r.enabled = !session_online();
-    r.hint = in_game ? "Mods load when the game starts: the change applies at the next start." : "";
-    m.rows.push_back(r);
+    for (size_t i = 0; i < choices.size(); ++i) { names.push_back(choices[i].empty() ? "None (the retail game)" : choices[i]); if (choices[i] == next) value = int(i); }
+    if (names.empty()) names.push_back("None (the retail game)");
+    Row pr = choice("Mod profile", value, names, Action{Act::ModProfile});
+    pr.next_start = true;
+    pr.enabled = !session_online();
+    n.rows.push_back(pr);
     Row where; where.kind = Kind::Info; where.label = "Mods folder";
-    where.text = "switch/melee-nx-netplay/mods: Profiles/<name>.ini, or a folder per mod.";
-    m.rows.push_back(where);
+    where.text = "switch/melee-nx-netplay/mods: a mod per folder, Profiles/<name>.ini, and Downloads/ for files you fetch yourself.";
+    n.rows.push_back(where);
   }
   // melee-unlocked's rows the Switch does not have, greyed under each page, with the reason (FEATURES.md has each one).
   static const struct { int cat; const char* label; const char* why; } kAbsent[] = {
@@ -438,6 +456,9 @@ bool g_armed = false;                // the controller was let go once since the
 bool g_quit_pending = false;
 std::string g_scroll_to;             // a section to bring into view (menu_open_extra)
 int g_enter_frames = 0;              // menu_open_extra: frames until the category is entered
+int g_last_page = -1, g_reopen_page = -1;   // the category page shown last (-1: the category list), for the next open
+std::string g_walk_label;            // menu_open_extra: the row the focus walks down to
+int g_walk_frames = 0;
 host::PadState g_fed[4] = {};
 uint64_t g_fed_seq = ~0ull;
 bool g_in_game_feed = true;          // the pads come from the simulation thread (false: panel_feed from the home screen)
@@ -492,10 +513,8 @@ int stepper(const Row& r) {
   return dir;
 }
 
-ImGuiID g_row_id = 0;   // the control of the row drawn last (a jump to a page focuses its first row)
 void draw_row(const Row& r) {
   ImGui::BeginDisabled(!r.enabled);
-  g_row_id = 0;
   switch (r.kind) {
     case Kind::Toggle: {
       bool v = r.value != 0;
@@ -530,14 +549,11 @@ void draw_row(const Row& r) {
       gx::settings_row_end(row);
       break;
     }
-    case Kind::Action: {
-      ImGui::PushID(r.label.c_str());
+    case Kind::Action:
       if (gx::settings_widgets::Button(r.label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
         Action a = r.action; a.value = 0; queue(a);
       }
-      ImGui::PopID();
       break;
-    }
     case Kind::Info: {
       // A read-only row: its label and a dim line. The controller can rest on it, so a long page scrolls to its end.
       const gx::SettingsRow row = gx::settings_row_begin(r.label.c_str());
@@ -557,7 +573,6 @@ void draw_row(const Row& r) {
       break;
     }
   }
-  if (r.kind != Kind::Info) g_row_id = ImGui::GetItemID();
   ImGui::EndDisabled();
   if (!r.hint.empty()) gx::settings_hint("%s", r.hint.c_str());
   else if (r.next_start) gx::settings_hint("Applies at the next start.");
@@ -614,9 +629,11 @@ void draw_panel(int w, int h) {
   if (model_open != g_ui_open || (model_open && g_jump.exchange(false))) {
     g_ui_open = model_open;
     g_state.open = model_open;
+    if (!model_open) g_reopen_page = g_last_page;   // where it was left: the next open returns there (this session)
     if (model_open) {
       g_state.home_focus_reset = true;
       g_state.clean_detail_open = false;
+      if (g_reopen_page >= 0) { g_state.active_tab = g_reopen_page; g_state.home_focus_reset = false; g_enter_frames = 3; }
       std::string title;
       { std::lock_guard<std::mutex> lock(g_mutex); title = g_open_title; g_open_title.clear(); }
       if (!title.empty()) {
@@ -637,6 +654,7 @@ void draw_panel(int w, int h) {
       else g_state.open = false;
     }
   }
+  if (g_state.open && g_enter_frames == 0) g_last_page = g_state.clean_detail_open ? g_state.active_tab : -1;
   gx::mu_settings_motion(g_state);
   const bool visible = g_state.open || g_state.panel_slide_x > -720.0f;
   if (!visible) { if (!g_state.open && g_ui_open) { g_close_request = true; } return; }
@@ -715,15 +733,18 @@ void draw_panel(int w, int h) {
       for (const Section& s : c.sections) {
         if (s.rows.empty()) continue;
         gx::settings_section(s.title.c_str());
-        // Opened on this page (menu_open_extra): once the category's own first-row focus has settled, its first row.
-        const bool jump = !g_scroll_to.empty() && s.title == g_scroll_to && g_state.content_anim_frame >= 8.0f;
+        // Opened on this page (menu_open_extra): the focus walks down to its first row, as a player would (below).
+        if (!g_scroll_to.empty() && s.title == g_scroll_to && g_state.content_anim_frame >= 8.0f) {
+          const Row& first = s.rows.front();
+          g_walk_label = std::string(first.label.c_str(), ImGui::FindRenderedTextEnd(first.label.c_str()));
+          g_walk_frames = 600;
+          g_scroll_to.clear();
+        }
         for (const Row& r : s.rows) {
-          ImGui::PushID(&r - s.rows.data()); ImGui::PushID(s.title.c_str()); draw_row(r); ImGui::PopID(); ImGui::PopID();
-          if (jump && &r == s.rows.data() && g_row_id) {
-            ImGui::SetFocusID(g_row_id, ImGui::GetCurrentWindow());
-            ImGui::SetScrollHereY(0.2f);
-            g_scroll_to.clear();
-          }
+          // A row's ID: its "###key" when it has one (a label that changes keeps its focus), else its place in the section.
+          const size_t key = r.label.find("###");
+          if (key != std::string::npos) ImGui::PushID(r.label.c_str() + key + 3); else ImGui::PushID(int(&r - s.rows.data()));
+          ImGui::PushID(s.title.c_str()); draw_row(r); ImGui::PopID(); ImGui::PopID();
         }
       }
     }
@@ -827,6 +848,13 @@ void panel_draw(int window_w, int window_h) {
     if (seq != g_fed_seq) { g_fed_seq = seq; feed_imgui(pads); }
   }
   const bool open = g_open.load();
+  if (g_walk_frames > 0) {   // D-pad Down, one row every other frame, until the walk's row has the focus
+    --g_walk_frames;
+    const auto it = g_state.page_navigation.labels.find(ImGui::GetFocusID());
+    const bool there = it != g_state.page_navigation.labels.end() && it->second == g_walk_label;
+    if (there || !open || g_walk_frames == 0) { g_walk_frames = 0; io.AddKeyEvent(ImGuiKey_GamepadDpadDown, false); }
+    else io.AddKeyEvent(ImGuiKey_GamepadDpadDown, (g_walk_frames & 1) != 0);
+  }
   gx::settings_input::navigation(io, open);
   // The panel is driven by the controller (a touch or a mouse pointer resting over it must not pick categories).
   // Its focus frame always shows (there is no pointer to hide it for).
@@ -874,6 +902,7 @@ void panel_service(bool in_game) {
         case Act::Ini: break;
         case Act::Setting: break;
         case Act::Practice: set_open_locked(false); break;
+        default: break;   // the mod actions, below (outside the lock)
       }
     }
   }
@@ -884,6 +913,12 @@ void panel_service(bool in_game) {
   }
   for (const Action& a : actions) {
     if (a.act == Act::Ini) { fe::app_ini_set(a.key, std::to_string(a.value)); say("menu: %s %d", a.key.c_str(), a.value); }
+    if (a.act == Act::ModPrimary) mu_mods::primary(a.key);
+    if (a.act == Act::ModRemove) mu_mods::remove(a.key);
+    if (a.act == Act::ModProfile) {
+      const std::vector<std::string> choices = mu_mods::profile_choices();
+      if (a.value >= 0 && a.value < int(choices.size())) mu_mods::profile_set(choices[size_t(a.value)]);
+    }
     if (a.act == Act::Setting && a.key == "mod_profile") {
       const std::vector<std::string> profiles = mod_profiles();
       const std::string v = a.value > 0 && a.value <= int(profiles.size()) ? profiles[size_t(a.value - 1)] : std::string();
@@ -892,7 +927,7 @@ void panel_service(bool in_game) {
       say("menu: mod profile %s from the next start", v.empty() ? "none" : v.c_str());
     }
   }
-  for (const Action& a : actions) if (a.act == Act::Practice && in_game && &fe::practice_menu_toggle) fe::practice_menu_toggle();
+  for (const Action& a : actions) if (a.act == Act::Practice && in_game && &fe::features::practice_menu_chord) fe::features::practice_menu_chord(0);
   if (quit) {
     host::log("menu: quit");
     if (g_quit_hook) g_quit_hook(); else std::exit(0);
@@ -905,7 +940,7 @@ void panel_home_mode(bool on) { g_in_game_feed = !on; if (on) g_armed = false; }
 bool panel_take_quit() { return g_home_quit.exchange(false); }
 void panel_open_on(const std::string& title) { host::menu_open_extra(title); }
 void panel_close() { host::menu_close(); }
-bool practice_available() { return &fe::practice_menu_toggle != nullptr; }
+bool practice_available() { return &fe::features::practice_menu_chord != nullptr; }
 }  // namespace mu_ui
 }  // namespace fe
 
@@ -1013,4 +1048,3 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool) {
 }
 }  // namespace host
 
-namespace fe { std::vector<std::string> mu_mod_profiles() { return mod_profiles(); } }
