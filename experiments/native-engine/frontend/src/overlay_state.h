@@ -65,9 +65,21 @@ struct Snapshot {
   float game_fps = 0;                           // retraces per second, measured on the simulation thread
 };
 
+// One online tick for the network panel (src/features/netoverlay.cpp; melee-unlocked's net_trace::Record, the fields drawn).
+struct NetSample {
+  double wall = 0;                              // seconds, steady clock
+  float sim_ms = 0;                             // the tick's work, rollbacks included
+  uint16_t ping_ms = 0;
+  uint8_t rollbacks = 0, depth = 0;
+  uint8_t flags = 0;                            // net_trace's: 1 wait, 2 halted by time sync, 4 advanced, 8 mark, 16/32/64 marks from the D-pad
+};
+
 }  // namespace fe::overlay
 
+#include <vector>
 namespace fe::features {
+// netoverlay.cpp; weak: the newest ticks while the network panel is on (netoverlay 1) and an online match runs.
+__attribute__((weak)) bool net_overlay_samples(std::vector<overlay::NetSample>& out);
 // overlays.cpp; weak in the drawer, so the program works without the feature modules.
 __attribute__((weak)) overlay::Config overlay_config();
 __attribute__((weak)) void overlay_snapshot(overlay::Snapshot& out);
