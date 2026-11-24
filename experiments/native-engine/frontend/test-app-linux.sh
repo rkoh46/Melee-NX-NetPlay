@@ -47,7 +47,7 @@ make_app() {
 bin=mu-native-gfx-linux-services; san_env=""
 case "${MU_SANITIZE:-}" in
   "") ;;
-  address) bin=$bin-asan; san_env="ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0:handle_segv=0:allow_user_segv_handler=1:log_path=san" ;;
+  address) bin=$bin-asan; san_env="ASAN_OPTIONS=detect_leaks=0:handle_segv=0:allow_user_segv_handler=1:log_path=san" ;;
   thread) bin=$bin-tsan; san_env="TSAN_OPTIONS=handle_segv=0:history_size=4:second_deadlock_stack=1:suppressions=/t/tsan_graphics.supp:log_path=san" ;;
   *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
 esac

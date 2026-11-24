@@ -113,6 +113,13 @@ sync_tree() {
   patch -s -p1 -d "$gen/appsrc" < "$here/patches/0105-switch-signin-off-console.patch"
   for f in game_menu.cpp game_menu.h switch_signin.cpp; do cmp -s "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f" || cp "$gen/appsrc/port/runtime/host/$f" "$gen/app/$f"; done
   rm -rf "$gen/appsrc"
+  # Aurora (build/sdk/aurora, the Switch-patched source both picture variants compile) with this frontend's Aurora
+  # patches (patches/01xx-aurora-*.patch), as a build-time copy; build/sdk itself is not changed.
+  if [ -f "$repo/build/sdk/aurora/CMakeLists.txt" ]; then
+    rm -rf "$gen/aurora-stage"; cp -R "$repo/build/sdk/aurora" "$gen/aurora-stage"
+    for p in "$here"/patches/01*-aurora-*.patch; do [ -f "$p" ] && patch -s -p1 -d "$gen/aurora-stage" < "$p"; done
+    rsync -rlpc --delete "$gen/aurora-stage/" "$gen/aurora/"; rm -rf "$gen/aurora-stage"
+  fi
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   rm -rf "$gen/scripts"; mkdir -p "$gen/scripts"
   cp "$work"/mu/port/scripts/parity_*.txt "$work"/mu/port/scripts/native_vs_ko.txt "$gen/scripts/"

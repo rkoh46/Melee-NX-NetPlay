@@ -1,0 +1,20 @@
+--- a/lib/imgui.cpp
++++ b/lib/imgui.cpp
+@@ -74,10 +74,16 @@
+   });
+ }
+ } // namespace
++
++// ImDrawList::CloneOutput allocates with IM_NEW (ImGui::MemAlloc and placement new), so the copies must go
++// back through IM_DELETE: std::unique_ptr's default deleter (operator delete) mismatched the allocation.
++struct ImDrawListDelete {
++  void operator()(ImDrawList* list) const noexcept { IM_DELETE(list); }
++};
+ 
+ struct DrawData::Impl {
+   ImDrawData drawData;
+-  std::vector<std::unique_ptr<ImDrawList>> drawLists;
++  std::vector<std::unique_ptr<ImDrawList, ImDrawListDelete>> drawLists;
+ };
+ 
+ void create_context() noexcept {
