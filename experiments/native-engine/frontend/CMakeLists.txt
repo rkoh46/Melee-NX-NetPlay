@@ -180,6 +180,10 @@ if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
   # here that name leads to the system's zstd (Linux) or devkitPro's portlib (Switch), so header and library match.
   file(WRITE "${CMAKE_BINARY_DIR}/zstdshim/zstd/zstd.h" "#include <zstd.h>\n")
   target_include_directories(mu_features PRIVATE "${CMAKE_BINARY_DIR}/zstdshim")
+  # replay_coach_glue.cpp compiles the fetched tree's replay_scan.cpp, which includes "slippilib/SlippiGame.h": that name
+  # must lead to the fetched tree's copy (the one replays.cpp compiles), not to this repository's older port/third_party one.
+  file(WRITE "${CMAKE_BINARY_DIR}/slpshim/slippilib/SlippiGame.h" "#include \"${MU}/port/third_party/slippilib/SlippiGame.h\"\n")
+  target_include_directories(mu_features BEFORE PRIVATE "${CMAKE_BINARY_DIR}/slpshim")
   # spectator.cpp: the Slippi spectator server's own ENet (the netplay object's copy is local to that object) and
   # nlohmann's JSON, both this repository's port/third_party.
   set(_enet "${REPO}/port/third_party/enet")

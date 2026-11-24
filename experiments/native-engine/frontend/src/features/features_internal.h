@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fe::features {
 // registry.cpp: each module's registration, called once before the first dispatch.
@@ -16,6 +17,7 @@ void register_replays();
 void register_overlays();
 void register_spectator();
 void register_netoverlay();
+void register_replay_library();      // replay_library.cpp, from register_replays (its rows first on the Replays page)
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -37,6 +39,7 @@ void training_pad_hook(MuPadStatus pads[4]);   // frame advance (reads the pads;
 void training_scene_changed();
 bool training_lab_overlay();         // Training's "Inputs and frame advantage" is on (lab_overlay)
 bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
+std::vector<uint8_t> training_replay_defense(int setting);   // a takeover's opponents (0xE9): MuPcConfig bytes, empty to follow the recording
 
 // overlays.cpp
 bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
@@ -45,6 +48,10 @@ bool overlay_draws_training();       // a picture overlay draws the Training pan
 bool replay_playing();               // a .slp is being played back
 bool replay_word(int which, uint32_t* value);   // the recorded option words during playback (0..2)
 bool replay_pad_hook(MuPadStatus pads[4]);      // playback controls; true when the pads must not reach the game as they are
+std::string replay_folder();                    // where replays are written and listed
+void replay_watch(const std::string& path);    // play mode starts the game again with this replay (the menu's "Watch it")
+// replay_library.cpp: the replay list as the Replays page shows it (sorted, short games hidden), newest first by default.
+std::vector<std::string> library_list();
 
 // spectator.cpp: the Slippi spectator server (settings.ini slippi_spectator 1)
 bool spectator_wanted();             // switched on in settings.ini (the server starts with the run)

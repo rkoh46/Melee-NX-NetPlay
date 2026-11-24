@@ -6,6 +6,9 @@
 //   - frame counter and performance graph (showfps, performance), the GameCube adapter's report rate (adapterrate);
 //   - players' names over the fighters online (playernicknames), the Arcade look's combo counter (arcade_combo_counter),
 //     the L-cancel flash (lcancel_flash_mode) as a ring over the fighter, the display latency test (latencytest);
+//   - the replay viewer (replay_view.h, src/features/replays.cpp): where playback is on a timeline with the coach's tips,
+//     the speed, the player A takes over or the live takeover, the newest frame data reading, a tip's banner at its moment,
+//     a try's result, the buttons (the look follows upstream's gx/replay_hud.cpp: dark plates fading into the picture);
 //   - picture options: shape (aspect), internal resolution (scale), brightness, contrast, vibrance, sharpening and the CRT
 //     look (patches/0109's aurora_set_picture, in Aurora's present pass), border art in the side bars (borderart).
 // The look follows melee-unlocked's overlays (port/runtime/gx/training_overlay.cpp, pc_settings.cpp; read, not copied);
@@ -13,6 +16,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
 #include "overlay_state.h"
+#include "replay_view.h"
 #include "host.h"                // shim: gcadapter_status
 
 #include <aurora/aurora.h>
@@ -397,6 +401,159 @@ void draw_lcancel(ImDrawList* dl, const overlay::Config& c, const overlay::Snaps
     text(dl, size, ImVec2(centre.x - text_width(size, label) * 0.5f, centre.y - r - size - 2), with_alpha(col, fade), label);
   }
 }
+
+// ---- the replay viewer (replay_view.h) ----
+std::vector<std::string> wrap(const std::string& s, float size, float width) {
+  std::vector<std::string> lines;
+  std::string line, word;
+  auto flush_word = [&] {
+    if (word.empty()) return;
+    const std::string next = line.empty() ? word : line + " " + word;
+    if (!line.empty() && text_width(size, next.c_str()) > width) { lines.push_back(line); line = word; } else line = next;
+    word.clear();
+  };
+  for (char c : s) { if (c == ' ') flush_word(); else word += c; }
+  flush_word();
+  if (!line.empty()) lines.push_back(line);
+  return lines;
+}
+std::string clock_of(int32_t frame) {
+  const int s = std::max(0, int(frame)) / 60;
+  char b[16];
+  std::snprintf(b, sizeof b, "%d:%02d", s / 60, s % 60);
+  return b;
+}
+ImU32 rgba(int r, int g, int b, float a) { return IM_COL32(r, g, b, int(255 * std::clamp(a, 0.0f, 1.0f))); }
+ImU32 value_colour(int sign, float a) { return sign > 0 ? rgba(110, 230, 120, a) : sign < 0 ? rgba(255, 96, 84, a) : rgba(255, 255, 255, a); }
+ImU32 tip_colour(int type, float a) {
+  switch (type) {
+    case 0: return rgba(226, 54, 66, a);    // unsafe on shield
+    case 1: return rgba(226, 176, 32, a);   // L-cancel
+    case 2: return rgba(60, 124, 236, a);   // dropped combo
+    default: return rgba(150, 156, 170, a); // tech
+  }
+}
+// A dark plate fading to nothing at its right end, and one fading out at both ends.
+void edge_plate(ImDrawList* dl, float x0, float y0, float x1, float y1, float a) {
+  dl->AddRectFilledMultiColor(ImVec2(x0, y0), ImVec2(x1, y1), rgba(0, 0, 0, 0.66f * a), rgba(0, 0, 0, 0), rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.66f * a));
+}
+void banner(ImDrawList* dl, float cx, float y0, float w, float h, float a) {
+  const float solid = w * 0.18f, l = cx - w * 0.5f, r = cx + w * 0.5f;
+  dl->AddRectFilledMultiColor(ImVec2(l, y0), ImVec2(l + solid, y0 + h), rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.76f * a), rgba(0, 0, 0, 0.76f * a), rgba(0, 0, 0, 0));
+  dl->AddRectFilled(ImVec2(l + solid, y0), ImVec2(r - solid, y0 + h), rgba(0, 0, 0, 0.76f * a));
+  dl->AddRectFilledMultiColor(ImVec2(r - solid, y0), ImVec2(r, y0 + h), rgba(0, 0, 0, 0.76f * a), rgba(0, 0, 0, 0), rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.76f * a));
+}
+void centred(ImDrawList* dl, float size, float cx, float y, ImU32 col, const std::string& s) {
+  text(dl, size, ImVec2(cx - text_width(size, s.c_str()) * 0.5f, y), col, s.c_str());
+}
+
+void draw_replay(ImDrawList* dl, const replay::View& v, const Rect& g) {
+  if (!v.active || v.hidden) return;
+  const float u = g.h() / 720.0f, M = 24 * u, cx = (g.x0 + g.x1) * 0.5f;
+  const float caption = std::max(12.0f, 15 * u), body = std::max(13.0f, 17 * u), title = std::max(16.0f, 24 * u), big = std::max(18.0f, 30 * u);
+  const ImU32 gold = rgba(255, 207, 72, 1), dim = rgba(176, 184, 202, 1), white = rgba(255, 255, 255, 1);
+  // Top left: who A takes over (or LIVE and the try), then the newest frame data reading.
+  {
+    float x = g.x0 + M, y = g.y0 + M;
+    float ra = 0;
+    std::vector<std::string> detail;
+    if (v.readout) {
+      ra = std::clamp(float(5.0 - v.readout_age) / 0.6f, 0.0f, 1.0f);
+      detail = wrap(v.detail, caption, 300 * u);
+      if (detail.size() > 2) detail.resize(2);
+    }
+    const float block = (34 + (ra > 0 ? 36 + 19 * float(detail.size()) : 0)) * u;
+    edge_plate(dl, g.x0, y - 6 * u, x + 420 * u, y + block + 4 * u, 1.0f);
+    if (v.live) {
+      const float bw = text_width(caption, "LIVE") + 16 * u;
+      dl->AddRectFilled(ImVec2(x, y + 2 * u), ImVec2(x + bw, y + 24 * u), rgba(214, 40, 58, 1), 4 * u);
+      text(dl, caption, ImVec2(x + 8 * u, y + 5 * u), white, "LIVE", false);
+      text(dl, title, ImVec2(x + bw + 10 * u, y), white, v.name.c_str());
+      std::string right = "Try " + std::to_string(std::max(1, v.tries));
+      if (v.seconds_left >= 0) right += "   " + std::to_string(v.seconds_left) + " s";
+      text(dl, caption, ImVec2(x + bw + 10 * u + text_width(title, v.name.c_str()) + 16 * u, y + 7 * u), dim, right.c_str());
+    } else {
+      text(dl, caption, ImVec2(x, y + 7 * u), gold, "Take over (A)");
+      const float nx = x + text_width(caption, "Take over (A)") + 10 * u;
+      text(dl, title, ImVec2(nx, y), white, v.name.c_str());
+      if (__builtin_popcount(v.ports) > 1) text(dl, caption, ImVec2(nx + text_width(title, v.name.c_str()) + 12 * u, y + 7 * u), dim, "D-pad Up/Down: another player");
+    }
+    y += 36 * u;
+    if (ra > 0) {
+      text(dl, body, ImVec2(x, y + 5 * u), rgba(222, 226, 238, ra), v.head.c_str());
+      text(dl, big, ImVec2(x + text_width(body, v.head.c_str()) + 12 * u, y), value_colour(v.sign, ra), v.value.c_str());
+      y += 36 * u;
+      for (const auto& line : detail) { text(dl, caption, ImVec2(x, y), rgba(176, 184, 202, ra), line.c_str()); y += 19 * u; }
+    }
+  }
+  // Under the timer: the shown player's tip at its moment (watching).
+  if (!v.live && v.tips_on) {
+    for (size_t i = 0; i < v.tips.size(); ++i) {
+      const replay::Tip& t = v.tips[i];
+      if (v.frame < t.frame - 20 || v.frame > t.frame + 150) continue;
+      const float a = std::clamp(float(v.frame - (t.frame - 20)) / 10.0f, 0.0f, 1.0f) * std::clamp(float(t.frame + 150 - v.frame) / 15.0f, 0.0f, 1.0f);
+      const float w = std::min(680 * u, g.w() - 2 * M), top = g.y0 + g.h() * 0.175f;
+      std::vector<std::string> lines = wrap(t.advice, body, w - 140 * u);
+      if (lines.size() > 2) lines.resize(2);
+      banner(dl, cx, top, w, (70 + 22 * float(lines.size())) * u, a);
+      char head[96];
+      std::snprintf(head, sizeof head, "%s   Tip %d of %d", v.name.c_str(), int(i) + 1, int(v.tips.size()));
+      centred(dl, caption, cx, top + 8 * u, rgba(255, 207, 72, a), head);
+      const float ww = text_width(title, t.what.c_str()), vw = t.value.empty() ? 0 : text_width(title, t.value.c_str()) + 14 * u;
+      text(dl, title, ImVec2(cx - (ww + vw) * 0.5f, top + 28 * u), rgba(255, 255, 255, a), t.what.c_str());
+      if (!t.value.empty()) text(dl, title, ImVec2(cx - (ww + vw) * 0.5f + ww + 14 * u, top + 28 * u), value_colour(t.sign, a), t.value.c_str());
+      float y = top + 64 * u;
+      for (const auto& line : lines) { centred(dl, body, cx, y, rgba(222, 226, 238, a), line); y += 22 * u; }
+      break;
+    }
+  }
+  // Middle: a try's result.
+  if (v.live && v.result) {
+    const float w = std::min(600 * u, g.w() - 2 * M), top = g.y0 + g.h() * 0.32f;
+    const std::vector<std::string> lines = wrap(v.result_detail, body, w - 140 * u);
+    banner(dl, cx, top, w, (100 + 22 * float(lines.size())) * u, 1.0f);
+    centred(dl, caption, cx, top + 8 * u, gold, v.result_head);
+    centred(dl, big, cx, top + 28 * u, v.result_value.empty() ? white : value_colour(v.result_sign, 1), v.result_value.empty() ? std::string("No hits this try") : v.result_value);
+    float y = top + 68 * u;
+    for (const auto& line : lines) { centred(dl, body, cx, y, rgba(222, 226, 238, 1), line); y += 22 * u; }
+    centred(dl, caption, cx, y + 4 * u, dim, "Next try in " + std::to_string(v.next_try_in) + " s");
+  }
+  // Bottom: the timeline (with the tips' markers), the time, the state and the buttons. While the replay just plays it
+  // fades out four seconds after the last press (it covers the percentages), and comes back with any button.
+  const float bar = v.live || v.paused || v.seeking || v.fast || v.slow > 1 || v.analyzing ? 1.0f : std::clamp(float(5.0 - v.idle), 0.0f, 1.0f);
+  if (bar > 0) {
+    const char* buttons = v.live ? "Start  retry       hold Start  back to the replay"
+                        : v.paused ? "Start  play    D-pad Right  one frame    Left  5 s back    A  take over    X / Y  tips    L  speed    R  fast    B  hide"
+                                   : "Start  pause    D-pad  5 s    A  take over    X / Y  tips    L  speed    R  fast    B  hide";
+    const float bw = std::min(g.w() - 2 * M, std::max(text_width(caption, buttons) + 60 * u, 560 * u));
+    const float y1 = g.y1 - 12 * u, h = 64 * u, y0 = y1 - h;
+    banner(dl, cx, y0, bw + 200 * u, h, 0.85f * bar);
+    const float tx0 = cx - bw * 0.5f + 70 * u, tx1 = cx + bw * 0.5f - 70 * u, ty = y0 + 16 * u;
+    const auto at = [&](int32_t f) { return tx0 + (tx1 - tx0) * std::clamp(float(f - v.first) / float(std::max(1, v.last - v.first)), 0.0f, 1.0f); };
+    const ImU32 bwhite = with_alpha(white, bar), bdim = with_alpha(dim, bar), bgold = with_alpha(gold, bar);
+    dl->AddRectFilled(ImVec2(tx0, ty - 2 * u), ImVec2(tx1, ty + 2 * u), rgba(255, 255, 255, 0.2f * bar), 2 * u);
+    dl->AddRectFilled(ImVec2(tx0, ty - 2 * u), ImVec2(at(v.frame), ty + 2 * u), v.live ? rgba(214, 40, 58, 0.9f * bar) : rgba(255, 207, 72, 0.85f * bar), 2 * u);
+    if (v.tips_on && !v.live)
+      for (const auto& t : v.tips) { const float mx = at(t.frame); dl->AddRectFilled(ImVec2(mx - 1.5f * u, ty - 6 * u), ImVec2(mx + 1.5f * u, ty + 6 * u), tip_colour(t.type, 0.95f * bar), 1.5f * u); }
+    dl->AddCircleFilled(ImVec2(at(v.frame), ty), 5 * u, bwhite, 16);
+    const std::string now = clock_of(v.frame), total = clock_of(v.last);
+    text(dl, caption, ImVec2(tx0 - text_width(caption, now.c_str()) - 12 * u, ty - caption * 0.55f), bwhite, now.c_str());
+    text(dl, caption, ImVec2(tx1 + 12 * u, ty - caption * 0.55f), bdim, total.c_str());
+    std::string state;
+    if (v.analyzing) state = "Analyzing " + std::to_string(int(v.analyze_progress * 100)) + "%";
+    else if (v.seeking) state = "Jumping";
+    else if (v.paused && !v.result) state = "Paused";
+    else if (v.fast) state = "Fast forward";
+    else if (v.slow > 1) state = "1/" + std::to_string(v.slow) + " speed";
+    const float ly = ty + 14 * u;
+    if (!state.empty()) {
+      text(dl, caption, ImVec2(tx0, ly), bgold, state.c_str());
+      text(dl, caption, ImVec2(tx0 + text_width(caption, state.c_str()) + 18 * u, ly), bdim, buttons);
+    } else {
+      centred(dl, caption, cx, ly, bdim, buttons);
+    }
+  }
+}
 }  // namespace
 
 // Render thread, inside the frame, before the app's menu and HUD (they are drawn over this).
@@ -409,6 +566,11 @@ void overlay_draw(int ww, int wh) {
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const Rect g = game_rect(ww, wh, picture_aspect(c));
   draw_border(dl, c, g, ww, wh);
+  if (&features::replay_view) {
+    replay::View rv;
+    features::replay_view(rv);
+    if (rv.active) draw_replay(dl, rv, g);
+  }
   overlay::Snapshot s;
   features::overlay_snapshot(s);
   if (!s.valid) return;

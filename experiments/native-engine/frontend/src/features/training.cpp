@@ -327,6 +327,32 @@ template <int N> void add_slot_rows() {
 }
 }  // namespace
 
+// The replay takeover's opponents once the live game leaves the recording (command 0xE9, replays.cpp; upstream
+// source_host.cpp CMD_REPLAY_DEFENSE): 0 smart defence (every defensive option, never an attack in neutral), 1 no DI
+// and no techs (stands and only reacts to being hit), 2 the Practice CPU's own settings, 3 nothing: they follow the
+// recording (an empty answer).
+std::vector<uint8_t> training_replay_defense(int setting) {
+  if (setting < 0 || setting > 2) return {};
+  MuPcConfig cfg = pc;
+  if (setting == 0) {
+    mu_pc_defaults(&cfg);
+    cfg.aggression = 0;
+    for (auto& v : cfg.move_odds) v = 0;
+    cfg.move_odds[MU_PC_MOVE_STAND] = 100;
+    cfg.sdi_amount = 2;
+  } else if (setting == 1) {
+    mu_pc_preset(1, &cfg);
+    for (auto& v : cfg.di_odds) v = 0;
+    cfg.di_odds[MU_PC_DI_NONE] = 100;
+    for (auto& v : cfg.tech_odds) v = 0;
+    cfg.tech_odds[MU_PC_TECH_MISS] = 100;
+  }
+  cfg.enabled = 1;
+  cfg.rng_mode = MU_PC_RNG_GAME;           // a replay's random numbers stay the game's own
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&cfg);
+  return std::vector<uint8_t>(bytes, bytes + sizeof cfg);
+}
+
 uint32_t training_option_bits() {
   // As upstream's apply_practice_tools (pc_settings.cpp) builds them from the tools byte.
   uint32_t te = 0;
