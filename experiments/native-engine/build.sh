@@ -99,7 +99,8 @@ if [ "${MU_NET_SERVICES:-0}" = 1 ]; then
   # build never does: it is pinned to the loopback mock (tools/mock_matchmaking.py), so a development
   # machine cannot reach the real service even by accident.
   NET_URL_NX="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["matchmaking_url"])' "$repo/tools/slippi_pin.json")"
-  NET_URL_LINUX='ws://127.0.0.1:8765'
+  # Slippi's HTTP services too (patches/net-0008): the loopback stand-in (tools/mock_slippi_http.py), spliced in after the URL.
+  NET_URL_LINUX='ws://127.0.0.1:8765\" -DSLIPPI_PIN_SERVICES_URL=\"http://127.0.0.1:8766'
   NET_SUFFIX='-services'; NET_LIBS_LINUX='-lcurl'; NET_LIBS_NX='-lcurl -lmbedtls -lmbedx509 -lmbedcrypto'
 fi
 NET_C='callbacks compress host list packet peer protocol unix'

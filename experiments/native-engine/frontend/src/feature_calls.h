@@ -19,6 +19,7 @@ __attribute__((weak)) const std::vector<MenuEntry>& menu_entries();
 __attribute__((weak)) std::vector<HudLine> hud_lines();
 __attribute__((weak)) bool take_restart_request(std::vector<std::string>* extra_args);   // replays.cpp: "Watch it"
 __attribute__((weak)) std::vector<std::string> replays_list();
+__attribute__((weak)) std::string online_replay_for_report();                   // replays.cpp: Slippi's replay upload
 
 inline bool linked() { return &dispatch_retrace != nullptr; }
 inline void call_tables(MuHostApi* host, MuGameApi* game) { if (&dispatch_tables) dispatch_tables(host, game); }

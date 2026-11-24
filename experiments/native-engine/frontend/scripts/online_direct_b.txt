@@ -1,0 +1,20 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_B): the other side of online_direct_keep_a.txt. Direct, Fox, the
+# remembered code taken with Z and confirmed with START about 25 s after side a, so that side a is in Training when they are matched.
+@scene 01 00
+# The online menu is up with Unranked highlighted: down one row to Direct, A.
+170 sy=-127
+176
+230 A
+236
+@scene 08 00
+120 sy=127
+132 sx=127
+138
+150 A
+156
+1500 START
+1506
+1590 Z
+1596
+1640 START
+1646

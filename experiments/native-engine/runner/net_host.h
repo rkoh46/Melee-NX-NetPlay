@@ -85,6 +85,9 @@ void shutdown();
 // Slippi's time sync changes the frame rate (pacing is the host's, patches/0004); a program with its own sound output
 // gets each new speed here too (any thread; 1.0 normal, about 0.995..1.01 in a match).
 void set_speed_hook(void (*hook)(double speed));
+// The replay of the game just reported, when Slippi's game report asks for it to be uploaded (the reporter's thread; may wait for
+// the program's replay writer). Without a hook nothing is uploaded.
+void set_replay_path_hook(std::string (*hook)());
 // State loads of online rollbacks so far (any thread may read it; the simulation thread counts).
 uint64_t rollbacks();
 

@@ -12,11 +12,19 @@ usage: mock_matchmaking.py [PORT]   (default 8765)
            keeps running: each client's first N searches (counted by connect code) are matched at once with a
            made-up opponent at 127.0.0.1:9, where nothing answers, so that connection attempt fails after the
            netplay client's 8 s and the client searches again; after that, clients are paired with each other.
-           For the failed-connection-then-search-again path (tests only)."""
+           For the failed-connection-then-search-again path (tests only).
+       options for the pairing (either form):
+         --dead-lan   every player's LAN address (ipAddressLan) is 127.0.0.1:9, where nothing answers. All players share the
+                      public address 127.0.0.1, so a client dials the LAN address first (same router) and connects only by
+                      falling back to the public one (patches/net-0006).
+         --chat       each player carries sixteen custom quick-chat lines in the ticket (chatMessages), "P1 line 1".."P2 line 16".
+         --ranks      each player carries Slippi 3.7.0 rank values (rank: rating, updateCount, placements, mmr); the second
+                      player is a bot account (isBot), as the game records them in the replay."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import base64, hashlib, json, socket, struct, sys
 
-port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 8765
+dead_lan, with_chat, with_ranks = '--dead-lan' in sys.argv, '--chat' in sys.argv, '--ranks' in sys.argv
 dead_first = int(sys.argv[sys.argv.index('--dead-first') + 1]) if '--dead-first' in sys.argv else None
 server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(('127.0.0.1', port)); server.listen(4)
@@ -55,10 +63,19 @@ def send(conn, payload, opcode=0x1):
     head = bytes([0x80 | opcode]) + (bytes([len(payload)]) if len(payload) < 126 else b'\x7e' + struct.pack('>H', len(payload)))
     conn.sendall(head + payload)
 
+def extras(player, k):
+    """The pairing options' fields for the player in port k + 1."""
+    if dead_lan: player['ipAddressLan'] = '127.0.0.1:9'
+    if with_chat: player['chatMessages'] = ['P%d line %d' % (k + 1, n + 1) for n in range(16)]
+    if with_ranks:
+        player['rank'] = {'rating': 1500.25 + 100 * k, 'updateCount': 12 + k, 'globalPlacement': 0, 'regionalPlacement': 7 * k, 'mmr': 1234.5 + k}
+        player['isBot'] = k == 1
+    return player
+
 def match_message(mode, me, entries, host_index):
     """entries: (uid, displayName, connectCode, 'ip:port') per player, in port order."""
-    players = [{'uid': uid, 'displayName': name, 'connectCode': code, 'port': k + 1, 'isLocalPlayer': k == me,
-                'ipAddress': address, 'ipAddressLan': address} for k, (uid, name, code, address) in enumerate(entries)]
+    players = [extras({'uid': uid, 'displayName': name, 'connectCode': code, 'port': k + 1, 'isLocalPlayer': k == me,
+                       'ipAddress': address, 'ipAddressLan': address}, k) for k, (uid, name, code, address) in enumerate(entries)]
     return json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == host_index, 'players': players,
                        'stages': [2, 3, 8, 28, 31, 32]})
 
@@ -121,6 +138,11 @@ while len(clients) < 2:
         print('mock: %s message on a new connection, closed' % join.get('type'), flush=True); conn.close(); continue
     print('mock: join from %s mode %s port %s appVersion %s' % (join['user'].get('connectCode'), join['search'].get('mode'), join.get('port'), join.get('appVersion')), flush=True)
     send(conn, json.dumps({'type': 'joined', 'ticketId': 't-%d' % len(clients), 'token': 'mock'}))
+    # The same player searching again (it cancelled and started over) replaces its earlier ticket.
+    for k, (old_conn, old_join) in enumerate(clients):
+        if old_join['user'].get('connectCode') == join['user'].get('connectCode'):
+            print('mock: %s searched again; its earlier ticket is dropped' % join['user'].get('connectCode'), flush=True)
+            old_conn.close(); del clients[k]; break
     clients.append((conn, join))
     threading.Thread(target=keep_alive, args=(conn,), daemon=True).start()
 paired.set()
@@ -129,12 +151,13 @@ for me, (conn, _) in enumerate(clients):
     players = []
     for k, (_, join) in enumerate(clients):
         address = '127.0.0.1:%d' % join['port']
-        players.append({'uid': join['user']['uid'], 'displayName': join['user']['displayName'], 'connectCode': join['user']['connectCode'],
-                        'port': k + 1, 'isLocalPlayer': k == me, 'ipAddress': address, 'ipAddressLan': address})
+        players.append(extras({'uid': join['user']['uid'], 'displayName': join['user']['displayName'], 'connectCode': join['user']['connectCode'],
+                               'port': k + 1, 'isLocalPlayer': k == me, 'ipAddress': address, 'ipAddressLan': address}, k))
     with send_lock:
         send(conn, json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == 0, 'players': players,
                                'stages': [2, 3, 8, 28, 31, 32]}))
-print('mock: matched two players in mode %s' % mode, flush=True)
+print('mock: matched two players in mode %s%s%s%s' % (mode, ' (LAN addresses that never answer)' if dead_lan else '',
+      ', custom chat lines' if with_chat else '', ', ranks and a bot flag' if with_ranks else ''), flush=True)
 for conn, _ in clients:
     try: read_text(conn)
     except Exception: pass

@@ -246,6 +246,7 @@ void pad_read(MuPadStatus out[4]) {
   const bool replay = replay_playing();
   replay_pad_hook(out);
   training_pad_hook(out);
+  search_pad_hook(out);
   const bool offline = !online() && !replay && !vanilla();
   MuLcancelView view{};
   bool gameplay = false;
@@ -292,6 +293,19 @@ void dsp_table() {
   say("options: console low-pass on voices with %s (%s)", which, path.c_str());
 }
 
+// ---- rumble: what the game asks, per port (the log's proof that online only the local port rumbles: the game's own rule,
+// shim/mu_online_audio.c mu_online_motor_port) ----
+void (*orig_pad_rumble)(int32_t port, int32_t on) = nullptr;
+uint32_t rumble_logged = 0;
+void pad_rumble(int32_t port, int32_t on) {
+  if (on && rumble_logged < 12 && port >= 0 && port < 4) {
+    ++rumble_logged;
+    say("options: rumble on, controller port %d (%s, scene %u/%u)", port + 1, g_online.load(std::memory_order_relaxed) ? "online" : "offline",
+        g_scene_major, g_scene_minor);
+  }
+  if (orig_pad_rumble) orig_pad_rumble(port, on);
+}
+
 // ---- tables, retrace, commands ----
 void tables(MuHostApi* host, MuGameApi* game) {
   if (game) g_game = game;                   // called twice: the host's table first, then the game's
@@ -304,6 +318,7 @@ void tables(MuHostApi* host, MuGameApi* game) {
   if (!host->test_getenv) host->test_getenv = w_test_getenv;
   dsp_table();
   orig_pad_read = host->pad_read; host->pad_read = pad_read;
+  if (host->pad_rumble) { orig_pad_rumble = host->pad_rumble; host->pad_rumble = pad_rumble; }
   host->shield_color = shield_color;
   say("options: shield colours %06X %06X %06X %06X%s, offline input delay %s (%d frames), automatic L-cancel %s, Zelda as Sheik %s",
       shield[0] & 0xFFFFFFu, shield[1] & 0xFFFFFFu, shield[2] & 0xFFFFFFu, shield[3] & 0xFFFFFFu,

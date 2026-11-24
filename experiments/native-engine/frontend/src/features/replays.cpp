@@ -68,6 +68,9 @@ static inline int gmtime_s(struct tm* out, const time_t* t) { return gmtime_r(t,
 // Apache-2.0; upstream's port is GPL-2.0-or-later). Its "zstd/zstd.h" is a shim to the system's zstd (CMakeLists.txt).
 #include "../../app/replay_slpz.h"
 #include "../../app/replay_slpz.cpp"
+// melee-unlocked (fetched tree), port/runtime/hle: Slippi's legacy playback code list (SlippiPlayback.cpp generateLegacyCodelist),
+// for replays recorded before Slippi stored the code list in the file.
+#include "slippi_playback_legacy.h"
 #if __has_include("native_recording_codes.h")
 #include "native_recording_codes.h"             // generated from the fetched tree (tools/native_recording_codes.py)
 #define MU_HAVE_RECORDING_CODES 1
@@ -147,7 +150,14 @@ std::vector<std::string> list_replays() {
 // ---- writer thread ----
 std::mutex write_mutex;
 std::condition_variable write_cv;
-std::deque<std::pair<std::string, std::vector<uint8_t>>> write_queue;
+struct WriteJob { std::string name; std::vector<uint8_t> bytes; uint32_t online = 0; };   // online: the online recording's number, 0 offline
+std::deque<WriteJob> write_queue;
+// Slippi's replay upload (online_replay_for_report): the online recordings written so far, by number, and the one the game
+// reported last (0xBD). Under write_mutex.
+struct OnlineWritten { uint32_t number = 0; std::string path; };
+OnlineWritten online_written[8];
+uint32_t online_recordings = 0;                 // online recordings started this run (simulation thread; read under write_mutex)
+std::atomic<uint32_t> online_reported{0};
 std::thread writer;
 bool writer_stop = false;
 int writes_done = 0;
@@ -156,46 +166,58 @@ void writer_main() {
   while (true) {
     write_cv.wait(lock, [] { return writer_stop || !write_queue.empty(); });
     if (write_queue.empty()) { if (writer_stop) return; continue; }
-    auto job = std::move(write_queue.front());
+    WriteJob job = std::move(write_queue.front());
     write_queue.pop_front();
     lock.unlock();
+    // An online recording compressed to .slpz: Slippi's upload wants the .slp, kept beside the replays until the next one.
+    std::vector<uint8_t> raw_online;
+    if (compress_replays && job.online) raw_online = job.bytes;
     // compressreplays 1: the .slpz, written only when it unpacks to exactly the recording (otherwise the .slp).
     const char* ext = ".slp";
-    size_t raw = job.second.size();
+    size_t raw = job.bytes.size();
     if (compress_replays) {
       std::vector<uint8_t> packed, back;
-      if (slpz::compress(job.second, packed) && slpz::decompress(packed, back) && back == job.second) { job.second.swap(packed); ext = ".slpz"; }
+      if (slpz::compress(job.bytes, packed) && slpz::decompress(packed, back) && back == job.bytes) { job.bytes.swap(packed); ext = ".slpz"; }
       else say("replay: could not compress the recording (it is written as .slp)");
     }
     // Exclusive names: two matches in one second get _1, _2.
     std::string path;
     FILE* out = nullptr;
     for (unsigned suffix = 0; suffix < 1000 && !out; ++suffix) {
-      path = dir() + "/" + job.first + (suffix ? "_" + std::to_string(suffix) : std::string()) + ext;
+      path = dir() + "/" + job.name + (suffix ? "_" + std::to_string(suffix) : std::string()) + ext;
       if (access(path.c_str(), F_OK) == 0) continue;
       out = std::fopen(path.c_str(), "wb");
     }
     bool ok = false;
-    if (out) { ok = std::fwrite(job.second.data(), 1, job.second.size(), out) == job.second.size(); ok = std::fclose(out) == 0 && ok; }
-    if (raw != job.second.size()) say("replay: %s %s (%zu bytes, %zu as .slp)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size(), raw);
-    else say("replay: %s %s (%zu bytes)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.second.size());
+    if (out) { ok = std::fwrite(job.bytes.data(), 1, job.bytes.size(), out) == job.bytes.size(); ok = std::fclose(out) == 0 && ok; }
+    if (raw != job.bytes.size()) say("replay: %s %s (%zu bytes, %zu as .slp)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.bytes.size(), raw);
+    else say("replay: %s %s (%zu bytes)", ok ? "recording written to" : "WRITE FAILED for", path.c_str(), job.bytes.size());
     if (ok) net_trace_replay_saved(path);           // an online match's session trace, beside it (netoverlay.cpp)
+    std::string upload_path = ok ? path : std::string();
+    if (ok && job.online && std::strcmp(ext, ".slpz") == 0) {        // the .slp for Slippi's upload
+      upload_path = dir() + "/.online-upload.slp";
+      FILE* f = std::fopen(upload_path.c_str(), "wb");
+      const bool kept = f && std::fwrite(raw_online.data(), 1, raw_online.size(), f) == raw_online.size();
+      if (!f || std::fclose(f) != 0 || !kept) upload_path.clear();
+    }
     lock.lock();
+    if (job.online) online_written[job.online % 8] = {job.online, upload_path};
     ++writes_done;
     write_cv.notify_all();
   }
 }
-void queue_write(std::string name, std::vector<uint8_t> bytes) {
+void queue_write(std::string name, std::vector<uint8_t> bytes, uint32_t online) {
   make_dirs(dir());
   std::lock_guard<std::mutex> lock(write_mutex);
   if (!writer.joinable()) writer = std::thread(writer_main);
-  write_queue.emplace_back(std::move(name), std::move(bytes));
+  write_queue.push_back(WriteJob{std::move(name), std::move(bytes), online});
   write_cv.notify_all();
 }
 
 // ---- recording ----
 slippi::NativeReplayStream stream;
 bool written = true;
+uint32_t stream_online = 0;                     // the recording's online number (0: offline)
 uint32_t online_games = 0;
 uint64_t recorded_matches = 0;
 
@@ -211,7 +233,7 @@ void write_recording() {
   char name[64];
   std::strftime(name, sizeof name, "Game_%Y%m%dT%H%M%S", &tm);
   ++recorded_matches;
-  queue_write(name, std::move(file));
+  queue_write(name, std::move(file), stream_online);
 }
 
 // ---- playback ----
@@ -510,7 +532,13 @@ bool open_replay(const std::string& given) {
   pb.start.preload_ps = version[0] > 1 || (version[0] == 1 && version[1] > 2);
   pb.start.frozen_ps = s->isFrozenPS;
   size_t unknown = 0;
-  pb.start.codes = replay_codes(s->geckoCodes, &pb.start.ps_frozen_toggle, &unknown);
+  // A replay recorded before Slippi stored its code list (no Gecko list event) plays with Slippi's legacy list, as Slippi
+  // Dolphin's playback serves it (melee-unlocked's slippi_playback_legacy.h).
+  const bool legacy = s->geckoCodes.empty();
+  const std::vector<uint8_t> legacy_list(std::begin(slippi::playback::LEGACY_CODELIST), std::end(slippi::playback::LEGACY_CODELIST));
+  pb.start.codes = replay_codes(legacy ? legacy_list : s->geckoCodes, &pb.start.ps_frozen_toggle, &unknown);
+  if (legacy) say("replay: no code list in the file (recorded before Slippi stored one): Slippi's legacy list (%zu bytes), codes %08X", legacy_list.size(),
+                  pb.start.codes);
   if (!pb.check.begin(pb.game_start, s->geckoCodes)) say("replay: the fidelity check cannot start: %s", pb.check.error().c_str());
   pb.first = Slippi::GAME_FIRST_FRAME;
   pb.last = pb.game->GetLatestIndex();
@@ -598,6 +626,7 @@ void h_replay_event(uint8_t command, const uint8_t* payload, uint32_t size) {
 #endif
       codes = {0xFF, 0, 0, 0, 0, 0, 0, 0};
     written = false;
+    if (net) { std::lock_guard<std::mutex> lock(write_mutex); stream_online = ++online_recordings; } else stream_online = 0;
     stream = slippi::NativeReplayStream{};
     stream.set_mod_profile(net ? std::string() : mods_fingerprint());
     const MuHostApi* h = host();
@@ -1009,6 +1038,12 @@ bool pad_hook(MuPadStatus pads[4]) {
 }
 
 int observe_search(uint8_t, const uint8_t*, uint32_t, std::vector<uint8_t>&) { online_games = 0; return 0; }   // 0xB4: game numbers restart
+// 0xBD: the game reported an online game; its recording is the one started last (the report comes after Game Start).
+int observe_report(uint8_t, const uint8_t*, uint32_t, std::vector<uint8_t>&) {
+  std::lock_guard<std::mutex> lock(write_mutex);
+  online_reported.store(online_recordings);
+  return 0;
+}
 int observe_rollback(uint8_t, const uint8_t*, uint32_t, std::vector<uint8_t>&) { present::note_discontinuity(); return 0; }   // 0xB2: a rollback load
 
 // ---- tables, menu, run end ----
@@ -1070,6 +1105,18 @@ const char* const kLengths[4] = {"Until the combo drops", "10 seconds", "20 seco
 const char* const kOpponents[4] = {"Smart defence", "No DI or techs", "Practice CPU settings", "Follow the recording"};
 }  // namespace
 
+// Slippi's game report asked for the replay (the reporter's thread): the reported game's recording once it is written.
+std::string online_replay_for_report() {
+  const uint32_t number = online_reported.load();
+  if (!number) { say("replay: Slippi asked for the replay, but no online game was reported"); return {}; }
+  std::unique_lock<std::mutex> lock(write_mutex);
+  const bool found = write_cv.wait_for(lock, std::chrono::seconds(15), [number] { return online_written[number % 8].number == number; });
+  const std::string path = found ? online_written[number % 8].path : std::string();
+  lock.unlock();
+  say("replay: Slippi asked for the replay of online game %u: %s", number, path.empty() ? (found ? "it was not saved (savereplays 0 or a write failure)" : "not written in 15 s") : path.c_str());
+  return path;
+}
+
 bool replay_playing() { return playing; }
 bool replay_word(int which, uint32_t* value) {
   if (!playing || which < 0 || which > 2) return false;
@@ -1130,6 +1177,7 @@ void register_replays() {
   add_command(0xE8, frame_event);
   add_command(0xE9, replay_defense);
   add_command(0xB4, observe_search);
+  add_command(0xBD, observe_report);
   add_command(0xB2, observe_rollback);
   add_run_end(run_end);
   add_menu_entry({"Replays", "Takeover: a try lasts", [] { return std::string(kLengths[try_length]); },

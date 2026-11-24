@@ -1,0 +1,151 @@
+Same-router fallback addresses (patches/net-0006), as melee-unlocked does them (its port/runtime/hle/slippi_address.h and the
+public_fallbacks of its NetplayClient): when the matchmaking ticket gives the other player the same public address as this
+one, the LAN address is dialled first (as before) and, if it has not answered in 2 s, the public address too, within the same
+8 s budget; the other side's connection from its public address is accepted. Two players behind one router (or a guest
+network, or two routers behind one public address) connect where the LAN address alone could not. Slippi Dolphin 3.7.0 dials
+only the LAN address in that case; nothing on the wire changes.
+Applied by ../net_sources.sh after net-0005. port/ is unchanged.
+
+diff -ruN a/port/runtime/hle/slippi_net.cpp b/port/runtime/hle/slippi_net.cpp
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -213,7 +213,9 @@
+ 
+ // ---------------------------------------------------------------- netplay client
+ NetplayClient::NetplayClient(std::vector<std::string> addrs, std::vector<uint16_t> ports, uint8_t remote_player_count, uint16_t local_port,
+-                             bool is_decider, uint8_t player_idx, const std::string& bind_address) {
++                             bool is_decider, uint8_t player_idx, const std::string& bind_address,
++                             std::vector<std::string> public_fallbacks) {
++  public_fallbacks_ = std::move(public_fallbacks);   // patches/net-0006
+   host::log("slippi: netplay client: local port %u, decider %d, player index %u, %u remote players", local_port, is_decider, player_idx, remote_player_count);
+   if (remote_player_count == 0 || remote_player_count > REMOTE_PLAYER_MAX ||
+       player_idx >= PLAYER_COUNT_MAX || addrs.size() != remote_player_count || ports.size() != remote_player_count) {
+@@ -660,6 +662,22 @@
+   std::vector<bool> connections(remote_player_count_, false);
+   std::vector<ENetAddress> remote_addrs;
+   for (int i = 0; i < remote_player_count_; ++i) remote_addrs.push_back(server_[i]->address);
++  // patches/net-0006 (melee-unlocked's same-router fallback): a seat dialled at its LAN address because both players share
++  // one public address is dialled at its public address too once 2 s pass without an answer (a guest network or a second
++  // router behind the same public address cannot reach the LAN address; the router may still loop the public one back).
++  // The same 8 s budget. A numeric IPv4 "a.b.c.d:port" only; anything else is dropped, never resolved.
++  std::vector<ENetAddress> fallback_addrs(remote_player_count_);
++  std::vector<bool> fallback_due(remote_player_count_, false);
++  for (int i = 0; i < remote_player_count_ && size_t(i) < public_fallbacks_.size(); ++i) {
++    const std::string& f = public_fallbacks_[i];
++    const size_t colon = f.find(':');
++    in_addr ip{};
++    const int port = colon == std::string::npos ? 0 : std::atoi(f.c_str() + colon + 1);
++    if (f.empty() || colon == std::string::npos || port <= 0 || port > 65535 || inet_pton(AF_INET, f.substr(0, colon).c_str(), &ip) != 1) continue;
++    fallback_addrs[i].host = ip.s_addr; fallback_addrs[i].port = (uint16_t)port;
++    fallback_due[i] = true;
++  }
++  bool fallback_logged = false;
+ 
+   while (status_.load(std::memory_order_acquire) == ConnectStatus::INITIATED) {
+     ENetEvent ev;
+@@ -693,7 +711,9 @@
+             if (connections[i] && ev.peer->address.host == server_[i]->address.host && ev.peer->address.port == server_[i]->address.port) { server_[i] = ev.peer; already = true; break; }
+           if (already) break;
+           for (size_t i = 0; i < server_.size(); ++i) {
+-            if (remote_addrs[i].host == ev.peer->address.host && !connections[i]) {
++            // patches/net-0006: the peer's own switch to our public address can come first: its public host counts too.
++            const bool from_fallback = i < fallback_addrs.size() && fallback_addrs[i].host && fallback_addrs[i].host == ev.peer->address.host;
++            if ((remote_addrs[i].host == ev.peer->address.host || from_fallback) && !connections[i]) {
+               host::log("slippi: connected to %x:%u", ev.peer->address.host, ev.peer->address.port);
+               server_[i] = ev.peer;
+               connections[i] = true;
+@@ -705,6 +725,23 @@
+         default: break;
+       }
+     }
++    // patches/net-0006: seats still unanswered 2 s after the LAN attempt: their public address instead.
++    for (int i = 0; i < remote_player_count_; ++i) {
++      if (!fallback_due[i] || connections[i] || time_ms() - start_time < 2000) continue;
++      fallback_due[i] = false;
++      if (!fallback_logged) { host::log("slippi: the same-router (LAN) address has not answered in 2 s; trying the public address too"); fallback_logged = true; }
++      ENetPeer* old = server_[i];
++      auto found = active_connections_.find(peer_key(old));
++      if (found != active_connections_.end()) { found->second.erase(old); if (found->second.empty()) active_connections_.erase(found); }
++      enet_peer_reset(old);
++      remote_addrs[i] = fallback_addrs[i];
++      ENetPeer* peer = enet_host_connect(client_, &fallback_addrs[i], 3, 0);
++      if (!peer) { host::log("slippi: cannot create the public fallback peer"); status_.store(ConnectStatus::FAILED, std::memory_order_release); return; }
++      server_[i] = peer;
++      ActiveConnectionInfo info;
++      info.player_idx = match_info_.remote[i].player_idx;
++      active_connections_[peer_key(peer)][peer] = info;
++    }
+     bool all = true;
+     for (int i = 0; i < remote_player_count_; ++i) if (!connections[i]) all = false;
+     if (all) {
+@@ -1340,6 +1377,7 @@
+     is_host_ = local_index == 0;
+     std::vector<UserInfo> players;
+     remote_ips_.clear();
++  remote_fallbacks_.clear();
+     for (int i = 0; i < 2; ++i) {
+       UserInfo p;
+       if (i == local_index) p = me;
+@@ -1464,6 +1502,7 @@
+   try {
+   netplay_client_ = nullptr;
+   remote_ips_.clear();
++  remote_fallbacks_.clear();
+   // Built here and published under info_mutex_ at the end: the game thread copies the players every frame.
+   std::vector<UserInfo> players;
+   std::vector<uint16_t> stages;
+@@ -1509,8 +1548,9 @@
+       std::string ext = jget(el, "ipAddress", "1.1.1.1:123");
+       std::string lan = jget(el, "ipAddressLan", "1.1.1.1:123");
+       
+-      if (ext.substr(0, ext.find(':')) != local_external_ip || lan.empty()) remote_ips_.push_back(ext);
+-      else remote_ips_.push_back(lan);
++      // patches/net-0006: same public address: the LAN address first, the public one as the fallback (when they differ).
++      if (ext.substr(0, ext.find(':')) != local_external_ip || lan.empty()) { remote_ips_.push_back(ext); remote_fallbacks_.push_back(""); }
++      else { remote_ips_.push_back(lan); remote_fallbacks_.push_back(lan != ext ? ext : ""); }
+     }
+   }
+   is_host_ = jget(resp, "isHost", false);
+@@ -1578,7 +1618,10 @@
+     addrs.push_back(ip.substr(0, colon));
+     ports.push_back((uint16_t)std::atoi(ip.substr(colon + 1).c_str()));
+   }
+-  auto client = std::make_unique<NetplayClient>(addrs, ports, (uint8_t)remote_ips_.size(), (uint16_t)host_port_, is_host_, (uint8_t)local_player_index_);
++  std::vector<std::string> fallbacks = remote_fallbacks_;   // patches/net-0006
++  fallbacks.resize(remote_ips_.size());
++  auto client = std::make_unique<NetplayClient>(addrs, ports, (uint8_t)remote_ips_.size(), (uint16_t)host_port_, is_host_, (uint8_t)local_player_index_,
++                                                std::string(), fallbacks);
+   while (!netplay_client_) {
+     auto st = client->GetSlippiConnectStatus();
+     if (st == NetplayClient::ConnectStatus::INITIATED) {
+diff -ruN a/port/runtime/hle/slippi_net.h b/port/runtime/hle/slippi_net.h
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -171,7 +171,8 @@
+   enum class DisconnectReason : uint32_t { UNSPECIFIED = 0, POOR_PERFORMANCE = 1 };
+ 
+   NetplayClient(std::vector<std::string> addrs, std::vector<uint16_t> ports, uint8_t remote_player_count, uint16_t local_port,
+-                bool is_decider, uint8_t player_idx, const std::string& bind_address = {});
++                bool is_decider, uint8_t player_idx, const std::string& bind_address = {},
++                std::vector<std::string> public_fallbacks = {});
+   ~NetplayClient();
+ 
+   bool IsDecider() const { return is_decider_; }
+@@ -296,6 +297,9 @@
+   std::atomic<ConnectStatus> status_{ConnectStatus::UNSET};
+   std::atomic<uint32_t> pending_disconnect_reason_{0}, disconnect_reason_{0};
+   std::vector<int> failed_connections_;
++  // patches/net-0006: per remote seat, the public "ip:port" to dial when the same-router (LAN) address has not answered after
++  // 2 s (empty: none). melee-unlocked's public_fallbacks (port/runtime/hle/slippi_address.h).
++  std::vector<std::string> public_fallbacks_;
+   mutable std::mutex match_mutex_;   // match_info_'s selections (the players' indices are fixed at construction)
+   MatchInfo match_info_;
+   std::mutex chat_mutex_;        // set by the netplay thread, taken by the game thread
+@@ -370,6 +374,7 @@
+   int host_port_ = 0;
+   std::atomic<int> local_player_index_{0};
+   std::vector<std::string> remote_ips_;
++  std::vector<std::string> remote_fallbacks_;   // patches/net-0006: parallel to remote_ips_
+   bool is_host_ = false;
+   std::unique_ptr<NetplayClient> netplay_client_;
+ };

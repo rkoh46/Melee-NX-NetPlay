@@ -1,0 +1,204 @@
+Slippi's HTTP services (patches/net-0008), as Slippi Dolphin 3.7.0 and melee-unlocked use them:
+- Display name refresh: after sign-in the netplay object asks Slippi's user service for the account's display name, connect
+  code, latest version and chat messages (Slippi Dolphin's overwriteFromServer, melee-unlocked's User::RefreshFromServer), on a
+  thread of its own; user.json is never written, and a failed request keeps what user.json says. Never with a local peer.
+- Replay upload: when the game report's reply carries uploadUrl, the replay is asked for on the reporter's thread then
+  (slippi::last_replay_path), not on the game thread when the game reports, so a host still writing it can finish first.
+- Test builds name a loopback stand-in for these and the sign-in screen's requests (SLIPPI_PIN_SERVICES_URL; the Linux services build sets
+  http://127.0.0.1:8766, ../tools/mock_slippi_http.py), so a development machine cannot reach the real ones.
+The report's disc MD5 (isoHash, cached in iso_md5_cache.txt) is this repository's reporter as before.
+Applied by ../net_sources.sh after net-0007. port/ is unchanged.
+
+diff -ruN a/port/runtime/hle/slippi_http.h b/port/runtime/hle/slippi_http.h
+--- a/port/runtime/hle/slippi_http.h
++++ b/port/runtime/hle/slippi_http.h
+@@ -5,6 +5,15 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #pragma once
+ #include <string>
++// patches/net-0008: Slippi's HTTP services. A test build names a loopback stand-in for both (SLIPPI_PIN_SERVICES_URL, the Linux
++// services build: ../tools/mock_slippi_http.py), so it can never reach the real ones.
++#ifdef SLIPPI_PIN_SERVICES_URL
++#define SLIPPI_GRAPHQL_URL SLIPPI_PIN_SERVICES_URL "/graphql"
++#define SLIPPI_USERS_URL SLIPPI_PIN_SERVICES_URL "/user/"
++#else
++#define SLIPPI_GRAPHQL_URL "https://internal.slippi.gg/graphql"
++#define SLIPPI_USERS_URL "https://users-rest-dot-slippi.uc.r.appspot.com/user/"
++#endif
+ namespace slippi::report {
+ bool http_request(const char* method, const std::string& url, const std::string& headers, const std::string& body,
+                   const char* user_agent, int* status, std::string* response, std::string* error);
+diff -ruN a/port/runtime/hle/slippi_login.cpp b/port/runtime/hle/slippi_login.cpp
+--- a/port/runtime/hle/slippi_login.cpp
++++ b/port/runtime/hle/slippi_login.cpp
+@@ -15,0 +16,4 @@
++// patches/net-0008: a test build's loopback stand-in takes the sign-in's requests too (SLIPPI_PIN_SERVICES_URL).
++#ifdef SLIPPI_PIN_SERVICES_URL
++constexpr const char* kIdentityToolkit = SLIPPI_PIN_SERVICES_URL "/identitytoolkit/v1/accounts:";
++#else
+@@ -17 +21,2 @@
+-constexpr const char* kGraphQL = "https://internal.slippi.gg/graphql";
++#endif
++constexpr const char* kGraphQL = SLIPPI_GRAPHQL_URL;   // patches/net-0008 (slippi_http.h)
+@@ -24,0 +30,3 @@
++#ifdef SLIPPI_PIN_SERVICES_URL
++constexpr const char* kSecureToken = SLIPPI_PIN_SERVICES_URL "/securetoken/v1/token?key=";
++#else
+@@ -25,0 +34 @@
++#endif
+diff -ruN a/port/runtime/hle/slippi_net.cpp b/port/runtime/hle/slippi_net.cpp
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -14,6 +14,7 @@
+ #include "slippi_input_suggestions.h"   // Slippi 3.7.0's rules for using suggestions (the fetched tree's copy, build time)
+ #include "slippi_version.h"
+ #include "slippi_matchmaking_ws.h"
++#include "slippi_http.h"   // patches/net-0008: the profile refresh
+ #if defined(_WIN32)
+ #define NOMINMAX
+ #include <winsock2.h>
+@@ -180,8 +181,54 @@
+   host::log("slippi: logged out (user.json left in place)");
+ }
+ std::vector<std::string> User::GetUserChatMessages() const {
+-  std::lock_guard<std::mutex> lk(mutex_);
+-  return info_.chat_messages.size() == 16 ? info_.chat_messages : GetDefaultChatMessages();
++  const UserInfo me = GetUserInfo();   // patches/net-0008: the refreshed messages count
++  return me.chat_messages.size() == 16 ? me.chat_messages : GetDefaultChatMessages();
++}
++// patches/net-0008
++UserInfo User::GetUserInfo() const {
++  UserInfo out;
++  { std::lock_guard<std::mutex> lk(mutex_); out = info_; }
++  std::lock_guard<std::mutex> lk(refreshed_->m);
++  const Refreshed& r = *refreshed_;
++  if (!r.done || r.uid != out.uid) return out;
++  if (!r.name.empty()) out.display_name = r.name;
++  if (!r.code.empty()) out.connect_code = r.code;
++  if (!r.latest.empty()) out.latest_version = r.latest;
++  if (r.chat.size() == 16) out.chat_messages = r.chat;
++  return out;
++}
++void User::RefreshFromServer() {
++  const UserInfo me = GetUserInfo();
++  if (me.uid.empty()) return;
++  std::shared_ptr<Refreshed> state = refreshed_;
++  std::thread([state, uid = me.uid] {
++    try {
++      std::string response, error;
++      int status = 0;
++      const std::string url = std::string(SLIPPI_USERS_URL) + uid + "?additionalFields=chatMessages";
++      if (!report::http_request("GET", url, "", "", "SlippiDolphin (b: ishiiruka) (v: " SLIPPI_PIN_VERSION ") (o: linux)", &status, &response, &error) ||
++          status != 200) {
++        host::log("slippi: profile refresh unavailable (HTTP %d%s%s); keeping user.json", status, error.empty() ? "" : ": ", error.c_str());
++        return;
++      }
++      const json j = json::parse(response, nullptr, false);
++      if (!j.is_object()) { host::log("slippi: profile refresh: unexpected response; keeping user.json"); return; }
++      std::vector<std::string> chat;   // all sixteen must be text, or the stored messages stay
++      if (j.count("chatMessages") && j["chatMessages"].is_array() && j["chatMessages"].size() == 16)
++        for (const auto& m : j["chatMessages"]) if (m.is_string()) chat.push_back(m.get<std::string>());
++      std::lock_guard<std::mutex> lk(state->m);
++      state->uid = uid;
++      state->name = jget(j, "displayName", "");
++      state->code = jget(j, "connectCode", "");
++      state->latest = jget(j, "latestVersion", "");
++      if (chat.size() == 16) state->chat = std::move(chat);
++      state->done = true;
++      host::log("slippi: profile refreshed from Slippi's user service: %s (%s)%s%s%s", state->name.c_str(), state->code.c_str(),
++                state->chat.size() == 16 ? ", its 16 chat messages" : "", state->latest.empty() ? "" : ", servers on ", state->latest.c_str());
++    } catch (...) {
++      host::log("slippi: profile refresh failed; keeping user.json");
++    }
++  }).detach();
+ }
+ std::vector<std::string> User::GetDefaultChatMessages() {
+   return {"ggs", "one more", "brb", "good luck", "well played", "that was fun", "thanks", "too good",
+diff -ruN a/port/runtime/hle/slippi_net.h b/port/runtime/hle/slippi_net.h
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -136,7 +136,10 @@
+   explicit User(std::string user_dir);
+   bool AttemptLogin();          // (re)reads user.json
+   bool IsLoggedIn() const { return logged_in_.load(std::memory_order_acquire); }
+-  UserInfo GetUserInfo() const { std::lock_guard<std::mutex> lk(mutex_); return info_; }
++  UserInfo GetUserInfo() const;   // patches/net-0008: with what the profile refresh brought
++  // patches/net-0008 (Slippi Dolphin's overwriteFromServer, melee-unlocked's RefreshFromServer): the display name, connect code,
++  // latest version and chat messages from Slippi's user service, on a thread of its own; user.json is never written.
++  void RefreshFromServer();
+   void LogOut();
+   void OverwriteLatestVersion(const std::string& v) { std::lock_guard<std::mutex> lk(mutex_); info_.latest_version = v; }
+   std::vector<std::string> GetUserChatMessages() const;
+@@ -149,6 +152,8 @@
+   mutable std::mutex mutex_;
+   UserInfo info_;
+   std::atomic<bool> logged_in_{false};
++  struct Refreshed { std::mutex m; bool done = false; std::string uid, name, code, latest; std::vector<std::string> chat; };
++  std::shared_ptr<Refreshed> refreshed_ = std::make_shared<Refreshed>();   // shared with the refresh thread
+ };
+ 
+ // Connect-code history (direct-codes.json / teams-codes.json in the user folder).
+diff -ruN a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.cpp
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -1103,7 +1103,7 @@
+     // Exactly CEXISlippi::handleReportGame: one report per game with every slot's result.
+     UserInfo me = g_user->GetUserInfo();
+     report::GameReport r;
+-    r.uid = me.uid; r.play_key = me.play_key; r.match_id = g_recent_mm_result.id; r.replay_path = slippi::last_replay_path();
++    r.uid = me.uid; r.play_key = me.play_key; r.match_id = g_recent_mm_result.id;   // replay_path: asked for by the reporter when needed (patches/net-0008)
+     r.online_mode = mode; r.duration_frames = frames; r.game_index = game_index; r.tiebreak_index = tiebreak;
+     r.winner_index = winner; r.game_end_method = end_method; r.lras_initiator = lras; r.stage_id = stage;
+     for (int i = 0; i < 4; ++i) {
+@@ -1226,6 +1226,7 @@
+   // client's login or silently replace the configured profile on any platform.
+   g_user = std::make_unique<User>(g_config.user_dir);
+   if (g_user->IsLoggedIn()) if (reporting_enabled()) report::fetch_user_rank(g_user->GetUserInfo().uid);
++  if (g_user->IsLoggedIn() && reporting_enabled()) g_user->RefreshFromServer();   // patches/net-0008 (never with a local peer)
+   g_matchmaking = std::make_unique<Matchmaking>(g_user.get());
+   g_direct_codes = std::make_unique<DirectCodes>(g_config.user_dir + "/direct-codes.json");
+   g_teams_codes = std::make_unique<DirectCodes>(g_config.user_dir + "/teams-codes.json");
+diff -ruN a/port/runtime/hle/slippi_report.cpp b/port/runtime/hle/slippi_report.cpp
+--- a/port/runtime/hle/slippi_report.cpp
++++ b/port/runtime/hle/slippi_report.cpp
+@@ -13,6 +13,7 @@
+ #include <sys/stat.h>
+ #include "md5.h"
+ #include "slippi_http.h"
++#include "exi_slippi.h"   // patches/net-0008: last_replay_path
+ #endif
+ #include <nlohmann/json.hpp>
+ #include "json_safe.h"
+@@ -44,7 +45,7 @@
+ #else
+ const char* USER_AGENT = "SlippiDolphin (b: ishiiruka) (v: " SLIPPI_PIN_VERSION ") (o: linux)";
+ #endif
+-const char* ENDPOINT = "https://internal.slippi.gg/graphql";
++const char* ENDPOINT = SLIPPI_GRAPHQL_URL;   // patches/net-0008 (slippi_http.h)
+ constexpr int MAX_ATTEMPTS = 5;
+ 
+ struct StatusJob { std::string uid, play_key, match_id, status; };
+@@ -247,7 +248,13 @@
+   if (success) {
+     host::log("slippi report: game %u of %s reported", g.game_index, g.match_id.c_str());
+     auto& r = data["reportOnlineGame"];
+-    if (r.count("uploadUrl") && r["uploadUrl"].is_string() && !g.replay_path.empty()) upload_replay(g.replay_path, r["uploadUrl"].get<std::string>());
++    // patches/net-0008: the replay is asked for only now, on this thread, when the service wants it: the host may still be
++    // writing it when the game reports (the native engine's frontend waits for its writer here, not the game).
++    if (r.count("uploadUrl") && r["uploadUrl"].is_string()) {
++      const std::string path = !g.replay_path.empty() ? g.replay_path : slippi::last_replay_path();
++      if (!path.empty()) upload_replay(path, r["uploadUrl"].get<std::string>());
++      else host::log("slippi report: the service asked for the replay, but there is none to upload");
++    }
+     return true;
+   }
+   if (job.attempts >= MAX_ATTEMPTS) { host::log("slippi report: giving up on game report for %s after %d attempts", g.match_id.c_str(), job.attempts); return true; }
+@@ -325,7 +332,7 @@
+   join_rank_thread();
+   g_rank_status = RankFetchStatus::Fetching;
+   g_rank_thread = std::thread([uid] {
+-    std::string url = "https://users-rest-dot-slippi.uc.r.appspot.com/user/" + uid + "?additionalFields=chatMessages,rank";
++    std::string url = SLIPPI_USERS_URL + uid + "?additionalFields=chatMessages,rank";   // patches/net-0008
+     int status = 0; std::string response;
+     if (!http("GET", url, "", "", &status, &response)) { g_rank_status = RankFetchStatus::Error; host::log("slippi rank: user fetch failed (network)"); return; }
+     json j = json::parse(response, nullptr, false);

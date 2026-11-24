@@ -1,0 +1,34 @@
+The search as the frontend sees it, two more things (patches/net-0010): the connect code being searched for (Direct and Teams),
+for the search line and "Search Direct again?", and the first other player's pick once they have locked in, for the warm-up
+room's sparring partner (melee-unlocked's warmup_enter: the CPU is whom the player is about to face). Read only; nothing on
+the wire changes. Applied by ../net_sources.sh after net-0009.
+
+diff -ruN a/port/runtime/hle/slippi_online.cpp b/port/runtime/hle/slippi_online.cpp
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -1208,7 +1208,11 @@
+     const int remotes = (int)g_matchmaking->RemotePlayerCount();
+     out.remote_ready = remotes > 0;
+     for (int i = 0; i < remotes && i < REMOTE_PLAYER_MAX; ++i) if (!mi.remote[i].is_character_selected) out.remote_ready = false;
++    // patches/net-0010
++    for (int i = 0; i < remotes && i < REMOTE_PLAYER_MAX && out.remote_character < 0; ++i)
++      if (mi.remote[i].is_character_selected && mi.remote[i].character_id < 26) { out.remote_character = mi.remote[i].character_id; out.remote_color = mi.remote[i].character_color; }
+   }
++  if (g_last_search.mode == Matchmaking::DIRECT || g_last_search.mode == Matchmaking::TEAMS) out.code = shiftjis_to_utf8(g_last_search.connect_code);   // patches/net-0010
+   out.elapsed_ms = g_search_started_ms ? (uint32_t)std::min<uint64_t>(time_ms() - g_search_started_ms, 0xFFFFFFFFu) : 0;
+   if (out.state == (int)Matchmaking::ERROR_ENCOUNTERED) out.error = !g_forced_error.empty() ? g_forced_error : g_matchmaking->GetErrorMessage();
+   if (out.state >= (int)Matchmaking::OPPONENT_CONNECTING) {
+diff -ruN a/port/runtime/hle/slippi_online.h b/port/runtime/hle/slippi_online.h
+--- a/port/runtime/hle/slippi_online.h
++++ b/port/runtime/hle/slippi_online.h
+@@ -63,6 +63,10 @@
+   bool remote_ready = false;     // connected and every other player locked in (the warm-up room goes back then)
+   uint32_t elapsed_ms = 0;       // since the search started
+   std::string error, opponent;
++  // patches/net-0010: the connect code searched for (Direct, Teams; UTF-8), and the first other player's pick once they locked in
++  // (the warm-up room's sparring partner): external fighter id or -1, costume.
++  std::string code;
++  int remote_character = -1, remote_color = 0;
+ };
+ SearchInfo search_info();
+ void keep_search(bool kept);
