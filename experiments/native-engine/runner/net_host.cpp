@@ -367,7 +367,7 @@ int start(const Options& given, Log log) {
     setup.services = true; setup.fake_user = options.fake_user; setup.iso_path = options.iso_path;
     setup.local_index = int(options.inputs);        // only names the made-up user of a mock test
 #ifdef __SWITCH__
-    setup.user_dir = options.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User" : options.user_dir;
+    setup.user_dir = options.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User/Slippi" : options.user_dir;   // the app's sign-in folder (port/app/main_switch.cpp)
 #else
     setup.user_dir = options.user_dir.empty() ? options.out_dir + "/user" : options.user_dir;
 #endif

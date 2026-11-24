@@ -228,7 +228,7 @@ reproduces both on one machine (a 20 s stagger and `tools/udp_nat_forwarder.py`,
 `MU_NET_SERVICES=1 ./build.sh nro|linux` builds `mu-native-services.nro` / `mu-native-linux-services` with the
 app's real matchmaking client (WebSocket, STUN), user file, reporting and HTTP instead of the stubs, and
 `--online unranked|direct:CODE|teams|party [--user-dir DIR]`. The Switch build is pinned to the service address in
-`tools/slippi_pin.json` and reads the user file the app keeps (`sdmc:/switch/melee-nx-netplay/User`); it sends the
+`tools/slippi_pin.json` and reads the user file the app keeps (`sdmc:/switch/melee-nx-netplay/User/Slippi`); it sends the
 app's own version string, nothing new. The Linux build is pinned to `ws://127.0.0.1:8765`, the loopback stand-in
 `tools/mock_matchmaking.py`, so a development machine cannot reach the real service. `tools/mock_online_test.sh`
 runs two such instances and the mock in one container with no network: they queue, are matched, connect and play.

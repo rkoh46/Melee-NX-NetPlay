@@ -77,7 +77,14 @@ the line in `build/native-engine-gfx/sync-state.txt`.
 has no services (local peers only), and `mu-native-gfx-services` with the services object (the app's matchmaking
 client, user file, reporting and HTTP; curl and mbedTLS on the console). The console's services object is made by
 `MU_NET_SERVICES=1 ../build.sh nro` (pinned to the service address in `tools/slippi_pin.json`); without it only the
-first NRO is built. The Linux services object is made by this script from the synced runner and is pinned to
+first NRO is built. The netplay object is linked with only its defined symbols made weak (`netplay_link.sh`): the
+first services NRO weakened its references too, so libcurl was never linked and the first HTTPS call jumped to address 0
+on the console (`curl_global_init` inside `slippi::report::ensure_global`). Every build now checks the linked programs
+(`netplay_link: ...` lines) and fails if that comes back. At start the services program runs a self-check before the
+netplay host starts, contacting nothing: `curl_global_init`, one request handle, the TLS library libcurl reports and,
+on the console, one context of the console's ssl service and a read of the random service (devkitPro's libcurl does TLS
+through them). It prints `services check: libcurl ... OK ...` or `services check: FAILED: <step> ...`; after a failure
+the session stays offline (`--online` ends with code 1). The Linux services object is made by this script from the synced runner and is pinned to
 `ws://127.0.0.1:8765`, the loopback stand-in `../tools/mock_matchmaking.py`: a Linux build cannot reach a real service.
 
 ## Run
@@ -262,7 +269,7 @@ page with Slippi's rows (Unranked, Direct, Teams, Party; this game build offers 
 refused by the netplay host with "Ranked is not available in this build. Play Unranked, Direct or Teams." as the
 search error). Picking a row and starting the search on Slippi's character select sends the game's own find-match
 command (0xB4) through the netplay host, exactly the path `--online` takes; nothing is asked for at boot. The user
-file is `sdmc:/switch/melee-nx-netplay/User/user.json` (the app's sign-in) unless `--user-dir DIR` names another
+file is `sdmc:/switch/melee-nx-netplay/User/Slippi/user.json` (the app's sign-in) unless `--user-dir DIR` names another
 folder; without it the page shows Log-in and the log says why. No mod profile is loaded in such a session. When the
 match's scene ends the rollback store stops tracking; the next match starts it again. Log lines: `play: online at
 retrace N (scene 8/0): the option words are now the online ones`, `play: online: the game asked for a match: mode 1
@@ -357,6 +364,7 @@ Online play mode on Linux (runner and patches from the working tree after `1c556
 | Same with `--gfx-sync-net` (the earlier way) | 272 and 216 rollbacks, `net check` equal; simulation thread 1.47 ms per match frame (0.78 of it decoding) |
 | Both runs: 6 to 7 shown states differ near match frame 30, right after the first pipeline compile stalled the picture for 0.7 s | the same in both decoding modes and the `net check` lines are equal, so these are predictions the confirmed-state bookkeeping did not mark (a 7-frame rollback after the stall), not a difference of the game state |
 | Logs | 238 to 259 lines per online run went through the log thread, none dropped, nothing written to the file during the match; the netplay host measures 0.000 ms of log writing per frame |
+| Services link fix (`netplay_link.sh`), Linux services program | `services check: libcurl 8.14.1 with OpenSSL/3.5.9: global set-up and a request handle OK`; the app's report path runs its `call_once` and curl (`[net] slippi http: GET ... failed: Could not resolve host`, no network in the container), the matchmaking client likewise; matched, played, identical. Console ELF: `ensure_global`'s lambda now branches to `curl_global_init` (it was a `nop` and a zero word); a copy weakened the old way is refused by the check |
 | `test-net-linux.sh` without delay, scripted `parity_vs_onett` with a picture (9000 retraces) after all of this | final state identical; digest IDENTICAL |
 
 Not looked at: the Hack Pack's debug menu, hidden characters, playlists and stage variants beyond the first pick;
@@ -389,7 +397,7 @@ why is not known. The same costume's portrait on the character select screen is 
 ## Not verified
 
 - On the console: the services NRO at all (curl and mbedTLS linked with the Clang-built picture code, the real
-  matchmaking service, STUN, the app's user file from `sdmc:/switch/melee-nx-netplay/User`), a search from the game's
+  matchmaking service, STUN, the app's user file from `sdmc:/switch/melee-nx-netplay/User/Slippi`), a search from the game's
   menu, automatic input delay against a real round trip, the decoder thread beside the rollback store's remapping, and
   whether queuing the log removes the 21 ms frames. Play mode's handling of a bad process layout (it mirrors the runner).
 - A Ranked request from the game's menu: this game build offers no Ranked row, so the refusal was only seen in the

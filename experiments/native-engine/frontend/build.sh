@@ -153,7 +153,9 @@ DEPS_ARGS=$(echo $DEPS_ARGS)
 # The netplay object went through a relocatable link that dissolved its COMDAT groups, so the inline variables and
 # template instances it shares with this program (standard library, the app's headers) are plain definitions in
 # it: made weak in a copy, they join ours instead of clashing.
-WEAKEN_LINUX="for v in obj-linux obj-linux-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o ] || objcopy --weaken $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done"
+# Only its defined symbols: see netplay_link.sh (a weakened reference pulls nothing out of an archive).
+L=experiments/native-engine/frontend/netplay_link.sh
+WEAKEN_LINUX="for v in obj-linux obj-linux-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o -a $W/net/\$v/netplay-weak.o -nt $L ] || bash $L weaken '' $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done"
 
 # The netplay object with the app's real services for Linux, by the recipe of ../build.sh (net_build with
 # MU_NET_SERVICES=1) from the synced runner: the bridge, this repository's netplay sources and ENet in one object,
@@ -199,6 +201,8 @@ build_null() {
     cmake -S experiments/native-engine/frontend -B $W/null -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=null \
       -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ >/dev/null
     cmake --build $W/null --parallel $jobs > $W/null-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/null-build.log | head -60; exit 1; }
+    bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/null/mu-native-gfx-null
+    bash $L check-dynamic '' $W/net/obj-linux-services/netplay.o $W/null/mu-native-gfx-null-services
     cp $W/null/mu-native-gfx-null $W/null/mu-native-gfx-null-services $W/out/"
   echo "built $out/mu-native-gfx-null and -services"
 }
@@ -212,6 +216,8 @@ build_linux() {
     cmake -S experiments/native-engine/frontend -B $W/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=linux \
       -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ $DEPS_ARGS >$W/linux-configure.log 2>&1 || { tail -30 $W/linux-configure.log; exit 1; }
     cmake --build $W/linux --target mu_native_gfx mu_native_gfx_services --parallel $jobs > $W/linux-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/linux-build.log | head -60; exit 1; }
+    bash $L check-dynamic '' $W/net/obj-linux/netplay.o $W/linux/mu-native-gfx-linux
+    bash $L check-dynamic '' $W/net/obj-linux-services/netplay.o $W/linux/mu-native-gfx-linux-services
     cp $W/linux/mu-native-gfx-linux $W/linux/mu-native-gfx-linux-services $W/out/"
   echo "built $out/mu-native-gfx-linux and -services"
 }
@@ -221,10 +227,12 @@ build_nro() {
   fetched_deps
   dock 2400 "$NX_IMG" "
     export PATH=/opt/devkitpro/devkitA64/bin:\$PATH
-    for v in obj-nx obj-nx-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o ] || aarch64-none-elf-objcopy --weaken $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done
+    for v in obj-nx obj-nx-services; do [ ! -f $W/net/\$v/netplay.o ] || [ $W/net/\$v/netplay-weak.o -nt $W/net/\$v/netplay.o -a $W/net/\$v/netplay-weak.o -nt $L ] || bash $L weaken aarch64-none-elf- $W/net/\$v/netplay.o $W/net/\$v/netplay-weak.o; done
     cmake -S experiments/native-engine/frontend -B $W/nx -G Ninja -DCMAKE_BUILD_TYPE=Release -DMU_FE_VARIANT=switch \
       -DCMAKE_TOOLCHAIN_FILE=/w/switch/cmake/SwitchGCC.cmake -DMELEE_NX_SDK_DIR=/w/build/sdk $DEPS_ARGS >$W/nx-configure.log 2>&1 || { tail -30 $W/nx-configure.log; exit 1; }
     cmake --build $W/nx --parallel $jobs > $W/nx-build.log 2>&1 || { grep -E 'error|FAILED|undefined' -A4 $W/nx-build.log | head -60; exit 1; }
+    bash $L check aarch64-none-elf- $W/net/obj-nx/netplay.o $W/nx/mu-native-gfx.elf
+    [ ! -f $W/nx/mu-native-gfx-services.elf ] || bash $L check aarch64-none-elf- $W/net/obj-nx-services/netplay.o $W/nx/mu-native-gfx-services.elf
     cp $W/nx/mu-native-gfx*.nro $W/out/
     ls -l $W/out/*.nro"
   echo "built $out/mu-native-gfx.nro$([ -f "$out/mu-native-gfx-services.nro" ] && echo ' and mu-native-gfx-services.nro')"

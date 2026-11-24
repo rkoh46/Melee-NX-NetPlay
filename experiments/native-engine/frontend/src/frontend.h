@@ -83,6 +83,8 @@ int slippi_file_read(uint64_t offset, void* out, size_t bytes);
 bool slippi_menus_on();
 // play_main.cpp
 int play_main();
+// services_check.cpp, linked into the services program only (null in the other): curl and TLS set-up, nothing contacted
+__attribute__((weak)) bool services_self_check();
 // frontend.cpp
 void decoder_sync();                 // simulation thread: returns when the decoder thread has read everything handed to it
 // Simulation-thread time other files measure, running totals in ns: [0] rollback state saves and loads, [1] waiting

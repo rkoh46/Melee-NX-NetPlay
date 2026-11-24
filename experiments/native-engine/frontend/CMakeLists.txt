@@ -137,6 +137,9 @@ endif()
 # its other symbols local), and with the services variant of that object when there is one.
 function(mu_program target netplay_object suffix)
   add_executable(${target} "${FE}/frontend_main.cpp" "${FE}/log_queue.cpp")
+  if(suffix)
+    target_sources(${target} PRIVATE "${FE}/services_check.cpp")   # the services program's start-up self-check
+  endif()
   target_include_directories(${target} PRIVATE "${FE}" "${RUN}")
   target_link_libraries(${target} PRIVATE mu_gx mu_host mu_gx "${netplay_object}")
   # Lines the netplay object prints with fprintf(stderr) go to the log queue while the game runs (log_queue.cpp).

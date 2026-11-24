@@ -248,11 +248,19 @@ int play_main() {
   }
   net.out_dir = options.out_dir; net.iso_path = options.iso; net.embedded_image = true;
 #ifdef __SWITCH__
-  const std::string user_dir = net.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User" : net.user_dir;   // net_host's default: the app's sign-in
+  const std::string user_dir = net.user_dir.empty() ? "sdmc:/switch/melee-nx-netplay/User/Slippi" : net.user_dir;   // the app's sign-in (port/app/main_switch.cpp)
 #else
   const std::string user_dir = net.user_dir.empty() ? options.out_dir + "/user" : net.user_dir;
 #endif
-  if (!direct && settings_slippi_menus() && netplay_bridge::has_services()) {
+  // The services program checks what its first HTTPS request and the matchmaking connection need before anything
+  // can use them (nothing is contacted). A failure leaves this session offline with the reason in the log.
+  bool services_ok = true;
+  if (netplay_bridge::has_services() && (!net.online.empty() || settings_slippi_menus())) {
+    services_ok = services_self_check && services_self_check();
+    if (!services_ok) say("play: online is off for this session: the services check above failed");
+  }
+  if (!services_ok && !net.online.empty()) { log_close(); return 1; }
+  if (!direct && settings_slippi_menus() && netplay_bridge::has_services() && services_ok) {
     // The services program with Slippi's menus: the game's Online Play page asks the netplay host, as --online does.
     if (net.fake_user || file_exists(user_dir + "/user.json")) {
       menu_online = true;
@@ -261,6 +269,8 @@ int play_main() {
     } else {
       say("play: online: no %s/user.json: the Online Play page will show Log-in. Sign in with the app first, or name the folder with --user-dir", user_dir.c_str());
     }
+  } else if (!direct && settings_slippi_menus() && netplay_bridge::has_services()) {
+    // services check failed: said above
   } else if (!direct && settings_slippi_menus()) {
     say("play: online: this program has no online services (the services program has): the Online Play page will show Log-in");
   }
