@@ -16,6 +16,7 @@ void register_replays();
 void register_overlays();
 void register_spectator();
 void register_netoverlay();
+void register_search();
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -35,6 +36,11 @@ void read_controllers(MuPadStatus out[4]);   // the host's own pad read, now (th
 uint32_t training_option_bits();     // MU_GAME_OPTION_LAB* for option word 1 (offline Training tools)
 void training_pad_hook(MuPadStatus pads[4]);   // frame advance (reads the pads; changes nothing)
 void training_scene_changed();
+// Into an offline Training match as `character` (Training's select pressed through, Final Destination); the CPU as `cpu_character`
+// (-1: Training's own). from_online: allowed from the online screens (the search module: play while you search, Training after
+// online). False when the game cannot be asked now.
+bool training_go(int character, int costume, int cpu_character, int cpu_costume, bool from_online);
+bool training_entering();            // Training's menus are being pressed through
 bool training_lab_overlay();         // Training's "Inputs and frame advantage" is on (lab_overlay)
 bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
 
@@ -52,6 +58,9 @@ bool spectator_on();                 // the server thread runs
 void spectator_write(const uint8_t* data, uint32_t size);   // one recording event, command byte first (any thread)
 void spectator_start_game();
 void spectator_end_game(bool dolphin_closed);
+
+// netoverlay.cpp: the replay writer wrote a match (its thread): that match's session trace goes beside it
+void net_trace_replay_saved(const std::string& slp_path);
 
 // mods.cpp (play mode's mod layer; the modules may ask it)
 }  // namespace fe::features

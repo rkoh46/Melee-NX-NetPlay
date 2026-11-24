@@ -75,7 +75,15 @@ void observer(const MuStatePod& state, const linux_host::Counters& counters, voi
   }
   // Online, as upstream's host decides it: the game is in Slippi's online flow (major scene 8), or a search or
   // match of the netplay host is on. The option words follow (settings.cpp).
-  const bool online = net_on && (direct || searching || state.scene_major == 8);
+  // A kept search (the player went to Training while it runs, features/search.cpp) is no online session for the game: it plays
+  // offline with the player's own option words until the search brings it back to the online screens (upstream: search_away).
+  if (searching && !direct && state.scene_major != 8) {
+    // A kept search that ended while the player was away (features/search.cpp: it stopped, or could not come back) was
+    // cleaned up by the netplay object itself, not by the game: the session is over.
+    const netplay_bridge::SearchInfo s = netplay_bridge::search_info();
+    if (!s.kept && s.state <= 0) { searching = false; say("play: online: the search or session is over (the netplay object closed it; scene %u/%u)", state.scene_major, state.scene); }
+  }
+  const bool online = net_on && (direct || (searching && !netplay_bridge::search_kept()) || state.scene_major == 8);
   if (online != online_now) {
     online_now = online;
     online_flag.store(online, std::memory_order_relaxed);
@@ -139,12 +147,15 @@ int32_t command(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* respo
     static const char* const mode[] = {"Ranked", "Unranked", "Direct", "Teams"};
     searching = true;
     say("play: online: the game asked for a match: mode %u (%s)%s", payload[0], payload[0] < 4 ? mode[payload[0]] : "?", direct ? "" : ", from its menu");
-  } else if (c == 0xBA && searching) {
+  } else if (c == 0xBA && searching && !netplay_bridge::search_kept()) {
+    // A search the player chose to keep while they play elsewhere (features/search.cpp, patches/net-0005) survives the game's
+    // cleanups: the netplay object skips them, and the session stays a search.
     searching = false;
     say("play: online: the game closed the connection");
   }
   const int32_t result = net_command(c, payload, size, response, capacity, response_size);
   if (result == 0 && response && response_size) features::call_reply(c, response, *response_size);   // read only (overlay names)
+  features::call_exchange(c, payload, size, response, response_size ? *response_size : 0, result, in_resim);   // read only (session trace)
   const uint64_t t2 = now_ns();
   if (store) { sim_cost[1] += t1 - t0; sim_cost[0] += t2 - t1; } else sim_cost[2] += t2 - t0;
   return result;

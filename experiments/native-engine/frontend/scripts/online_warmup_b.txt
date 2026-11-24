@@ -1,0 +1,17 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_B): the other side of online_warmup_a.txt. Fox, the first
+# match, then back on the select it locks in again about 13 s after side a went to warm up.
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132 sx=127
+138
+150 A
+156
+240 START
+246
+4400 START
+4406

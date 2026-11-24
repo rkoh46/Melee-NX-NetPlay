@@ -1,0 +1,27 @@
+# Controller script for --play-script (test-online-linux.sh MU_PADS_A, with MU_ARGS_A="--feature-test unranked-as-direct"): the warm-up
+# room (features/search.cpp). The menus and the first match as online_unranked.txt; back on Slippi's character select after it,
+# still connected and not locked in, L and R held: Training while the connection stays up. Side b (online_warmup_b.txt) locks
+# in about 13 s later; this side comes back to the select by itself and presses START until it is locked in, and the second
+# match is played. Frame numbers count from the first visit of the select (no @rearm).
+@scene 01 00
+200 A
+206
+260 A
+266
+@scene 08 00
+120 sy=127
+132
+150 A
+156
+240 START
+246
+3700 L R
+3780
+4700 START
+4706
+4800 START
+4806
+4900 START
+4906
+5000 START
+5006
