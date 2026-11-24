@@ -30,7 +30,7 @@ NX_IMG="${MELEE_DOCKER_IMAGE:-melee-nx-netplay-build:latest}"
 jobs="${MELEE_BUILD_JOBS:-8}"
 W=build/native-engine-gfx
 # MU_TIMEOUT_SCALE multiplies the container time limits (app-build.sh sets it where the arm64 image runs under qemu).
-dock() { local limit=$(( $1 * ${MU_TIMEOUT_SCALE:-1} )) image=$2; shift 2; timeout "$limit" docker run --rm --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
+dock() { local limit=$(( $1 * ${MU_TIMEOUT_SCALE:-1} )) image=$2; shift 2; timeout "$limit" docker run --rm --name "mnx-${MU_DOCKER_TAG:-gfx}-build-$$-$RANDOM" --network none -v "$repo:/w" -w /w "$image" bash -ec "$*"; }
 SAN="${MU_SANITIZE:-}"; SAN_SFX=""; SAN_FLAGS=""
 case "$SAN" in
   "") ;;

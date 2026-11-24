@@ -28,7 +28,7 @@ for side, period, stick in (("a", 47, 80), ("b", 61, -80)):
         lines += [f"{t} sx={stick}", f"{t + period // 3} A sx={stick}", f"{t + period // 3 + 4} sx={-stick}", f"{t + 2 * period // 3} X", f"{t + 2 * period // 3 + 4}"]
     open(f"{sys.argv[1]}/{side}/pads.txt", "w").write("\n".join(lines) + "\n")
 PY
-timeout "${MU_TEST_LIMIT:-600}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" -v "$here/../tools:/t:ro" \
+timeout "${MU_TEST_LIMIT:-600}" docker run --rm --name "mnx-${MU_DOCKER_TAG:-test}-net-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" -v "$here/../tools:/t:ro" \
   -e FRAMES="$frames" -e EXTRA="$*" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy \
   -e MU_NET_ARGS_A -e MU_NET_ARGS_B -e MU_NET_CONTROLLERS -e MU_SUGGEST_LEAD_MS -e MU_NET_SUGGESTIONS -e MU_SUGGEST_TRACE "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &

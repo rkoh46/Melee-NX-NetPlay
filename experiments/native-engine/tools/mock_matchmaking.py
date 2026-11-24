@@ -103,14 +103,27 @@ if dead_first is not None:
         conn, _ = server.accept()
         threading.Thread(target=serve, args=(conn,), daemon=True).start()
 
+# While a ticket waits for its pair, a status message every two seconds, as the service sends them: the client counts a
+# connection silent for 15 s as lost (slippi_matchmaking_ws.cpp kLivenessTimeout), so a long wait needs them.
+import threading
+send_lock = threading.Lock(); paired = threading.Event()
+def keep_alive(conn):
+    while not paired.wait(2.0):
+        try:
+            with send_lock: send(conn, json.dumps({'type': 'status'}))
+        except Exception: return
 clients = []
 while len(clients) < 2:
     conn, _ = server.accept()
     handshake(conn)
     join = json.loads(read_text(conn))
+    if 'user' not in join:          # a resume or anything else: this stand-in has no tickets to resume
+        print('mock: %s message on a new connection, closed' % join.get('type'), flush=True); conn.close(); continue
     print('mock: join from %s mode %s port %s appVersion %s' % (join['user'].get('connectCode'), join['search'].get('mode'), join.get('port'), join.get('appVersion')), flush=True)
     send(conn, json.dumps({'type': 'joined', 'ticketId': 't-%d' % len(clients), 'token': 'mock'}))
     clients.append((conn, join))
+    threading.Thread(target=keep_alive, args=(conn,), daemon=True).start()
+paired.set()
 mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams'}.get(clients[0][1]['search'].get('mode'), 'unranked')
 for me, (conn, _) in enumerate(clients):
     players = []
@@ -118,8 +131,9 @@ for me, (conn, _) in enumerate(clients):
         address = '127.0.0.1:%d' % join['port']
         players.append({'uid': join['user']['uid'], 'displayName': join['user']['displayName'], 'connectCode': join['user']['connectCode'],
                         'port': k + 1, 'isLocalPlayer': k == me, 'ipAddress': address, 'ipAddressLan': address})
-    send(conn, json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == 0, 'players': players,
-                           'stages': [2, 3, 8, 28, 31, 32]}))
+    with send_lock:
+        send(conn, json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == 0, 'players': players,
+                               'stages': [2, 3, 8, 28, 31, 32]}))
 print('mock: matched two players in mode %s' % mode, flush=True)
 for conn, _ in clients:
     try: read_text(conn)

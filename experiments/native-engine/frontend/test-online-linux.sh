@@ -54,7 +54,7 @@ case "${MU_SANITIZE:-}" in
   *) echo "MU_SANITIZE must be address or thread" >&2; exit 2 ;;
 esac
 mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FIRST"
-timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -e SLIPPI_MM_URL=ws://127.0.0.1:8765 -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -v "$disc:/iso:ro" -v "$work/out:/b:ro" \
+timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "mnx-${MU_DOCKER_TAG:-test}-online-$$" --network none -e SLIPPI_MM_URL=ws://127.0.0.1:8765 -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -v "$disc:/iso:ro" -v "$work/out:/b:ro" \
   -v "$here/../tools:/t:ro" -v "$run:/out" -e FRAMES="$frames" -e EXTRA="$*" -e ARGS_A="${MU_ARGS_A:-}" -e ARGS_B="${MU_ARGS_B:-}" -e ONLY_A="${MU_ONLY_A:-0}" \
   -e EVERY="${MU_SHOT_EVERY:-5}" -e TWO="${MU_TWO_SCREENS:-0}" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
