@@ -69,6 +69,9 @@ void proai_spar_end();
 // overlays.cpp
 bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
 
+// audio.cpp: the replay viewer paused or jumping holds the jukebox's music where it is (false: it goes on)
+void music_hold(bool hold);
+
 // replays.cpp
 bool replay_playing();               // a .slp is being played back
 bool replay_word(int which, uint32_t* value);   // the recorded option words during playback (0..2)

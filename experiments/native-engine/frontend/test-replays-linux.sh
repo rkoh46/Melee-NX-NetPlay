@@ -17,6 +17,8 @@
 #             the playback must say it uses Slippi's legacy list and which codes that is (the post-frame check may differ: the
 #             recording was made with the current codes)
 #   analyze   --feature-test replay-analyze: the whole replay run once unseen from where it is, then back
+#   music     musicpacks 1 and --feature-test replay-pause (6 s paused at frame 300), SDL's disk audio recording: the jukebox's song
+#             stops while the viewer is paused and goes on after it (the recording's level per half second)
 #   library   --feature-test replay-library in the app (--app): the in-game menu opened on its Replays page, the list, the
 #             shown replay's stats (both copies), delete (A twice) of one copy, then Watch it on the other
 # Output: build/native-engine-gfx/run-replays/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
@@ -34,13 +36,13 @@ run() {
   local dir=$1 frames=$2 every=$3 extra=$4 name
   name="mnx-replays-$(basename "$dir")-$$"
   timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "$name" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
-    -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$extra" -e SDL_AUDIODRIVER=dummy -e MU_ENV="${MU_ENV:-}" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$extra" -e SDL_AUDIODRIVER="${MU_AUDIO_DRIVER:-dummy}" -e SDL_AUDIO_DRIVER="${MU_AUDIO_DRIVER:-dummy}" -e SDL_AUDIO_DISK_OUTPUT_FILE=/out/out.raw -e VOLUME="${MU_VOLUME:-0}" -e MU_ENV="${MU_ENV:-}" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
       [ -z "$MU_ENV" ] || export $MU_ENV
       for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
       script=""; [ -f /out/script.txt ] && script="--play-script /out/script.txt"
-      /b/mu-native-gfx-linux --play --iso /iso/GALE01.iso --out /out --settings /out/settings.ini --frames "$FRAMES" --window 1280x720 --volume 0 $script $EXTRA >/out/console.log 2>&1 &
+      /b/mu-native-gfx-linux --play --iso /iso/GALE01.iso --out /out --settings /out/settings.ini --frames "$FRAMES" --window 1280x720 --volume "$VOLUME" $script $EXTRA >/out/console.log 2>&1 &
       pid=$!; n=0
       while kill -0 $pid 2>/dev/null; do
         sleep "$EVERY"; n=$((n+1))
@@ -91,6 +93,31 @@ PY
   takeover) fresh "$dir"; need_replay "$dir"; playback "$dir" 2400 replay-takeover ;;
   practice) fresh "$dir"; need_replay "$dir"; printf '%s\n' "replay_try_length 0" > "$dir/settings.ini"; playback "$dir" 2400 replay-practice ;;
   analyze)  fresh "$dir"; need_replay "$dir"; playback "$dir" 2400 replay-analyze ;;
+  music)
+    # musicpacks 1 (the jukebox plays the disc's songs in the sound output's callback) and the viewer paused for 6 s at frame 300
+    # (--feature-test replay-pause), SDL's disk audio driver recording the output: the jukebox's song must stop with the picture
+    # (audio.cpp music_hold) and go on after it, so the recording is silent while paused (the game's own sound stops with it).
+    fresh "$dir"; need_replay "$dir"; printf '%s\n' "musicpacks 1" > "$dir/settings.ini"
+    MU_AUDIO_DRIVER=disk MU_VOLUME=70 playback "$dir" 1400 replay-pause
+    rate=$(sed -n 's/.*device buffer [0-9]* frames at \([0-9]*\) Hz.*/\1/p' "$dir/console.log" | head -1)
+    [ -f "$dir/out.raw" ] && [ -n "$rate" ] && python3 -I - "$dir/out.raw" "$rate" <<'PY'
+import math, struct, sys
+data = open(sys.argv[1], "rb").read(); rate = int(sys.argv[2])
+n = len(data) // 4; left = struct.unpack("<%dh" % (n * 2), data[:n * 4])[0::2]
+half = rate // 2
+def level(xs):   # the sound's level without its constant part (a starved output holds its last sample)
+    m = sum(xs) / len(xs); return math.sqrt(sum((x - m) * (x - m) for x in xs) / len(xs))
+levels = [level(left[i:i + half]) for i in range(0, n - half, half)]
+print("recording: %.1f s; level per half second (RMS around the mean): %s" % (n / rate, " ".join("%d" % v for v in levels)))
+quiet = [i for i, v in enumerate(levels) if v < 20]
+runs = []; start = None
+for i in range(len(levels) + 1):
+    q = i < len(levels) and levels[i] < 20
+    if q and start is None: start = i
+    if not q and start is not None: runs.append((start, i)); start = None
+print("silent stretches (RMS under 20): %s" % ", ".join("%.1f-%.1f s" % (a / 2, b / 2) for a, b in runs if b - a >= 2))
+PY
+    ;;
   legacy)   fresh "$dir"; need_replay "$dir"
             python3 -I "$here/../tools/slp_strip_codes.py" "$root/replay.slp" "$dir/Replays/Game_20261124T120000.slp"
             playback "$dir" 600 "" ;;
@@ -106,6 +133,6 @@ PY
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   echo "== $case"
-  grep -hE "^replay|^coach|^library|\[replay\]|^play: |exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -40
+  grep -hE "^replay|^coach|^library|jukebox.s music|\[replay\]|^play: |exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -40
   echo "shots: $(ls "$dir/shots" | wc -l | tr -d ' ')"
 done

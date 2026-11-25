@@ -687,7 +687,7 @@ struct TestRun {
 TestRun& test_run() {
   static TestRun t = [] {
     TestRun r;
-    for (const char* n : {"replay-controls", "replay-tips", "replay-takeover", "replay-practice", "replay-analyze"}) if (feature_test(n)) r.name = n;
+    for (const char* n : {"replay-controls", "replay-tips", "replay-takeover", "replay-practice", "replay-analyze", "replay-pause"}) if (feature_test(n)) r.name = n;
     return r;
   }();
   return t;
@@ -716,6 +716,12 @@ uint16_t test_buttons() {
       case 10: at(pb.frame >= t.mark + 240, kR); break;                  // and off
       case 11: at(pb.frame >= t.mark + 60, kB); break;                   // overlay hidden
       case 12: at(pb.frame >= t.mark + 60, kB); break;                   // and shown
+      default: break;
+    }
+  } else if (t.name == "replay-pause") {   // the music test: paused for 6 s at frame 300, then playing on
+    switch (t.stage) {
+      case 0: at(pb.frame >= 300, kStart); break;
+      case 1: at(now - t.t0 > 6.0, kStart); break;
       default: break;
     }
   } else if (t.name == "replay-tips") {
@@ -993,6 +999,7 @@ int replay_gate(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& rep
   // Paused (or a try's result showing): hold this frame, reading the controls, until play, one step, a jump or a takeover.
   if (pb.paused && !pb.go_back && pb.seek_target == INT32_MIN) {
     pb.step_held = 0;
+    music_hold(true);   // audio.cpp: the jukebox's song waits with the picture
     const double paused_at = now_s();
     while (pb.paused && !pb.go_back && pb.seek_target == INT32_MIN && pb.want_take < 0) {
       publish();
@@ -1014,6 +1021,7 @@ int replay_gate(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& rep
   // is not exact with items on (README "Undrawn repeated frames"; an Analyze pass over a whole match differed from frame
   // 1866 on). The picture just is not shown (replay_frames_unseen, the render loop).
   unseen.store(pb.seek_target != INT32_MIN || pb.go_back, std::memory_order_relaxed);
+  music_hold(pb.paused || pb.seek_target != INT32_MIN || pb.go_back);
   apply_speed();
   publish();
   reply.push_back(pb.go_back ? 1 : 0);
