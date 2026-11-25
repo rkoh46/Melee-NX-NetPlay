@@ -20,6 +20,14 @@ __attribute__((weak)) std::vector<HudLine> hud_lines();
 __attribute__((weak)) bool take_restart_request(std::vector<std::string>* extra_args);   // replays.cpp: "Watch it"
 __attribute__((weak)) std::vector<std::string> replays_list();
 
+// cosmetics.cpp (skins): called by mods.cpp around its disc table work (see there).
+__attribute__((weak)) void cosmetics_disc_ready(bool can_go_online, const std::string& active_profile);
+__attribute__((weak)) void cosmetics_apply_picks();
+__attribute__((weak)) void cosmetics_view(bool retail_files);
+__attribute__((weak)) bool cosmetics_online_copy(const std::string& slot, const std::vector<uint8_t>& bytes, std::string* reason);
+__attribute__((weak)) int cosmetics_disc_read(uint64_t offset, void* out, size_t bytes);
+__attribute__((weak)) size_t cosmetics_disc_skin_count(const std::string& profile);
+
 inline bool linked() { return &dispatch_retrace != nullptr; }
 inline void call_tables(MuHostApi* host, MuGameApi* game) { if (&dispatch_tables) dispatch_tables(host, game); }
 inline int32_t call_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {

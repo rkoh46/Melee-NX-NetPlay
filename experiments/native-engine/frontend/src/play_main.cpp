@@ -215,6 +215,8 @@ void* play_thread(void* user) {
   const bool vanilla_only = settings_vanilla_only() && !direct;
   if (vanilla_only && !settings_profile().empty()) say("play: vanilla-only session: mod profile \"%s\" is not loaded", settings_profile().c_str());
   const std::string profile_card = direct || vanilla_only ? std::string() : mods_configure(net_on ? std::string() : settings_profile());
+  // A session that can go online: skins in their online form, and of a mod profile only its look-only costumes (cosmetics.cpp).
+  if (net_on) { mods_session_can_go_online(); if (!direct && !vanilla_only && !settings_profile().empty()) mods_configure_costumes(settings_profile()); }
   config.card_dir = !profile_card.empty() ? profile_card : !options.card_dir.empty() ? options.card_dir : options.out_dir + "/card-play";
   if (options.app && profile_card.empty() && !direct && !vanilla_only) app_backup_card();   // the earlier app's card, copied once before it is used
   if (vanilla_only) {

@@ -134,6 +134,14 @@ sync_tree() {
   sed -n '/^const char\* const kActionNames\[\] = {/,/^};/p' "$work/mu/port/runtime/gx/training_overlay.cpp" > "$gen/action_names.inc.new" 2>/dev/null || true
   [ -s "$gen/action_names.inc.new" ] || echo 'const char* const kActionNames[] = {""};' > "$gen/action_names.inc.new"
   if cmp -s "$gen/action_names.inc.new" "$gen/action_names.inc"; then rm -f "$gen/action_names.inc.new"; else mv "$gen/action_names.inc.new" "$gen/action_names.inc"; fi
+  # Skins (src/features/cosmetics.cpp): melee-unlocked's skeleton and drawing checks and its costume families, taken from
+  # its Windows-only cosmetic_mods.cpp (only these portable parts), and its pack_skin_rule; compiled from the fetched tree.
+  cm="$work/mu/port/runtime/host/cosmetic_mods.cpp"
+  awk '/^\/\/ The player reads this beside "Online: standard costume"/{on=0} /^namespace skeleton \{/{on=1} on' "$cm" > "$gen/cosmetics_skeleton.inc.new"
+  awk '/^constexpr FighterFamily families\[\] = \{/,/^\};/' "$cm" > "$gen/cosmetics_families.inc.new"
+  grep -q "costume_skeleton_matches" "$gen/cosmetics_skeleton.inc.new" && grep -q '"Fx", "Fox"' "$gen/cosmetics_families.inc.new" || { echo "sync: cosmetic_mods.cpp no longer has the parts cosmetics.cpp takes" >&2; exit 1; }
+  for f in cosmetics_skeleton.inc cosmetics_families.inc; do if cmp -s "$gen/$f.new" "$gen/$f"; then rm -f "$gen/$f.new"; else mv "$gen/$f.new" "$gen/$f"; fi; done
+  for f in pack_skin_rule.h pack_skin_rule.cpp; do cmp -s "$work/mu/port/runtime/host/$f" "$gen/$f" || cp "$work/mu/port/runtime/host/$f" "$gen/$f"; done
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   # Fight a pro and the Practice menu: melee-unlocked's phillip_ai.cpp and practice_menu.cpp, build-time copies with
   # patches/0112 (the app's own inference engine, the app's ProAI folder, downloads only when chosen) and 0113 (the
