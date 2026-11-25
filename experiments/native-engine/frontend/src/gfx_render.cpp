@@ -321,7 +321,9 @@ void render_frame() {
 }
 
 // Render thread, before Aurora shuts down: the loader and the writer finish, the read-back channels close.
+extern const int lab_linked;   // lab.cpp: keeps the Lab view in the program (see there)
 void render_end() {
+  if (lab_linked && &lab_end) lab_end();
   if (packs.applied != ~0u) {
     live().dumped.store(aurora::texture::dumped_texture_count());
     if (live().dump.load()) say("gfx: texture dumps: %llu written this run", (unsigned long long)live().dumped.load());

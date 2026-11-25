@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "gfx_live.h"   // the Lab view's looks (Stick Figures, Capsules, Minimal) are switched with the presets
+
 namespace fe::looks {
 
 // How a group of draws is textured (gx_retro.h Surface). Wire is drawn as lines.
@@ -40,6 +42,13 @@ struct Live {
   // flash_on: a renderer flash mode is chosen, so the game marks draw owners.
   std::atomic<uint32_t> flash[6] = {};
   std::atomic<bool> flash_on{false};
+  // The Lab view covers the match and labskipscene is on (src/lab.cpp, from its newest draw): the bridge skips the world's draws
+  // (patches/0129).
+  std::atomic<bool> lab_cover{false};
+  // The preset last chosen: several presets share their parts on the Switch (Diet 64 and 64 Style, Diet Classic and Classic
+  // Style, Stick Figures and Minimal: upstream tells them apart by the mod artwork and the frame cap), so the row names the one
+  // chosen while the parts still match it, and steps on from it.
+  std::atomic<int> preset_chosen{-1};
   // Measurements for the picture test's timing lines (render thread only writes them).
   std::atomic<uint64_t> frames{0}, rule_ns{0}, skipped{0}, drawn{0}, treated_textures{0}, tinted{0}, wired{0};
 };
@@ -54,15 +63,17 @@ inline bool active() {
          load(l.effects) || load(l.arcade_backdrop);
 }
 
-// The presets as melee-unlocked ships them (render_options.h look_presets), minus the three that need the Lab
-// view's stick figures and capsules (not here). Fields: Lightweight level, fighter / stage / menus surface,
-// unfiltered, port colours, background, Visual effects; `exact` names the mod artwork a Diet or Crystal preset uses
-// when the player's own build of it is served (melee-unlocked's "Get mod looks"); without it the built-in stand-in
-// treatments below draw the look, as upstream does before setup.
+// The presets as melee-unlocked ships them (render_options.h look_presets). Fields: Lightweight level, fighter / stage /
+// menus surface, unfiltered, port colours, background, Visual effects; the Lab view's fighter and stage looks (0: the 3D
+// scene; Stick Figures, Capsules and Minimal draw the match in the Lab view, src/lab.cpp). The three Lab view presets come
+// last here (upstream lists them after Potato) so that the numbers settings.ini already holds keep their looks. Without the
+// player's own build of the Diet or Crystal artwork (melee-unlocked's "Get mod looks") the built-in stand-in treatments
+// below draw those looks, as upstream does before setup.
 struct Preset {
   const char* name; const char* tip;
   int lightweight, fighter, stage, menus; bool unfiltered; int colours, background, effects;
   bool unlocked;   // upstream lifts the frame cap (the console's display is 60 Hz: nothing to lift here)
+  int lab = 0, lab_stage = 0;   // the Lab view: fighters 1 stick figures, 2 capsules; stage 1 outline, 2 blocks
 };
 inline const Preset* presets(int* count) {
   static const Preset p[] = {
@@ -78,6 +89,9 @@ inline const Preset* presets(int* count) {
     {"64 Style (built-in)", "N64-inspired: low poly fighters and sharp 64 x 64 textures, no patch needed.", 1, 1, 1, 1, true, 0, 0, 1, false},
     {"Silhouettes", "Every fighter as its real model in its port colour on white platforms over a plain background.", 2, 3, 3, 0, false, 1, 2, 2, false},
     {"Classic Style (built-in)", "A built-in Diet Classic-inspired look, no patch needed.", 2, 0, 0, 0, false, 0, 1, 1, false},
+    {"Stick Figures", "Every fighter as a stick figure in its port colour, the stage as its outline. The 3D scene is not drawn.", 2, 0, 0, 0, false, 0, 0, 2, false, 1, 1},
+    {"Capsules", "Every fighter as rounded capsules (its hurtboxes) in its port colour, the stage as solid blocks. No 3D scene.", 2, 0, 0, 0, false, 0, 0, 2, false, 2, 2},
+    {"Minimal", "Stick figures on the stage outline: the least work any look does.", 2, 0, 0, 0, false, 0, 0, 2, true, 1, 1},
   };
   *count = int(sizeof p / sizeof p[0]);
   return p;
@@ -89,15 +103,25 @@ inline void apply_preset(int index) {
   l.lightweight.store(uint8_t(p[index].lightweight)); l.fighter.store(uint8_t(p[index].fighter)); l.stage.store(uint8_t(p[index].stage));
   l.menus.store(uint8_t(p[index].menus)); l.unfiltered.store(p[index].unfiltered); l.colours.store(uint8_t(p[index].colours));
   l.background.store(uint8_t(p[index].background)); l.effects.store(uint8_t(p[index].effects));
+  l.preset_chosen.store(index);
+  auto& g = fe::gfx::live();
+  if (p[index].lab) { g.lab.store(true); g.lab_fighters.store(p[index].lab); g.lab_stage.store(p[index].lab_stage); }
+  else if (g.lab.load() && g.lab_fighters.load() != 0) g.lab.store(false);   // leaving a Lab view preset; the silhouette view stays the player's
 }
 // The preset the current parts match, or -1 (Custom).
-inline int preset_of() {
+inline bool preset_matches(int i) {
   int n = 0; const Preset* p = presets(&n);
+  if (i < 0 || i >= n) return false;
   const Live& l = live();
-  for (int i = 0; i < n; ++i)
-    if (load(l.lightweight) == p[i].lightweight && load(l.fighter) == p[i].fighter && load(l.stage) == p[i].stage && load(l.menus) == p[i].menus &&
-        l.unfiltered.load() == p[i].unfiltered && load(l.colours) == p[i].colours && load(l.background) == p[i].background && load(l.effects) == p[i].effects)
-      return i;
+  return load(l.lightweight) == p[i].lightweight && load(l.fighter) == p[i].fighter && load(l.stage) == p[i].stage && load(l.menus) == p[i].menus &&
+         l.unfiltered.load() == p[i].unfiltered && load(l.colours) == p[i].colours && load(l.background) == p[i].background && load(l.effects) == p[i].effects &&
+         (p[i].lab ? fe::gfx::live().lab.load() && fe::gfx::live().lab_fighters.load() == p[i].lab && fe::gfx::live().lab_stage.load() == p[i].lab_stage
+                   : !(fe::gfx::live().lab.load() && fe::gfx::live().lab_fighters.load() != 0));
+}
+inline int preset_of() {
+  int n = 0; presets(&n);
+  if (preset_matches(live().preset_chosen.load())) return live().preset_chosen.load();
+  for (int i = 0; i < n; ++i) if (preset_matches(i)) return i;
   return -1;
 }
 

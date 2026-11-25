@@ -1,0 +1,30 @@
+Lab view skips the scene (Melee-NX-NetPlay 0.4.8): while melee-unlocked's Lab view covers a match (labskipscene, on by default as upstream) the world camera's draws are not handed to Aurora. After 0116 and 0120.
+--- a/port/runtime/gx/gx_aurora_bridge.cpp
++++ b/port/runtime/gx/gx_aurora_bridge.cpp
+@@ -446,6 +446,7 @@
+   float fighter_far = 0;
+   uint8_t fighter = 0, stage = 0, menus = 0, colours = 0;
+   bool unfiltered = false;
++  bool lab_cover = false;   // patches/0129: the Lab view covers the match (labskipscene): the world's draws are not handed to Aurora
+ };
+ inline uint8_t stage_map(const DrawCall& d) { return uint8_t(d.viewport_x); }   // patches/0116 decoder: the 0xF7 tag
+ inline bool world(const Filter& e, const DrawState& st) {
+@@ -526,6 +527,8 @@
+   e.backdrop_off = e.level >= 2 || fe::looks::load(l.arcade_backdrop) != 0;
+   if (e.level >= 3) e.effects = std::max(e.effects, 2);
+   e.on = fe::looks::active() || e.menus || l.flash_on.load(std::memory_order_relaxed);   // patches/0120: the L-cancel flash
++  e.lab_cover = l.lab_cover.load(std::memory_order_relaxed);   // patches/0129 (src/lab.cpp sets it from the newest Lab view draw)
++  e.on = e.on || e.lab_cover;
+   if (!e.on || !frame_in_match(f)) return e;
+   // A pass over the frame's state: the first perspective draw of a skinned fighter model gives the world camera
+   // (frame_scene_draw), then the farthest such model the play plane's depth.
+@@ -649,6 +652,9 @@
+   Decision out;
+   if (!e.on) return out;
+   const bool in_world = world(e, st);
++  // patches/0129: upstream's lab_skip_scene: under a covering Lab view nobody sees the 3D scene, so its draws are skipped
++  // (the HUD's and every copy stay).
++  if (e.lab_cover && in_world) { out.skip = true; return out; }
+   if (e.in_match && effect(e, d, st)) { out.skip = true; return out; }
+   if (in_world && e.backdrop_off) {
+     if (d.owner_player == 0xFF && !d.skinned && fe::looks::load(fe::looks::live().arcade_backdrop) && frustum_backdrop(f, d, st)) { out.skip = true; return out; }

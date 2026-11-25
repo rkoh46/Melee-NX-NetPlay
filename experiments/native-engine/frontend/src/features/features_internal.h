@@ -69,6 +69,7 @@ void proai_spar_end();
 
 // overlays.cpp
 bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
+void overlay_names(std::string out[4]);   // the players' Slippi names in an online match (empty otherwise)
 
 // replays.cpp
 bool replay_playing();               // a .slp is being played back

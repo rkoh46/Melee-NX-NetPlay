@@ -40,6 +40,7 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "look_colours") l.colours.store(uint8_t(clamp_int(value, 0, 1)));
   else if (key == "look_background") l.background.store(uint8_t(clamp_int(value, 0, 2)));
   else if (key == "look_background_rgb") l.background_rgb.store(uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & 0xFFFFFFu);
+  else if (key == "look_chosen") l.preset_chosen.store(std::atoi(value.c_str()));   // which of the presets that share parts was chosen
   else if (key == "look") {
     int n = 0; const fe::looks::Preset* p = fe::looks::presets(&n);
     char* end = nullptr; const long index = std::strtol(value.c_str(), &end, 10);
@@ -100,6 +101,12 @@ void write_all(Write w) {
   w("look_unfiltered", l.unfiltered.load() ? "1" : "0");
   w("look_colours", std::to_string(fe::looks::load(l.colours)));
   w("look_background", std::to_string(fe::looks::load(l.background)));
+  w("look_chosen", std::to_string(l.preset_chosen.load()));
+  // The Lab view presets (Stick Figures, Capsules, Minimal) switch the Lab view (features/gfx.cpp keys).
+  const auto& g = fe::gfx::live();
+  w("labview", g.lab.load() ? "1" : "0");
+  w("look_lab_fighters", std::to_string(g.lab_fighters.load()));
+  w("look_lab_stage", std::to_string(g.lab_stage.load()));
 }
 void step(std::atomic<uint8_t>& a, int d, int count) { a.store(uint8_t((int(a.load()) + (d < 0 ? count - 1 : 1)) % count)); }
 }  // namespace

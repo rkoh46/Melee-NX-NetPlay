@@ -10,7 +10,10 @@
 #   ssao      ssao 1 (screen-space ambient occlusion at full strength)
 #   capture   a capture burst of 30 frames at retrace 900 (MU_CAPTURE_AT): capture/burst-1/*.png
 #   flicker   flickerscan 1 with one frame drawn twice as bright (MU_TEST_FLICKER_AT): the detector's report and its grids
-#   lab, lab-stick, lab-capsules, lab-minimal, lab-packs   the Lab view (see the lab cases below)
+#   lab-stick, lab-capsules, lab-minimal, lab-blobs   the Lab view's looks that need no packs (stick figures and outline; the
+#             Capsules and Minimal presets; blobs in the player's own colours on a hidden stage)
+#   lab       the Lab view's silhouettes, melee-unlocked's fighter packs in place (MU_LAB_ZIP: its content release's zip)
+#   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -20,17 +23,18 @@ repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; shift
 work="$repo/build/native-engine-gfx"; root="$work/run-gfx"
 mkdir -p "$root"
-cases=("$@"); [ "${#cases[@]}" -eq 0 ] || [ "${cases[0]}" = all ] && cases=(textures ssao capture flicker lab lab-stick lab-capsules lab-minimal)
+cases=("$@"); [ "${#cases[@]}" -eq 0 ] || [ "${cases[0]}" = all ] && cases=(textures textures-same ssao capture flicker lab-stick lab-capsules lab-minimal lab-blobs lab lab-download)
 
 # $1 case folder, $2 frames, $3 extra docker arguments, $4 extra play-mode arguments
 run() {
   local dir=$1 frames=$2 env=$3 extra=${4:---auto-vs}
   timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "mnx-gfx2-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" $env \
-    -e FRAMES="$frames" -e EXTRA="$extra" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    -e FRAMES="$frames" -e EXTRA="$extra" -e BIN="${BIN:-mu-native-gfx-linux}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
       for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
-      /b/mu-native-gfx-linux --play --iso /iso/GALE01.iso --out /out --settings /out/settings.ini --frames "$FRAMES" $EXTRA >/out/console.log 2>&1 &
+      [ -d /out/mirror ] && (cd /out/mirror && python3 -m http.server 8099 --bind 127.0.0.1 >/out/mirror.log 2>&1 &)
+      /b/$BIN --play --iso /iso/GALE01.iso --out /out --settings /out/settings.ini --frames "$FRAMES" $EXTRA >/out/console.log 2>&1 &
       pid=$!; n=0
       while kill -0 $pid 2>/dev/null; do
         sleep 2; n=$((n+1))
@@ -81,6 +85,38 @@ for c in "${cases[@]}"; do
     fresh "$dir"; printf '%s\n' "flickerscan 1" > "$dir/settings.ini"; run "$dir" 1300 "-e MU_TEST_FLICKER_AT=700"
     echo "== flicker"; show "$dir" 20
     echo "grids: $(ls "$dir"/flicker 2>/dev/null | wc -l | tr -d ' ') files"
+    ;;
+  lab-stick|lab-capsules|lab-minimal|lab-blobs)
+    fresh "$dir"
+    case "$c" in
+      lab-stick) printf '%s\n' "labview 1" "look_lab_fighters 1" "look_lab_stage 1" > "$dir/settings.ini" ;;
+      lab-capsules) printf '%s\n' "look 13" > "$dir/settings.ini" ;;      # the Capsules preset (stage as blocks)
+      lab-minimal) printf '%s\n' "look 14" > "$dir/settings.ini" ;;       # the Minimal preset
+      lab-blobs) printf '%s\n' "labview 1" "look_lab_fighters 3" "look_lab_stage 3" "lab_colour_p1 FF8000" "lab_colour_p2 00A0FF" > "$dir/settings.ini" ;;
+    esac
+    run "$dir" 1300 "-e MELEE_LAB_NO_DOWNLOAD=1"
+    echo "== $c"; show "$dir"
+    ;;
+  lab)
+    # The silhouettes from melee-unlocked's fighter packs, already in place (MU_LAB_ZIP: the content release's
+    # MeleeUnlocked-Lab.zip, fetched beforehand from its official place; unpacked here).
+    fresh "$dir"; zip="${MU_LAB_ZIP:?MU_LAB_ZIP: melee-unlocked content-1 MeleeUnlocked-Lab.zip}"
+    mkdir -p "$dir/Lab"; python3 -I -c "import sys, zipfile, os; z = zipfile.ZipFile(sys.argv[1]); [open(os.path.join(sys.argv[2], os.path.basename(n)), 'wb').write(z.read(n)) for n in z.namelist() if n.endswith('.lab')]" "$zip" "$dir/Lab"
+    echo "packs: $(ls "$dir/Lab" | wc -l | tr -d ' ')"
+    printf '%s\n' "labview 1" > "$dir/settings.ini"
+    run "$dir" 1300 ""
+    echo "== lab"; show "$dir"
+    ;;
+  lab-download)
+    # The services program fetches the packs the first time the silhouettes find none, from a local stand-in of the release
+    # (MU_LAB_ZIP served on the container's loopback; the program checks its SHA-256 as for the real one).
+    fresh "$dir"; zip="${MU_LAB_ZIP:?MU_LAB_ZIP: melee-unlocked content-1 MeleeUnlocked-Lab.zip}"
+    printf '%s\n' "labview 1" > "$dir/settings.ini"
+    mkdir -p "$dir/mirror"; cp "$zip" "$dir/mirror/MeleeUnlocked-Lab.zip"
+    BIN=mu-native-gfx-linux-services run "$dir" 1500 "-e MU_LAB_URL=http://127.0.0.1:8099/MeleeUnlocked-Lab.zip -e MELEE_PRO_AI_TEST_MIRROR=1"
+    rm -rf "$dir/mirror"
+    echo "== lab-download"; show "$dir"
+    echo "packs: $(ls "$dir/Lab" 2>/dev/null | grep -c '\.lab$')"
     ;;
   *) echo "unknown case $c" >&2; exit 2 ;;
   esac

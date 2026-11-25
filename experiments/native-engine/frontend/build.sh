@@ -110,6 +110,20 @@ sync_tree() {
   patch -s -p1 -d "$gen/gfxsrc" < "$here/patches/0127-flicker-scan-on-the-switch.patch"
   for f in flicker_scan.cpp flicker_scan.h; do cmp -s "$gen/gfxsrc/port/runtime/gx/$f" "$gen/gfx/$f" || cp "$gen/gfxsrc/port/runtime/gx/$f" "$gen/gfx/$f"; done
   rm -rf "$gen/gfxsrc"
+  # melee-unlocked's Lab view (lab_view.cpp/.h, GPL-2.0-or-later, src/lab.cpp; drawing after Slippi Lab, MIT) and the earcut it uses
+  # (mapbox, ISC): its host services renamed to src/lab_shim's stand-ins, gx_core.h's frame_in_match taken as it is.
+  mkdir -p "$gen/lab/earcut/mapbox"
+  for f in lab_view.cpp lab_view.h; do
+    perl -pe 's/\r$//; s|#include "test_env.h"|#include "lab_test_env.h"|; s|#include "gx_core.h"|#include "lab_gx.h"|; s|#include "host.h"|#include "lab_host.h"|;
+              s|#include "window.h"|#include "lab_window.h"|; s|#include "../abi/mu_look_snapshot.h"|#include "mu_look_snapshot.h"|;
+              s/host::options\./host::lab_options./g; s/host::ram\b/host::lab_ram/g; s/host::window_picture_aspect\(/host::lab_window_aspect(/g;
+              s/\bgx::Frame\b/labgx::Frame/g; s/\bgx::frame_in_match\b/labgx::frame_in_match/g' "$stage/mu/port/runtime/gx/$f" > "$gen/lab/$f.new"
+    if cmp -s "$gen/lab/$f.new" "$gen/lab/$f"; then rm -f "$gen/lab/$f.new"; else mv "$gen/lab/$f.new" "$gen/lab/$f"; fi
+  done
+  awk '/^inline bool frame_in_match\(const Frame& f\) \{/,/^}/' "$stage/mu/port/runtime/gx/gx_core.h" > "$gen/lab/frame_in_match.inc.new"
+  grep -q "frame_in_match" "$gen/lab/frame_in_match.inc.new" && ! grep -qE '(^|[^a-z])gx::' "$gen/lab/lab_view.cpp" || { echo "sync: the Lab view no longer takes what src/lab_shim gives it" >&2; exit 1; }
+  if cmp -s "$gen/lab/frame_in_match.inc.new" "$gen/lab/frame_in_match.inc"; then rm -f "$gen/lab/frame_in_match.inc.new"; else mv "$gen/lab/frame_in_match.inc.new" "$gen/lab/frame_in_match.inc"; fi
+  cmp -s "$stage/mu/port/third_party/earcut/mapbox/earcut.hpp" "$gen/lab/earcut/mapbox/earcut.hpp" || cp "$stage/mu/port/third_party/earcut/mapbox/earcut.hpp" "$gen/lab/earcut/mapbox/earcut.hpp"
   # melee-unlocked's jukebox (Use custom music, features/audio.cpp), LF line ends, with patches/0118: the app's MusicPacks folder.
   rm -rf "$gen/jukeboxsrc"; mkdir -p "$gen/jukeboxsrc/port/runtime/hle" "$gen/jukebox"
   perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/hle/jukebox.cpp" > "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp"
@@ -146,6 +160,7 @@ sync_tree() {
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0116-gx-looks.patch"   # the looks: owner tokens, look rules, treated textures (src/looks_live.h)
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0120-gx-lcancel-flash-tint.patch"   # the L-cancel flash on the fighter's model (features/overlays.cpp)
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0128-gx-texture-pack-palettes.patch"   # texture packs and dumps for paletted textures (src/gfx_render.cpp)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0129-gx-lab-view-skips-the-scene.patch"   # the 3D scene under a covering Lab view (src/lab.cpp)
   for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds

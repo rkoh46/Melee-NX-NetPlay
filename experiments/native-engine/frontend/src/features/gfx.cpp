@@ -59,11 +59,34 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "ssao") l.ssao.store(to_float(value, 0.0f, 1.0f, 0.0f));
   else if (key == "flickerscan") l.flicker.store(value == "1");
   else if (key == "capture_burst_frames") l.capture_size.store(uint32_t(std::clamp(std::atoi(value.c_str()), 1, 600)));
+  // The Lab view (upstream's keys).
+  else if (key == "labview") l.lab.store(value == "1");
+  else if (key == "labskipscene") l.lab_skip_scene.store(value != "0");
+  else if (key == "look_lab_fighters") l.lab_fighters.store(std::clamp(std::atoi(value.c_str()), 0, 3));
+  else if (key == "look_lab_stage") l.lab_stage.store(std::clamp(std::atoi(value.c_str()), 0, 3));
+  else if (key.rfind("lab_colour_", 0) == 0) {
+    const uint32_t c = value == "-" ? 0u : 0x1000000u | (uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & 0xFFFFFFu);
+    const std::string which = key.substr(11);
+    if (which.size() == 2 && which[0] == 'p' && which[1] >= '1' && which[1] <= '4') l.lab_colour[which[1] - '1'].store(c);
+    else if (which == "background") l.lab_background.store(c);
+    else if (which == "stage") l.lab_stage_colour.store(c);
+    else return false;
+  }
   else return false;
   return true;
 }
 
 void retrace(const Retrace& info) {
+  // The Lab view: the game's look snapshot for lab.cpp while it is on (only then is the game asked for it); once more after
+  // it is switched off, so the view goes off.
+  static bool lab_was_on = false;
+  const bool lab_on = live().lab.load(std::memory_order_relaxed);
+  if (&fe::gfx::lab_retrace && (lab_on || lab_was_on)) {
+    std::string names[4];
+    if (lab_on) overlay_names(names);
+    fe::gfx::lab_retrace(names);
+  }
+  lab_was_on = lab_on;
   // Test aid: MU_CAPTURE_AT=RETRACE[:FRAMES] starts a capture burst at that retrace (verification runs).
   static const char* at = std::getenv("MU_CAPTURE_AT");
   static bool done = false;
@@ -94,6 +117,15 @@ void write_packs(Write w) {
     for (const auto& n : live().packs_off) { if (!joined.empty()) joined += "|"; joined += n; }
   }
   w("texpackoff", joined.empty() ? "-" : joined);
+}
+void write_lab(Write w) {
+  const auto& l = live();
+  w("labview", l.lab.load() ? "1" : "0");
+  w("look_lab_fighters", std::to_string(l.lab_fighters.load()));
+  w("look_lab_stage", std::to_string(l.lab_stage.load()));
+  w("labskipscene", l.lab_skip_scene.load() ? "1" : "0");
+  const auto colour = [](uint32_t c) { if (!c) return std::string("-"); char b[8]; std::snprintf(b, sizeof b, "%06X", c & 0xFFFFFFu); return std::string(b); };
+  for (int i = 0; i < 4; ++i) w((std::string("lab_colour_p") + char('1' + i)).c_str(), colour(l.lab_colour[i].load()));
 }
 }  // namespace
 
@@ -140,6 +172,28 @@ void register_gfx() {
                   [](Write w) { w("dumptextures", live().dump.load() ? "1" : "0"); }});
   add_menu_entry({"Texture packs", "Status",
                   [] { std::lock_guard<std::mutex> lock(live().mutex); return live().status.empty() ? std::string("-") : live().status; }, nullptr, nullptr, nullptr});
+  // Lab view (upstream's VIDEO > Lab view; Ctrl+F3 there).
+  add_menu_entry({"Lab view", "Lab view", [] { return on_off(live().lab.load()); },
+                  [](int) { live().lab.store(!live().lab.load()); }, nullptr, write_lab});
+  add_menu_entry({"Lab view", "  Fighters",
+                  [] { static const char* const n[] = {"Silhouettes (download)", "Stick figures", "Capsules", "Blobs"}; return std::string(n[std::clamp(live().lab_fighters.load(), 0, 3)]); },
+                  [](int d) { live().lab_fighters.store((live().lab_fighters.load() + (d < 0 ? 3 : 1)) % 4); }, nullptr, write_lab});
+  add_menu_entry({"Lab view", "  Stage",
+                  [] { static const char* const n[] = {"As drawn", "Outline", "Blocks", "Hidden"}; return std::string(n[std::clamp(live().lab_stage.load(), 0, 3)]); },
+                  [](int d) { live().lab_stage.store((live().lab_stage.load() + (d < 0 ? 3 : 1)) % 4); }, nullptr, write_lab});
+  add_menu_entry({"Lab view", "  Skip the 3D scene under it", [] { return on_off(live().lab_skip_scene.load()); },
+                  [](int) { live().lab_skip_scene.store(!live().lab_skip_scene.load()); }, nullptr, write_lab});
+  add_menu_entry({"Lab view", "  Player colours",
+                  [] { return std::string(live().lab_colour[0].load() ? "Own" : "The look's"); },
+                  [](int) {
+                    // The look's colours, or the port colours the other looks use (upstream's colour rows, as one switch: no pointer).
+                    static const uint32_t own[4] = {0xFF3838, 0x4873FF, 0xFFD926, 0x40E64D};
+                    const bool on = live().lab_colour[0].load() == 0;
+                    for (int i = 0; i < 4; ++i) live().lab_colour[i].store(on ? 0x1000000u | own[i] : 0u);
+                  }, nullptr, write_lab});
+  add_menu_entry({"Lab view", "  Fighter silhouettes",
+                  [] { return &fe::gfx::lab_status ? fe::gfx::lab_status() : std::string("-"); }, nullptr,
+                  [] { if (&fe::gfx::lab_download) fe::gfx::lab_download(); }, nullptr});
   // Diagnostics (upstream's Ctrl+F2 and --flicker-scan).
   add_menu_entry({"Diagnostics", "Capture frames (starts 3 s after the menu closes)",
                   [] { return std::to_string(live().capture_size.load()) + " frames"; },

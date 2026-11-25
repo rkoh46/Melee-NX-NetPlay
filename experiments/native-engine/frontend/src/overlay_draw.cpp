@@ -659,6 +659,11 @@ void draw_replay(ImDrawList* dl, const replay::View& v, const Rect& g) {
 void overlay_draw(int ww, int wh) {
   note_present();
   gfx::render_frame();
+  // melee-unlocked's Lab view (src/lab.cpp) first, so every overlay lands on top of it (upstream draws it on the background list).
+  if (&gfx::lab_draw && ImGui::GetCurrentContext()) {
+    gfx::lab_draw(ww, wh);
+    fe::looks::live().lab_cover.store(gfx::live().lab_covering.load() && gfx::live().lab_skip_scene.load(), std::memory_order_relaxed);
+  }
   if (!&features::overlay_config || !&features::overlay_snapshot) return;
   if (!ImGui::GetCurrentContext()) return;
   const overlay::Config c = features::overlay_config();

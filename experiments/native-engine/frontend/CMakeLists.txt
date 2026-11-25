@@ -172,6 +172,9 @@ else()
   # (gfx_render.cpp over frontend/patches/0124-0126), melee-unlocked's flicker_scan.cpp (build.sh sync's copy with patches/0127).
   target_sources(mu_gx PRIVATE "${FE}/gfx_render.cpp" "${GEN}/gfx/flicker_scan.cpp")
   target_include_directories(mu_gx PRIVATE "${GEN}/gfx")
+  # melee-unlocked's Lab view (build.sh sync's copy in gen/lab, its host services renamed to src/lab_shim; earcut beside it).
+  target_sources(mu_gx PRIVATE "${FE}/lab.cpp")
+  set_source_files_properties("${FE}/lab.cpp" PROPERTIES INCLUDE_DIRECTORIES "${FE}/lab_shim;${GEN}/lab")
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the

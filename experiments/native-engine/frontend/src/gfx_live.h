@@ -61,6 +61,14 @@ void render_frame();
 void render_end();
 // A texture the renderer decoded itself (paletted textures, patches/0128), dumped as a PNG under its Dolphin name while dumping.
 void dump_texture(const std::string& name, uint32_t width, uint32_t height, const uint8_t* rgba);
+// lab.cpp (builds with a picture; weak for the feature modules): melee-unlocked's Lab view. lab_retrace on the simulation thread
+// once per retrace (the game's look snapshot, only while the view is on), lab_draw on the render thread inside the ImGui frame,
+// the fighter packs' download (services program) and its state for the menu, lab_end before Aurora goes.
+__attribute__((weak)) void lab_retrace(const std::string names[4]);
+__attribute__((weak)) void lab_draw(int window_w, int window_h);
+__attribute__((weak)) void lab_download();
+__attribute__((weak)) std::string lab_status();
+__attribute__((weak)) void lab_end();
 
 // The folder texture packs, dumps, captures, the Lab view's packs, videos and shaders live in: the app's folder
 // (sdmc:/switch/melee-nx-netplay) or the run's output folder off the console.
