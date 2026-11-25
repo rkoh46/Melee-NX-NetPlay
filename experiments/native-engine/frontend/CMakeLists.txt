@@ -39,7 +39,7 @@ if(MU_FE_VARIANT STREQUAL "switch")
   set(MELEE_AURORA_SOURCE "${GFX}/gen/aurora" CACHE PATH "Aurora source (Switch-patched)" FORCE)
   include("${REPO}/switch/cmake/Graphics.cmake")
   set(CMAKE_CXX_STANDARD_LIBRARIES
-    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lzstd -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
+    "-Wl,--start-group -lstdc++ -lsupc++ -lpthread -lnx -lsysbase -lc -lm -lgcc -lunwind -lnx ${MELEE_NVK_ARCHIVES} -ljpeg -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lavformat -lavcodec -lswscale -lswresample -lavutil -ldav1d -lbz2 -lzstd -lz -Wl,--end-group ${MELEE_LIBGCC_DIR}/crtend.o ${MELEE_LIBGCC_DIR}/crtn.o"
     CACHE STRING "" FORCE)
 elseif(MU_FE_VARIANT STREQUAL "linux")
   # The same Dawn revision and Aurora source as the Switch build, for Linux (build.sh deps).
@@ -179,6 +179,25 @@ else()
   # melee-unlocked's Lab view (build.sh sync's copy in gen/lab, its host services renamed to src/lab_shim; earcut beside it).
   target_sources(mu_gx PRIVATE "${FE}/lab.cpp")
   set_source_files_properties("${FE}/lab.cpp" PROPERTIES INCLUDE_DIRECTORIES "${FE}/lab_shim;${GEN}/lab")
+  # Looping menu video backgrounds (video_bg.cpp, the renderer side in patches/0130): melee-unlocked's learning rules and its Linux
+  # FFmpeg reader (port/linux/full/linux_media.cpp) from the fetched tree, on devkitPro's FFmpeg portlib (console) or build.sh
+  # ffmpeg's (Linux). Without FFmpeg the renderer finds none of it (weak) and draws the game's own backgrounds.
+  set(_ffmpeg_linux "${GFX}/ffmpeg-linux")
+  if(MU_FE_VARIANT STREQUAL "switch" OR EXISTS "${_ffmpeg_linux}/lib/libavcodec.a")
+    target_sources(mu_gx PRIVATE "${FE}/video_bg.cpp" "${MU}/port/linux/full/linux_media.cpp")
+    # Renamed: media_decode.cpp (Use custom music) has its own linux_media::decode_audio.
+    set_source_files_properties("${FE}/video_bg.cpp" PROPERTIES INCLUDE_DIRECTORIES "${MU}/port/runtime/gx;${MU}/port/linux" COMPILE_DEFINITIONS "linux_media=linux_media_ffmpeg")
+    set_source_files_properties("${MU}/port/linux/full/linux_media.cpp" PROPERTIES COMPILE_OPTIONS "-std=gnu++17;-w" COMPILE_DEFINITIONS "linux_media=linux_media_ffmpeg")
+    if(MU_FE_VARIANT STREQUAL "linux")
+      target_include_directories(mu_gx SYSTEM PRIVATE "${_ffmpeg_linux}/include")
+      target_link_libraries(mu_gx PUBLIC "${_ffmpeg_linux}/lib/libavformat.a" "${_ffmpeg_linux}/lib/libavcodec.a" "${_ffmpeg_linux}/lib/libswscale.a"
+        "${_ffmpeg_linux}/lib/libswresample.a" "${_ffmpeg_linux}/lib/libavutil.a" z m pthread)
+    endif()
+    target_compile_definitions(mu_gx PRIVATE MU_FE_VIDEO=1)   # gfx_render.cpp keeps video_bg.cpp in the program
+    message(STATUS "menu video backgrounds: on (FFmpeg)")
+  else()
+    message(STATUS "menu video backgrounds: no FFmpeg for this variant (build.sh ffmpeg)")
+  endif()
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the

@@ -11,6 +11,7 @@
 #include "features_internal.h"
 #include "frontend.h"
 #include "gfx_live.h"
+#include "video_bg.h"
 
 #include <algorithm>
 #include <cmath>
@@ -59,6 +60,7 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "ssao") l.ssao.store(to_float(value, 0.0f, 1.0f, 0.0f));
   else if (key == "flickerscan") l.flicker.store(value == "1");
   else if (key == "capture_burst_frames") l.capture_size.store(uint32_t(std::clamp(std::atoi(value.c_str()), 1, 600)));
+  else if (key == "videobackgrounds") l.video_backgrounds.store(value != "0" && value != "");
   // The Lab view (upstream's keys).
   else if (key == "labview") l.lab.store(value == "1");
   else if (key == "labskipscene") l.lab_skip_scene.store(value != "0");
@@ -194,6 +196,16 @@ void register_gfx() {
   add_menu_entry({"Lab view", "  Fighter silhouettes",
                   [] { return &fe::gfx::lab_status ? fe::gfx::lab_status() : std::string("-"); }, nullptr,
                   [] { if (&fe::gfx::lab_download) fe::gfx::lab_download(); }, nullptr});
+  // Looping menu video backgrounds (upstream's VIDEO > Menu video backgrounds): VideoBackgrounds/sss.mp4 (css.mp4: not yet).
+  add_menu_entry({"Menu videos", "Menu video backgrounds", [] { return on_off(live().video_backgrounds.load()); },
+                  [](int) { live().video_backgrounds.store(!live().video_backgrounds.load()); }, nullptr,
+                  [](Write w) { w("videobackgrounds", live().video_backgrounds.load() ? "1" : "0"); }});
+  add_menu_entry({"Menu videos", "  Character select (css.mp4)",
+                  [] { return &fe::video_bg::status ? fe::video_bg::status(0) : std::string("Not in this build"); }, nullptr, nullptr, nullptr});
+  add_menu_entry({"Menu videos", "  Stage select (sss.mp4)",
+                  [] { return &fe::video_bg::status ? fe::video_bg::status(1) : std::string("Not in this build"); }, nullptr, nullptr, nullptr});
+  add_menu_entry({"Menu videos", "  Learn the stage select's background again", nullptr, nullptr,
+                  [] { if (&fe::video_bg::relearn) fe::video_bg::relearn(1); }, nullptr});
   // Diagnostics (upstream's Ctrl+F2 and --flicker-scan).
   add_menu_entry({"Diagnostics", "Capture frames (starts 3 s after the menu closes)",
                   [] { return std::to_string(live().capture_size.load()) + " frames"; },

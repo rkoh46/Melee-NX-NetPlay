@@ -14,6 +14,7 @@
 #             Capsules and Minimal presets; blobs in the player's own colours on a hidden stage)
 #   lab       the Lab view's silhouettes, melee-unlocked's fighter packs in place (MU_LAB_ZIP: its content release's zip)
 #   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
+#   video     menu video backgrounds: a made-up clip as sss.mp4 (needs build.sh ffmpeg)
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
@@ -119,6 +120,30 @@ for c in "${cases[@]}"; do
     rm -rf "$dir/mirror"
     echo "== lab-download"; show "$dir"
     echo "packs: $(ls "$dir/Lab" 2>/dev/null | grep -c '\.lab$')"
+    ;;
+  video)
+    # Looping menu video backgrounds: two made-up clips (a moving colour pattern, MPEG-4 in MP4, made by build.sh ffmpeg's ffmpeg
+    # from frames this script writes) as VideoBackgrounds/css.mp4 and sss.mp4; --auto-vs passes the stage select (its background
+    # learned, then the clip in its place). css.mp4 is left alone (the character select's layer is not in this renderer).
+    fresh "$dir"; mkdir -p "$dir/VideoBackgrounds"; printf '%s\n' "videobackgrounds 1" > "$dir/settings.ini"
+    timeout 600 docker run --rm --name "mnx-gfx2-clips-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      for clip in css:0 sss:1; do name=${clip%%:*}; tint=${clip##*:}
+        python3 -I -c "
+import sys
+w, h = 320, 240
+out = open(\"/tmp/clip.rgb\", \"wb\")
+for f in range(90):
+    row = bytearray()
+    for y in range(h):
+        for x in range(w):
+            r = (x * 2 + f * 6) % 256; g = (y * 3 + f * 4) % 256; b = ((x + y) // 2 + 128 * int(sys.argv[1])) % 256
+            if ((x // 40) + (y // 40) + f // 15) % 2: r, g, b = 255 - r, g, 255 - b
+            row += bytes((r, g, b))
+    out.write(bytes(row))
+" $tint && /f/bin/ffmpeg -loglevel error -f rawvideo -pix_fmt rgb24 -s 320x240 -r 30 -i /tmp/clip.rgb -c:v mpeg4 -q:v 3 -pix_fmt yuv420p /out/VideoBackgrounds/$name.mp4
+      done; ls -la /out/VideoBackgrounds'
+    run "$dir" 1100 ""
+    echo "== video"; grep -hE "^video backgrounds" "$dir/console.log" | head -12
     ;;
   fingerprint)
     # A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp): the Akaneia disc of MU_MODS_DIR must be

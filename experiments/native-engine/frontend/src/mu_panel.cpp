@@ -277,7 +277,7 @@ void place(const std::string& page, int* cat, std::string* title) {
     {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Mods", 7, "Game mods"}, {"Controller setup", 3, "Controller setup"},
     {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}, {"Audio", 1, "Output"}, {"PhobGCC", 3, "PhobGCC (GameCube adapter)"},
     {"Skins", 7, "Choose skins"}, {"Texture packs", 0, "Texture packs"}, {"Diagnostics", 0, "Advanced"},
-    {"Looks", 0, "Looks"}, {"Lab view", 0, "Lab view"}};
+    {"Looks", 0, "Looks"}, {"Lab view", 0, "Lab view"}, {"Menu videos", 0, "Menu video backgrounds"}};
   for (const P& p : table) if (page == p.page) { *cat = p.cat; *title = p.title; return; }
   *cat = 2; *title = page;
 }

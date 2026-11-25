@@ -12,6 +12,7 @@
 #include "gfx_live.h"
 #include "frontend.h"
 #include "flicker_scan.h"        // gen/gfx: melee-unlocked's glitch detector (patches/0127)
+#include "video_bg.h"
 #include "app/game_menu.h"       // host::menu_is_open (patches/0104): a capture asked for from the menu starts after it closes
 
 #include <aurora/aurora.h>
@@ -322,8 +323,18 @@ void render_frame() {
 
 // Render thread, before Aurora shuts down: the loader and the writer finish, the read-back channels close.
 extern const int lab_linked;   // lab.cpp: keeps the Lab view in the program (see there)
+#if MU_FE_VIDEO
+namespace video_anchor { }
+}  // namespace fe::gfx
+namespace fe::video_bg { extern const int linked; }   // video_bg.cpp: keeps it in the program (see there)
+namespace fe::gfx {
+#endif
 void render_end() {
+#if MU_FE_VIDEO
+  if (!fe::video_bg::linked) return;
+#endif
   if (lab_linked && &lab_end) lab_end();
+  if (&fe::video_bg::shutdown) fe::video_bg::shutdown();
   if (packs.applied != ~0u) {
     live().dumped.store(aurora::texture::dumped_texture_count());
     if (live().dump.load()) say("gfx: texture dumps: %llu written this run", (unsigned long long)live().dumped.load());
