@@ -31,6 +31,7 @@
 #   notices  the "Settings" reminder in the menus (screenshot) and the panel's menu sounds (their log lines)
 #   crashreport  "Save crash report" on the home screen: the zip and its companion in Logs/, the account's name and code absent
 #   egg      the character select easter egg (Bailey and Walter), screenshots
+#   rvz      a Dolphin RVZ image in place of the disc: the conversion's progress screen (melee-unlocked's small fixture, slowed down)
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
@@ -114,6 +115,20 @@ for case in "$@"; do
       app=$!
       wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home; tap A; }
       wait $app'
+    ;;
+  rvz)
+    # A Dolphin RVZ image in place of GALE01.iso: the conversion's progress screen (bar, gigabytes, time left) while it writes the
+    # plain image. melee-unlocked's own small RVZ fixture (a made-up GameCube disc, tests/data/rvz) under MU_TEST_RVZ_ANY, slowed
+    # down by MU_TEST_RVZ_SLOW_MS so the screen is seen; the made-up disc then does not boot, which is expected.
+    make_app "$dir" 1 300 -
+    sed -i.bak 's|^iso=.*|iso=/out/disc/GALE01.iso|' "$dir/melee-nx-netplay/launcher.ini"; rm -f "$dir/melee-nx-netplay/launcher.ini.bak"
+    mkdir -p "$dir/disc"; cp "$repo/build/native-engine/mu/port/tests/data/rvz/rvz-zstd.rvz" "$dir/disc/GALE01.rvz"
+    run "$dir" 'export MU_TEST_RVZ_ANY=1 MU_TEST_RVZ_SLOW_MS=700
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "converting the disc: [3-9]0%" 120 && { sleep 0.3; shot rvz-progress; }
+      wait_log /out/console.log "written in" 120; sleep 0.5; kill $app 2>/dev/null; wait $app'
+    echo "image written: $(ls -la "$dir/disc/GALE01.iso" 2>/dev/null | awk '{print $5}') bytes (the fixture's disc is 176185)"
     ;;
   menu)
     # The settings panel in the game (L + R + Start on the main menu), through the test pad file: AUDIO > Volume 100 -> 70 (A, then

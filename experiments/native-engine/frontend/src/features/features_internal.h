@@ -26,6 +26,7 @@ void register_egg();                 // egg_command.cpp: the character select fr
 void register_audio();               // audio.cpp: Audio buffer (Auto, Low latency) and Use custom music (the jukebox)
 void register_gecko();               // gecko.cpp: the player's Gecko codes (GeckoCodes.ini), offline
 void register_phob();                // phob.cpp: PhobGCC settings per adapter port (src/phob_adapter.cpp)
+void register_gfx();                 // gfx.cpp: texture packs, ambient occlusion, frame capture, glitch detector, Lab view (src/gfx_render.cpp)
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -68,6 +69,7 @@ void proai_spar_end();
 
 // overlays.cpp
 bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
+void overlay_names(std::string out[4]);   // the players' Slippi names in an online match (empty otherwise)
 
 // replays.cpp
 bool replay_playing();               // a .slp is being played back
@@ -103,6 +105,7 @@ bool replays_compress_on();
 
 namespace fe {
 bool mods_tmce();                    // the profile holds Training Mode CE's event menu (/tm/eventmenu.dat)
+bool mods_arcade_pack();             // the profile is the 2D-style m-ex build melee-unlocked knows by its fingerprint (mods.cpp)
 std::string mods_fingerprint();      // the replay's "modProfile": empty for the retail files
 }
 

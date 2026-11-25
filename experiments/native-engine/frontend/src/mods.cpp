@@ -28,6 +28,7 @@
 #include "sha256.h"              // this repository, port/runtime/host
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -257,8 +258,42 @@ void append_be32(std::vector<uint8_t>& out, uint32_t v) { out.push_back(uint8_t(
 // fighters' files. rogueMelee: one disc whose id is GALERM (MU_MOD_ROGUE). Melee Maker: one disc whose main.dol
 // carries the supported build id (MU_MOD_MAKER; its bone tables reach the game through command 0xEE, as
 // port/runtime/host/maker_source.h serves them; reimplemented here without that header's dependencies).
+std::string mods_layer_fingerprint(const std::string& iso, std::string* error);   // mod_fingerprint.cpp
 namespace {
-bool tmce = false, akaneia = false, rogue = false, maker = false;
+bool tmce = false, akaneia = false, rogue = false, maker = false, arcade_pack = false;
+// melee-unlocked's known packs by their layer fingerprint (port/app/source_host.cpp kKnownPacks): the 2D-style m-ex build's two
+// versions switch its native camera and HUD codes on (MU_GAME_OPTION2_ARCADE_PACK, offline and in its replays) and the Arcade
+// look's hitboxes and 2D camera; the others confirm the computation.
+struct KnownPack { const char* fingerprint; const char* name; };
+constexpr KnownPack kKnownPacks[] = {
+  {"9a1a48b999a2f8f4deaee2554e5f177cb265666b95676a508406db80b181246b", "Akaneia 1.0.1"},
+  {"23859e58d0f6153bbc9a813f4eac2b3ae1b69e90d5e5a0ef1f57829b1ed588ff", "2D-style build 2.0"},
+  {"59933964cb939eb7e32c05f4b9cdfb332dd12043a3c82ccb9d1f204c7a314891", "2D-style build demo"},
+};
+// The fingerprint reads every file the disc changes; it is kept in mods-cache while the image's size and time are the same.
+std::string cached_fingerprint(const std::string& iso) {
+  struct stat st{};
+  if (stat(iso.c_str(), &st) != 0) return {};
+  const std::string cache = options.out_dir + "/mods-cache/" + base_name(iso) + ".fingerprint";
+  const std::string stamp = std::to_string(uint64_t(st.st_size)) + " " + std::to_string(uint64_t(st.st_mtime));
+  if (FILE* f = std::fopen(cache.c_str(), "r")) {
+    char line[256] = {};
+    const bool got = std::fgets(line, sizeof line, f) != nullptr;
+    std::fclose(f);
+    std::string text = got ? std::string(line) : std::string();
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+    if (text.size() > stamp.size() + 1 && text.compare(0, stamp.size() + 1, stamp + " ") == 0) return text.substr(stamp.size() + 1);
+  }
+  const auto t0 = std::chrono::steady_clock::now();
+  std::string error;
+  const std::string fp = mods_layer_fingerprint(iso, &error);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  if (fp.empty()) { say("mods: %s: no content fingerprint (%s)", iso.c_str(), error.c_str()); return {}; }
+  say("mods: fingerprinted %s in %.1f s", iso.c_str(), seconds);
+  mkdir((options.out_dir + "/mods-cache").c_str(), 0777);
+  if (FILE* f = std::fopen(cache.c_str(), "w")) { std::fprintf(f, "%s %s\n", stamp.c_str(), fp.c_str()); std::fclose(f); }
+  return fp;
+}
 std::string fingerprint;                         // the replay's modProfile: empty for the retail files
 constexpr char kMakerBuild[] = "1.3.8-1865b7";
 struct MakerDol { std::vector<uint8_t> dol; uint32_t offset[18] = {}, address[18] = {}, size[18] = {}; } maker_dol;
@@ -299,6 +334,14 @@ void identify(const std::function<bool(const char*)>& has) {
     if (FILE* disc = std::fopen(isos[0]->path.c_str(), "rb")) { if (std::fread(id, 1, sizeof id, disc) != sizeof id) id[0] = 0; std::fclose(disc); }
     if (std::memcmp(id, "GALERM", sizeof id) == 0) { rogue = true; say("mods: rogueMelee disc found; Rogue Mode runs natively (1-P Mode > Regular Match)"); }
     else if (maker_attach(isos[0]->path)) { maker = true; say("mods: Melee Maker %s disc found; its builds run natively", kMakerBuild); }
+    const std::string fp = cached_fingerprint(isos[0]->path);
+    const KnownPack* known = nullptr;
+    for (const auto& pack : kKnownPacks) if (fp == pack.fingerprint) known = &pack;
+    say("mods: content %s%s%s", fp.substr(0, 16).c_str(), known ? ", recognized as " : "", known ? known->name : "");
+    if (known && std::strncmp(known->name, "2D-style build", 14) == 0) {
+      arcade_pack = true;
+      say("mods: %s found; its camera and HUD codes run natively (offline), with the Arcade look's hitboxes and 2D camera", known->name);
+    }
   }
   // Content identity (metadata key modProfile): what the layers change, not upstream's whole-disc hash (that
   // reads every disc in full); the same profile gives the same identity. Saves alone change no disc file.
@@ -336,6 +379,7 @@ void maker_command(const uint8_t* p, uint32_t n, std::vector<uint8_t>& reply) {
 }  // namespace
 
 bool mods_tmce() { return tmce; }
+bool mods_arcade_pack() { return arcade_pack && !retail_view; }
 std::string mods_fingerprint() { return retail_view ? std::string() : fingerprint; }
 bool mods_te_owned() { return te_owned; }
 bool mods_hackpack() { return pack_loaded; }

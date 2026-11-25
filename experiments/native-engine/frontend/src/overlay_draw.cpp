@@ -20,6 +20,8 @@
 #include "replay_view.h"
 #include "proai/practice_state.h"   // practice_menu_draw (weak)
 #include "host.h"                // shim: gcadapter_status
+#include "gfx_live.h"            // the display wave: texture packs, ambient occlusion, readback, Lab view (gfx_render.cpp)
+#include "video_bg.h"            // load_picture: border art in PNG, JPG or WebP (FFmpeg builds)
 
 #include <aurora/aurora.h>
 #include <aurora/imgui.h>
@@ -84,6 +86,7 @@ uint32_t applied_generation = ~0u;
 bool applied_once = false;
 float applied_aspect = -1.0f;
 int applied_window_h = 0;
+float applied_ssao = -1.0f;
 // Upstream's SSAA (its `ssaa` 2..4: 4x, 9x, 16x): the internal resolution rendered N times per axis and scaled down to the picture.
 // Aurora takes a fractional scale of 640x480; Auto (the display's height) times N when no resolution is chosen.
 float frame_buffer_scale(const overlay::Config& c, int window_h) {
@@ -92,13 +95,14 @@ float frame_buffer_scale(const overlay::Config& c, int window_h) {
 }
 void apply_picture(const overlay::Config& c, int window_h) {
   if (c.ssaa > 1 && window_h != applied_window_h) { applied_window_h = window_h; aurora::window::set_frame_buffer_scale(frame_buffer_scale(c, window_h)); }
-  if (applied_once && c.generation == applied_generation) {
+  const float ssao = gfx::live().ssao.load(std::memory_order_relaxed);
+  if (applied_once && c.generation == applied_generation && ssao == applied_ssao && !gfx::live().picture_dirty.exchange(false)) {
     const float aspect = picture_aspect(c);   // the shape can follow the scene (True widescreen's opening movie)
     if (aspect != applied_aspect) { applied_aspect = aspect; aurora::window::set_frame_buffer_aspect(aspect); }
     return;
   }
-  applied_once = true; applied_generation = c.generation;
-  AuroraPicture p{c.brightness, c.contrast, c.vibrance, c.sharpness, uint32_t(c.crt), c.crt_curve};
+  applied_once = true; applied_generation = c.generation; applied_ssao = ssao;
+  AuroraPicture p{c.brightness, c.contrast, c.vibrance, c.sharpness, uint32_t(c.crt), c.crt_curve, ssao};
   aurora_set_picture(&p);
   applied_aspect = picture_aspect(c);
   aurora::window::set_frame_buffer_aspect(applied_aspect);
@@ -107,6 +111,7 @@ void apply_picture(const overlay::Config& c, int window_h) {
   say("overlay: picture: shape %d (%.3f), internal resolution %s, brightness %.2f, contrast %.2f, vibrance %.2f, sharpening %.2f, CRT %d (curve %.2f), border \"%s\"",
       c.aspect, picture_aspect(c), c.scale ? (std::to_string(640 * c.scale) + "x" + std::to_string(480 * c.scale)).c_str() : "auto",
       c.brightness, c.contrast, c.vibrance, c.sharpness, c.crt, c.crt_curve, c.border.c_str());
+  if (ssao > 0.0f) say("overlay: picture: screen-space ambient occlusion %.2f", ssao);
 }
 
 // ---- border art ----
@@ -119,7 +124,17 @@ const Art& art_for(const std::string& name) {
   const std::string folder = (options.app && !options.base_dir.empty() ? options.base_dir : options.out_dir) + "/Borders/";
   const std::string path = name.find('/') != std::string::npos ? name : folder + name;
   SDL_Surface* loaded = SDL_LoadBMP(path.c_str());
-  if (!loaded) { say("overlay: border art %s: %s (a .bmp in the Borders folder)", path.c_str(), SDL_GetError()); return a; }
+  if (!loaded && &video_bg::load_picture) {
+    // Upstream's other picture formats (PNG, JPG, WebP: its load_picture on FFmpeg), at most 2560 x 1440.
+    std::vector<uint8_t> rgba; uint32_t w = 0, h = 0;
+    if (video_bg::load_picture(path, 2560, 1440, &w, &h, rgba)) {
+      a.w = int(w); a.h = int(h);
+      a.id = aurora_imgui_add_texture(w, h, rgba.data());
+      say("overlay: border art %s, %ux%u", path.c_str(), w, h);
+      return a;
+    }
+  }
+  if (!loaded) { say("overlay: border art %s: %s (a .bmp, .png, .jpg or .webp in the Borders folder)", path.c_str(), SDL_GetError()); return a; }
   SDL_Surface* rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
   SDL_DestroySurface(loaded);
   if (!rgba) { say("overlay: border art %s: %s", path.c_str(), SDL_GetError()); return a; }
@@ -654,6 +669,12 @@ void draw_replay(ImDrawList* dl, const replay::View& v, const Rect& g) {
 // Render thread, inside the frame, before the app's menu and HUD (they are drawn over this).
 void overlay_draw(int ww, int wh) {
   note_present();
+  gfx::render_frame();
+  // melee-unlocked's Lab view (src/lab.cpp) first, so every overlay lands on top of it (upstream draws it on the background list).
+  if (&gfx::lab_draw && ImGui::GetCurrentContext()) {
+    gfx::lab_draw(ww, wh);
+    fe::looks::live().lab_cover.store(gfx::live().lab_covering.load() && gfx::live().lab_skip_scene.load(), std::memory_order_relaxed);
+  }
   if (!&features::overlay_config || !&features::overlay_snapshot) return;
   if (!ImGui::GetCurrentContext()) return;
   const overlay::Config c = features::overlay_config();

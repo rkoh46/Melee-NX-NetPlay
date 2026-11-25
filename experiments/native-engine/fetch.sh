@@ -63,4 +63,15 @@ pinned https://raw.githubusercontent.com/lieff/minimp3/48e3a085f0e1a99446b34614e
 pinned https://raw.githubusercontent.com/nothings/stb/6b5799bae8a1fe3792691ef4b72ae26434c3e799/stb_vorbis.c 97a8febc738e6a29fafc8d8bc557c7f17ad3db7ba6544485f59395cc6008b764
 pinned https://raw.githubusercontent.com/mackron/dr_libs/e381981afa52800b9a3864df548353ff67252fbc/dr_wav.h b36c32661cfbbfb1cc0beb19f7a9d2567065e5a297f64172dcebfff59885f37b
 pinned https://raw.githubusercontent.com/mackron/dr_libs/e381981afa52800b9a3864df548353ff67252fbc/dr_flac.h bd569c910a7c465e481fd50af84e2871e81e2154e30ac510d98f953cc0d5a546
+# FFmpeg for the frontend's Linux test build (menu video backgrounds, frontend/build.sh ffmpeg; the console build uses
+# devkitPro's FFmpeg portlib): its release n7.1 from FFmpeg's own repository, pinned by commit. LGPL-2.1-or-later as built
+# there (no GPL parts enabled). Never committed.
+ff="$work/ffmpeg-src"; ff_commit=b08d7969c550a804a59511c7b83f2dd8cc0499b8
+if [ "$(git -C "$ff" rev-parse HEAD 2>/dev/null)" != "$ff_commit" ]; then
+  rm -rf "$ff"; git clone -q --depth 1 --branch n7.1 https://git.ffmpeg.org/ffmpeg.git "$ff"
+  [ "$(git -C "$ff" rev-parse HEAD)" = "$ff_commit" ] || { echo "fetch: FFmpeg n7.1 is not the pinned commit" >&2; exit 1; }
+  echo "fetch FFmpeg n7.1"
+else
+  echo "have  FFmpeg n7.1"
+fi
 echo "tree: $tree"

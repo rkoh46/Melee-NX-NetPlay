@@ -1,0 +1,50 @@
+Looping menu video backgrounds (Melee-NX-NetPlay 0.4.8): the renderer side of src/video_bg.cpp (melee-unlocked's video_background.cpp rules): the scene each frame, the stage select's learned background texture shown as the video's frame. After 0116, 0120 and 0128.
+--- a/port/runtime/gx/gx_aurora.cpp
++++ b/port/runtime/gx/gx_aurora.cpp
+@@ -28,6 +28,7 @@
+ #include <vector>
+ #include "looks_live.h"   // frontend/src: the looks (patches/0116)
+ #include "gfx_live.h"     // frontend/src: texture packs and their dumps (patches/0128)
++#include "video_bg.h"     // frontend/src: looping menu video backgrounds (patches/0130)
+ #include <aurora/texture.hpp>
+ 
+ namespace gx {
+@@ -179,7 +180,30 @@
+     for (auto& [k, o] : textures) if (o.aliased) aurora::texture::remove_pointer_alias(o.converted.data());   // patches/0128
+     textures.clear(); copy_tokens.clear(); copy_history.clear();
+   }
++  // patches/0130: looping menu video backgrounds (src/video_bg.cpp). The video's newest frame as a texture of the renderer's own,
++  // re-uploaded when the decoder has a new one (its serial is the object's version).
++  TextureObject video_texture;
++  uint64_t video_serial = 0;
++  TextureObject& video_object(const fe::video_bg::Frame& f) {
++    if (f.serial != video_serial || video_texture.converted.size() != f.rgba.size()) {
++      video_serial = f.serial;
++      video_texture.converted = f.rgba;
++      GXInitTexObj(&video_texture.texture, video_texture.converted.data(), uint16_t(f.width), uint16_t(f.height), GX_TF_RGBA8_PC, GX_CLAMP, GX_CLAMP, GX_FALSE);
++      GXInitTexObjLOD(&video_texture.texture, GX_LINEAR, GX_LINEAR, 0.f, 0.f, 0.f, GX_FALSE, GX_FALSE, GX_ANISO_1);
++      GXInitTexObjNoCache(&video_texture.texture, GX_TRUE);   // a new picture in the same buffer: never served from the content cache
++      __GXSetTexObjIdentity(&video_texture.texture, 0x7E000000u ^ uint32_t(f.serial & 0xFFFFFF), uint32_t(f.serial));
++    }
++    video_texture.last_frame = counters.frames;
++    return video_texture;
++  }
+   TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source, uint8_t mark = 0) {
++    // patches/0130: the stage select's learned background texture shows the video (upstream's lookup by the texture's name; here
++    // the name is made from the snapshot's content hash, stable for the same texture).
++    if (!copy_source && &fe::video_bg::wants_texture_names && fe::video_bg::wants_texture_names()) {
++      char name[64];
++      std::snprintf(name, sizeof name, "tex1_%ux%u_%016llx_%u", t.width, t.height, (unsigned long long)t.data->hash, t.format);
++      if (const auto f = fe::video_bg::lookup(name, t.width, t.height)) return video_object(*f);
++    }
+     const bool checker_mode = copy_source && (g_debug & kDebugCopyChecker) && t.width == 256 && t.height == 256;
+     const void* source = checker_mode ? checker_image() : copy_source ? copy_source : t.data->image.data();
+     const uint32_t format = (checker_mode || (copy_source && copies_as_rgba8())) ? 6u : t.format;   // 6 = GX_TF_RGBA8
+@@ -452,6 +476,7 @@
+     // Each draw goes to Aurora as soon as it is converted: Aurora's FIFO thread decodes the frame
+     // while this thread is still converting it (it used to start only after the whole frame was ready).
+     const auto& frame = prepared;
++    if (&fe::video_bg::begin_frame) fe::video_bg::begin_frame(input.scene_major, input.scene_minor);   // patches/0130: the scene
+     const auto emit = [&](size_t command_index) {
+       const auto& cmd = frame.commands[command_index];
+       if (cmd.kind == FrameCommand::Draw) {

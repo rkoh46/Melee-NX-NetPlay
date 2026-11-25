@@ -6,6 +6,7 @@
 #                       patched decoder (patches/0102) and the embedded files
 #   ./build.sh image    the Linux test image (mu-arm-gfx): Xvfb, Mesa's software Vulkan driver, X11 headers
 #   ./build.sh deps     Dawn and SDL3 for aarch64 Linux (test build only), from ref/dawn and ref/SDL-dusklight
+#   ./build.sh ffmpeg   FFmpeg for aarch64 Linux (test build only: menu video backgrounds), from build/native-engine/ffmpeg-src
 #   ./build.sh null     Linux, no graphics device: decoder and frame check   -> out/mu-native-gfx-null
 #   ./build.sh linux    Linux with Aurora on Vulkan (the picture test)       -> out/mu-native-gfx-linux
 #   ./build.sh nro      Horizon                                              -> out/mu-native-gfx.nro
@@ -104,6 +105,26 @@ sync_tree() {
   patch -s -p1 -d "$gen/geckosrc" < "$here/patches/0122-user-gecko-on-the-switch.patch"
   cmp -s "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp" || cp "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp"
   rm -rf "$gen/geckosrc"
+  # The display wave (0.4.8, src/gfx_render.cpp): melee-unlocked's one-frame glitch detector (flicker_scan.cpp/.h) with patches/0127.
+  rm -rf "$gen/gfxsrc"; mkdir -p "$gen/gfxsrc/port/runtime/gx" "$gen/gfx"
+  for f in flicker_scan.cpp flicker_scan.h; do perl -pe 's/\r$//' "$stage/mu/port/runtime/gx/$f" > "$gen/gfxsrc/port/runtime/gx/$f"; done
+  patch -s -p1 -d "$gen/gfxsrc" < "$here/patches/0127-flicker-scan-on-the-switch.patch"
+  for f in flicker_scan.cpp flicker_scan.h; do cmp -s "$gen/gfxsrc/port/runtime/gx/$f" "$gen/gfx/$f" || cp "$gen/gfxsrc/port/runtime/gx/$f" "$gen/gfx/$f"; done
+  rm -rf "$gen/gfxsrc"
+  # melee-unlocked's Lab view (lab_view.cpp/.h, GPL-2.0-or-later, src/lab.cpp; drawing after Slippi Lab, MIT) and the earcut it uses
+  # (mapbox, ISC): its host services renamed to src/lab_shim's stand-ins, gx_core.h's frame_in_match taken as it is.
+  mkdir -p "$gen/lab/earcut/mapbox"
+  for f in lab_view.cpp lab_view.h; do
+    perl -pe 's/\r$//; s|#include "test_env.h"|#include "lab_test_env.h"|; s|#include "gx_core.h"|#include "lab_gx.h"|; s|#include "host.h"|#include "lab_host.h"|;
+              s|#include "window.h"|#include "lab_window.h"|; s|#include "../abi/mu_look_snapshot.h"|#include "mu_look_snapshot.h"|;
+              s/host::options\./host::lab_options./g; s/host::ram\b/host::lab_ram/g; s/host::window_picture_aspect\(/host::lab_window_aspect(/g;
+              s/\bgx::Frame\b/labgx::Frame/g; s/\bgx::frame_in_match\b/labgx::frame_in_match/g' "$stage/mu/port/runtime/gx/$f" > "$gen/lab/$f.new"
+    if cmp -s "$gen/lab/$f.new" "$gen/lab/$f"; then rm -f "$gen/lab/$f.new"; else mv "$gen/lab/$f.new" "$gen/lab/$f"; fi
+  done
+  awk '/^inline bool frame_in_match\(const Frame& f\) \{/,/^}/' "$stage/mu/port/runtime/gx/gx_core.h" > "$gen/lab/frame_in_match.inc.new"
+  grep -q "frame_in_match" "$gen/lab/frame_in_match.inc.new" && ! grep -qE '(^|[^a-z])gx::' "$gen/lab/lab_view.cpp" || { echo "sync: the Lab view no longer takes what src/lab_shim gives it" >&2; exit 1; }
+  if cmp -s "$gen/lab/frame_in_match.inc.new" "$gen/lab/frame_in_match.inc"; then rm -f "$gen/lab/frame_in_match.inc.new"; else mv "$gen/lab/frame_in_match.inc.new" "$gen/lab/frame_in_match.inc"; fi
+  cmp -s "$stage/mu/port/third_party/earcut/mapbox/earcut.hpp" "$gen/lab/earcut/mapbox/earcut.hpp" || cp "$stage/mu/port/third_party/earcut/mapbox/earcut.hpp" "$gen/lab/earcut/mapbox/earcut.hpp"
   # melee-unlocked's jukebox (Use custom music, features/audio.cpp), LF line ends, with patches/0118: the app's MusicPacks folder.
   rm -rf "$gen/jukeboxsrc"; mkdir -p "$gen/jukeboxsrc/port/runtime/hle" "$gen/jukebox"
   perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/hle/jukebox.cpp" > "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp"
@@ -139,6 +160,9 @@ sync_tree() {
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0106-subframe-presentation.patch"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0116-gx-looks.patch"   # the looks: owner tokens, look rules, treated textures (src/looks_live.h)
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0120-gx-lcancel-flash-tint.patch"   # the L-cancel flash on the fighter's model (features/overlays.cpp)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0128-gx-texture-pack-palettes.patch"   # texture packs and dumps for paletted textures (src/gfx_render.cpp)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0129-gx-lab-view-skips-the-scene.patch"   # the 3D scene under a covering Lab view (src/lab.cpp)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0130-gx-video-backgrounds.patch"   # looping menu video backgrounds (src/video_bg.cpp)
   for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
@@ -377,6 +401,25 @@ build_deps() {
     cmake --build $W/sdl-linux --target SDL3-static --parallel $jobs | tail -1"
 }
 
+# FFmpeg for the Linux test build (looping menu video backgrounds and picture border art, src/video_bg.cpp over melee-unlocked's
+# linux_media.cpp): a small static build from the source ../fetch.sh fetched (build/native-engine/ffmpeg-src, release n7.1), only the
+# decoders, demuxers and parsers those need, plus the ffmpeg program with the MPEG-4 encoder the test uses to make its clip. The
+# console build takes devkitPro's FFmpeg portlib instead.
+build_ffmpeg() {
+  [ -f "$src/ffmpeg-src/configure" ] || { echo "run ../fetch.sh first (FFmpeg source)" >&2; exit 1; }
+  dock 3000 "$GFX_IMG" "
+    rm -rf $W/ffmpeg-linux-build; mkdir -p $W/ffmpeg-linux-build; cd $W/ffmpeg-linux-build
+    /w/build/native-engine/ffmpeg-src/configure --prefix=/w/$W/ffmpeg-linux --cc=/usr/local/bin/gcc --cxx=/usr/local/bin/g++ \\
+      --enable-static --disable-shared --enable-pic --disable-doc --disable-network --disable-autodetect --enable-zlib --disable-debug --disable-ffplay --disable-ffprobe \\
+      --disable-everything --enable-avcodec --enable-avformat --enable-avutil --enable-swscale --enable-swresample --enable-avfilter --enable-ffmpeg \\
+      --enable-decoder=h264,hevc,mpeg4,vp8,vp9,png,mjpeg,bmp,webp,rawvideo,aac,mp3,flac,vorbis,pcm_s16le --enable-parser=h264,hevc,mpeg4video,vp8,vp9,png,mjpeg,aac,mpegaudio \\
+      --enable-demuxer=mov,matroska,image2,png_pipe,jpeg_pipe,bmp_pipe,webp_pipe,rawvideo,mp3,flac,ogg,wav --enable-protocol=file,pipe \\
+      --enable-encoder=mpeg4 --enable-muxer=mp4 --enable-filter=scale,format,null,anull,aresample > configure.log 2>&1 || { tail -20 configure.log; exit 1; }
+    make -j$jobs > make.log 2>&1 || { grep -E 'error' -A3 make.log | head -30; exit 1; }
+    make install > install.log 2>&1
+    ls /w/$W/ffmpeg-linux/lib"
+}
+
 build_null() {
   build_net_services_linux
   dock 900 "$LINUX_IMG" "
@@ -427,6 +470,7 @@ case "${1:-all}" in
   sync) sync_tree ;;
   image) build_image ;;
   deps) build_deps ;;
+  ffmpeg) build_ffmpeg ;;
   null) build_null ;;
   linux) build_linux ;;
   nro) build_nro ;;

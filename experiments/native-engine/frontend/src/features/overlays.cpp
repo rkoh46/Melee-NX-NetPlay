@@ -376,6 +376,10 @@ void overlay_snapshot(overlay::Snapshot& out) {
   out = snap;
 }
 bool overlay_draws_training() { return drawn.load(std::memory_order_relaxed); }
+void overlay_names(std::string out[4]) {
+  std::lock_guard<std::mutex> lock(names_mutex);
+  for (int i = 0; i < 4; ++i) out[i] = online() ? names[i] : std::string();
+}
 
 void register_overlays() {
   add_setting(setting);

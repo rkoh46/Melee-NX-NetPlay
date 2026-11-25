@@ -36,6 +36,7 @@
 #include "overlay.h"
 #include "overlay_imgui.h"
 #include "mu_ui.h"
+#include "gfx_live.h"                // the display wave's renderer side (gfx_render.cpp): its threads end before Aurora
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <SDL3/SDL_video.h>
@@ -603,6 +604,9 @@ void* render_main(void*) {
   if (auto* null_backend = dynamic_cast<NullBackend*>(backend.get()))
     if (null_backend->skipped_draws || null_backend->skipped_copies)
       say("picture: the frame check left out %llu draws and %llu texture copies", (unsigned long long)null_backend->skipped_draws, (unsigned long long)null_backend->skipped_copies);
+#if MU_FE_AURORA
+  if (aurora_up) gfx::render_end();
+#endif
   backend.reset();
 #if MU_FE_AURORA
   if (aurora_up) { aurora_flush_caches(); aurora_shutdown(); }

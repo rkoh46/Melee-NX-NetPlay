@@ -1,0 +1,151 @@
+Screen-space ambient occlusion (Melee-NX-NetPlay 0.4.8): AuroraPicture.ssao, melee-unlocked's present-pass occlusion (present_shader.h ao(), GPL-2.0-or-later) from the EFB's depth in the resample pass. After 0109 and 0124.
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -147,6 +147,7 @@
+   float sharpness;    /* 0 off .. 1 contrast-adaptive sharpening */
+   uint32_t crt;       /* 0 off, 1 studio monitor (flat, fine beam, RGB stripes), 2 home television (curved, soft) */
+   float crt_curve;    /* home television's screen curve: 1 as designed, 0 flat .. 3 */
++  float ssao;         /* patches/0125: screen-space ambient occlusion from the EFB's depth, 0 off .. 1 */
+ } AuroraPicture;
+ void aurora_set_picture(const AuroraPicture* picture);
+ /** Keeps the previous frame instead of clearing, for hosts that pause the
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -102,13 +102,14 @@
+   float sharpness = 0.f;
+   uint32_t crt = 0;
+   float crtCurve = 1.f;
++  float ssao = 0.f;   // patches/0125: screen-space ambient occlusion strength, 0 off
+ };
+ 
+ // The host's picture adjustments (aurora_set_picture), set from any thread, read by the render worker.
+ std::mutex g_pictureMutex;
+-AuroraPicture g_picture{1.f, 1.f, 1.f, 0.f, 0, 1.f};
++AuroraPicture g_picture{1.f, 1.f, 1.f, 0.f, 0, 1.f, 0.f};
+ bool picture_neutral(const AuroraPicture& p) noexcept {
+-  return p.brightness == 1.f && p.contrast == 1.f && p.vibrance == 1.f && p.sharpness <= 0.f && p.crt == 0;
++  return p.brightness == 1.f && p.contrast == 1.f && p.vibrance == 1.f && p.sharpness <= 0.f && p.crt == 0 && p.ssao <= 0.f;
+ }
+ 
+ constexpr std::string_view resampleShaderSource = R"(
+@@ -122,6 +123,7 @@
+     sharpness: f32,
+     crt: u32,
+     crt_curve: f32,
++    ssao: f32,
+ };
+ 
+ struct VertexOutput {
+@@ -132,6 +134,8 @@
+ @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+ @group(0) @binding(1) var s: sampler;
+ @group(0) @binding(2) var t: texture_2d<f32>;
++// patches/0125: the EFB's depth for the ambient occlusion (plain or multisampled: create_resample_pipeline sets the type).
++@group(0) @binding(3) var depth_t: DEPTH_TEXTURE_TYPE;
+ 
+ var<private> pos: array<vec2<f32>, 3> = array<vec2<f32>, 3>(
+     vec2(-1.0, 1.0),
+@@ -302,6 +306,35 @@
+     return clamp(g, vec3<f32>(0.0), vec3<f32>(1.0));
+ }
+ 
++// Screen-space ambient occlusion (after melee-unlocked's present_shader.h ao(), GPL-2.0-or-later): contact edges darken where
++// a neighbour two console pixels away is nearer than this pixel. Aurora's depth is reversed (cleared to 0, nearer is larger)
++// and close to 1/distance, so the test is relative (a neighbour 3% nearer) where upstream's has an absolute floor that
++// Aurora's small values never pass; cleared pixels (the sky) are left alone.
++fn ambient_occlusion(uv: vec2<f32>) -> f32 {
++    if (uniforms.ssao <= 0.0) {
++        return 1.0;
++    }
++    let dims = vec2<i32>(textureDimensions(depth_t));
++    let hi = dims - vec2<i32>(1, 1);
++    let centre = clamp(vec2<i32>(uv * vec2<f32>(dims)), vec2<i32>(0, 0), hi);
++    let d = textureLoad(depth_t, centre, 0);
++    if (d <= 0.00001) {
++        return 1.0;
++    }
++    let reach = max(2, (2 * dims.y + 240) / 480);
++    let bias = d * 0.03;
++    var occ = 0.0;
++    for (var k = 0; k < 9; k = k + 1) {
++        if (k == 4) {
++            continue;
++        }
++        let offset = vec2<i32>(k % 3 - 1, k / 3 - 1) * reach;
++        let nd = textureLoad(depth_t, clamp(centre + offset, vec2<i32>(0, 0), hi), 0);
++        occ = occ + select(0.0, 1.0, nd > d + bias);
++    }
++    return clamp(1.0 - occ * 0.125 * uniforms.ssao, 0.0, 1.0);
++}
++
+ // END PICTURE ADJUSTMENTS
+ 
+ @fragment
+@@ -338,6 +371,7 @@
+     if (uniforms.crt == 1u || uniforms.crt == 2u) {
+         rgb = crt_pixel(in.position.xy, uv, uniforms.crt == 2u);
+     }
++    rgb = rgb * ambient_occlusion(uv);
+     rgb = grade(rgb) * face;
+     return vec4(rgb, 1.0);
+ }
+@@ -512,6 +546,7 @@
+   p.sharpness = std::clamp(p.sharpness, 0.f, 1.f);
+   p.crt = p.crt <= 2 ? p.crt : 0;
+   p.crt_curve = std::clamp(p.crt_curve, 0.f, 3.f);
++  p.ssao = std::clamp(p.ssao, 0.f, 1.f);
+   std::lock_guard lock{g_pictureMutex};
+   g_picture = p;
+ }
+@@ -730,7 +765,14 @@
+ 
+ void create_resample_pipeline() {
+   wgpu::ShaderSourceWGSL sourceDescriptor{};
+-  sourceDescriptor.code = resampleShaderSource;
++  // patches/0125: the depth binding's type follows the EFB's sample count (textureLoad reads level or sample 0 alike).
++  std::string resampleCode{resampleShaderSource};
++  {
++    constexpr std::string_view token = "DEPTH_TEXTURE_TYPE";
++    const auto at = resampleCode.find(token);
++    resampleCode.replace(at, token.size(), g_graphicsConfig.msaaSamples > 1 ? "texture_depth_multisampled_2d" : "texture_depth_2d");
++  }
++  sourceDescriptor.code = resampleCode.c_str();
+   const wgpu::ShaderModuleDescriptor moduleDescriptor{
+       .nextInChain = &sourceDescriptor,
+       .label = "Present Resample Module",
+@@ -772,6 +814,16 @@
+                   .viewDimension = wgpu::TextureViewDimension::e2D,
+               },
+       },
++      wgpu::BindGroupLayoutEntry{
++          .binding = 3,
++          .visibility = wgpu::ShaderStage::Fragment,
++          .texture =
++              wgpu::TextureBindingLayout{
++                  .sampleType = wgpu::TextureSampleType::Depth,
++                  .viewDimension = wgpu::TextureViewDimension::e2D,
++                  .multisampled = g_graphicsConfig.msaaSamples > 1,
++              },
++      },
+   };
+   const wgpu::BindGroupLayoutDescriptor bindGroupLayoutDescriptor{
+       .entryCount = bindGroupLayoutEntries.size(),
+@@ -855,6 +907,7 @@
+       .sharpness = picture.sharpness,
+       .crt = picture.crt,
+       .crtCurve = picture.crt_curve,
++      .ssao = g_depthBuffer.view ? picture.ssao : 0.f,
+   };
+   AURORA_ASSERT(gfx::render_worker::is_worker_thread(), "Present resample queue write must run on the render worker");
+   g_queue.WriteBuffer(g_ResampleUniformBuffer, 0, &uniform, sizeof(uniform));
+@@ -872,6 +925,10 @@
+       wgpu::BindGroupEntry{
+           .binding = 2,
+           .textureView = source.view,
++      },
++      wgpu::BindGroupEntry{
++          .binding = 3,
++          .textureView = g_depthBuffer.view,
+       },
+   };
+   const wgpu::BindGroupDescriptor bindGroupDescriptor{

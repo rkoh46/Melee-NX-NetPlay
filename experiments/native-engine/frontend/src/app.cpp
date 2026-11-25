@@ -502,7 +502,12 @@ void window_test_rumble(const std::string& guid) {
 #if MU_FE_RVZ
 #include "disc_rvz.h"
 #endif
+#include <functional>
+#include <thread>
 namespace fe {
+// mu_home.cpp (the services program with a picture): a message with a progress bar while a job runs on its own thread.
+__attribute__((weak)) bool mu_home_progress(const std::string& headline, const std::vector<std::string>& lines,
+                                            const std::function<void(const std::function<void(double, const std::string&)>&)>& job);
 bool app_disc_convert(std::string* iso) {
   const auto exists = [](const std::string& p) { if (FILE* f = std::fopen(p.c_str(), "rb")) { std::fclose(f); return true; } return false; };
 #if MU_FE_RVZ
@@ -544,23 +549,49 @@ bool app_disc_convert(std::string* iso) {
     app_message_screen("DISC IMAGE NOT USABLE", {source, error, "", "Use a clean Melee NTSC 1.02 image (ISO, or RVZ/WIA made by Dolphin), then start the app again."});
     return false;
   }
-  if (!info.gamecube || info.game_id != "GALE01") {
+  // Test aid: MU_TEST_RVZ_ANY=1 converts any GameCube image (the progress screen's test, with upstream's small fixture).
+  static const bool any_disc = std::getenv("MU_TEST_RVZ_ANY") != nullptr;
+  if (!info.gamecube || (info.game_id != "GALE01" && !any_disc)) {
     say("app: %s is %s (%s), not Super Smash Bros. Melee NTSC", source.c_str(), info.game_id.c_str(), info.gamecube ? "GameCube" : "not a GameCube disc");
     app_message_screen("NOT A MELEE DISC", {source, "is " + info.game_id + ", not Super Smash Bros. Melee (GALE01).", "", "Put your Melee NTSC 1.02 image there, then start the app again."});
     return false;
   }
   say("app: converting %s (%s, %s compression, revision %d) into %s (%.2f GB)", source.c_str(), info.format == disc_rvz::Format::Rvz ? "RVZ" : "WIA",
       info.compression.c_str(), info.revision, target.c_str(), double(info.iso_size) / 1e9);
-  app_message_screen("CONVERTING YOUR DISC", {"Your disc image is a Dolphin " + std::string(info.format == disc_rvz::Format::Rvz ? "RVZ" : "WIA") +
-                     " file. The app now writes the plain image it plays from:", target, "",
-                     "This happens once and takes a few minutes on the SD card; the screen stays dark meanwhile.", "The compressed file is left as it was."});
+  const std::string kind = info.format == disc_rvz::Format::Rvz ? "RVZ" : "WIA";
   const auto t0 = std::chrono::steady_clock::now();
   int last_tenth = -1;
-  const bool ok = disc_rvz::convert(source, target, [&](uint64_t done, uint64_t total) {
-    const int tenth = total ? int(done * 10 / total) : 0;
-    if (tenth != last_tenth) { last_tenth = tenth; say("app: converting the disc: %d%%", tenth * 10); }
-    return true;
-  }, &error);
+  bool ok = false;
+  // The conversion on a thread of its own under a progress screen (upstream's launcher shows its progress the same way):
+  // the bar, the gigabytes written and an estimate of the time left. Without the screens (no picture) it runs here.
+  const auto convert = [&](const std::function<void(double, const std::string&)>& report) {
+    ok = disc_rvz::convert(source, target, [&](uint64_t done, uint64_t total) {
+      const int tenth = total ? int(done * 10 / total) : 0;
+      if (tenth != last_tenth) { last_tenth = tenth; say("app: converting the disc: %d%%", tenth * 10); }
+      const double fraction = total ? double(done) / double(total) : 0.0;
+      const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      char text[160], amount[64];
+      if (total >= 1000000000ull) std::snprintf(amount, sizeof amount, "%.2f of %.2f GB", double(done) / 1e9, double(total) / 1e9);
+      else std::snprintf(amount, sizeof amount, "%.1f of %.1f MB", double(done) / 1e6, double(total) / 1e6);
+      if (fraction > 0.02 && seconds > 2.0) {
+        const int left = int((seconds / fraction - seconds) + 0.5);
+        std::snprintf(text, sizeof text, "%d%%: %s written, about %d:%02d left", int(fraction * 100), amount, left / 60, left % 60);
+      } else {
+        std::snprintf(text, sizeof text, "%d%%: %s written", int(fraction * 100), amount);
+      }
+      report(fraction, text);
+      static const int slow_ms = std::getenv("MU_TEST_RVZ_SLOW_MS") ? std::atoi(std::getenv("MU_TEST_RVZ_SLOW_MS")) : 0;   // test aid
+      if (slow_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(slow_ms));
+      return true;
+    }, &error);
+  };
+  const std::vector<std::string> lines = {"Your disc image is a Dolphin " + kind + " file. The app now writes the plain image it plays from:", target, "",
+                                          "This happens once and takes a few minutes on the SD card.", "The compressed file is left as it was."};
+  if (&mu_home_progress && screens_start()) mu_home_progress("CONVERTING YOUR DISC", lines, convert);
+  else {
+    app_message_screen("CONVERTING YOUR DISC", lines);
+    convert([](double, const std::string&) {});
+  }
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   if (!ok) {
     say("app: the conversion failed after %.0f s: %s", seconds, error.c_str());

@@ -1,0 +1,318 @@
+Texture packs (Melee-NX-NetPlay 0.4.8): the host's controls over Aurora's Dolphin-format texture replacement: dumps as PNG in Dolphin's layout, a cache budget for the console, a reload after packs change. After 0108, 0109, 0115.
+--- a/include/aurora/texture.hpp
++++ b/include/aurora/texture.hpp
+@@ -5,6 +5,7 @@
+ #include <filesystem>
+ #include <optional>
+ #include <span>
++#include <string>
+ #include <string_view>
+ #include <variant>
+ #include <vector>
+@@ -96,6 +97,24 @@
+                                   ReplacementOptions options = {});
+ 
+ bool has_replacement(const GXTexObj* obj, const GXTlutObj* tlut = nullptr);
++
++/// patches/0124 (Melee-NX-NetPlay): a host's texture pack controls. Dumps: every texture the game draws written once as a
++/// PNG named in Dolphin's convention into `directory` (on) or nothing (off); takes effect for textures drawn from now on.
++void set_texture_dumps(bool on, const std::filesystem::path& directory);
++uint64_t dumped_texture_count();
++/// The memory the decoded replacements may hold (0: Aurora's default, 4 GB).
++void set_replacement_cache_budget(uint64_t bytes);
++/// Drops the textures already made, so the next frames look their replacements up again (after packs change).
++void reload_textures();
++size_t registered_replacement_count();
++/// The Dolphin-convention file name ("tex1_..._fmt.png") a replacement for this texture (and palette) would have.
++std::string replacement_file_name(const GXTexObj* obj, const GXTlutObj* tlut = nullptr);
++/// A host wrote a dump itself (counted with Aurora's own in dumped_texture_count).
++void count_host_dump();
++/// A host uploads its own RGBA8 copy of a texture (a paletted texture it decoded): `pointer` (that copy's data) then finds the
++/// replacement of the texture it came from (`obj` with `tlut`). False when no pack replaces it. The alias holds until removed.
++bool alias_pointer(const void* pointer, const GXTexObj* obj, const GXTlutObj* tlut = nullptr);
++void remove_pointer_alias(const void* pointer);
+ 
+ } // namespace aurora::texture
+ 
+--- a/lib/gfx/png_io.cpp
++++ b/lib/gfx/png_io.cpp
+@@ -3,7 +3,9 @@
+ #include "../io.hpp"
+ #include "png.h"
+ 
++#include <cstdio>
+ #include <cstring>
++#include <vector>
+ 
+ static aurora::Module Log("aurora::gfx::png");
+ 
+@@ -105,5 +107,41 @@
+     return std::nullopt;
+   }
+   return parse_png_bytes(*bytes);
++}
++
++// patches/0124: a texture dump, as Dolphin writes them (RGBA8 PNG), so a dump can become a Dolphin-format texture pack.
++bool write_png_rgba8(const std::filesystem::path& path, uint32_t width, uint32_t height, ArrayRef<uint8_t> rgba) noexcept {
++  if (width == 0 || height == 0 || rgba.size() < size_t(width) * height * 4) {
++    return false;
++  }
++  FILE* file = std::fopen(io::fs_path_to_string(path).c_str(), "wb");
++  if (!file) {
++    return false;
++  }
++  png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
++  png_infop info = png ? png_create_info_struct(png) : nullptr;
++  if (!png || !info) {
++    png_destroy_write_struct(&png, info ? &info : nullptr);
++    std::fclose(file);
++    return false;
++  }
++  std::vector<png_bytep> rows(height);
++  for (uint32_t y = 0; y < height; ++y) {
++    rows[y] = const_cast<png_bytep>(rgba.data() + size_t(y) * width * 4);
++  }
++  if (setjmp(png_jmpbuf(png))) {
++    png_destroy_write_struct(&png, &info);
++    std::fclose(file);
++    return false;
++  }
++  png_init_io(png, file);
++  png_set_compression_level(png, 1);
++  png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
++               PNG_FILTER_TYPE_DEFAULT);
++  png_write_info(png, info);
++  png_write_image(png, rows.data());
++  png_write_end(png, nullptr);
++  png_destroy_write_struct(&png, &info);
++  return std::fclose(file) == 0;
+ }
+ }
+--- a/lib/gfx/png_io.hpp
++++ b/lib/gfx/png_io.hpp
+@@ -8,4 +8,6 @@
+ namespace aurora::gfx::png {
+ std::optional<ConvertedTexture> parse_png_bytes(ArrayRef<uint8_t> bytes) noexcept;
+ std::optional<ConvertedTexture> load_png_file(const std::filesystem::path& path) noexcept;
++/** Writes RGBA8 pixels (rows tightly packed) as a PNG file (patches/0124: texture dumps in Dolphin's format). */
++bool write_png_rgba8(const std::filesystem::path& path, uint32_t width, uint32_t height, ArrayRef<uint8_t> rgba) noexcept;
+ } // namespace aurora::gfx::png
+--- a/lib/gfx/texture_replacement.cpp
++++ b/lib/gfx/texture_replacement.cpp
+@@ -19,6 +19,7 @@
+ #include <absl/hash/hash.h>
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <array>
+ #include <charconv>
+ #include <chrono>
+@@ -43,6 +44,11 @@
+ constexpr Module Log{"aurora::texture"};
+ 
+ constexpr uint64_t kReplacementCacheBudgetBytes = 4294967296; // 4GB
++// patches/0124: the host's budget (the console has far less memory than 4 GB), its dump folder (PNG in Dolphin's
++// layout, e.g. Dump/Textures/GALE01) and whether misses are reported quietly while dumping.
++std::atomic<uint64_t> s_cacheBudgetBytes{kReplacementCacheBudgetBytes};
++std::filesystem::path s_dumpDirectory;
++std::atomic<uint64_t> s_dumpedCount{0};
+ constexpr uint64_t kReplacementWildcardTextureHash = kWildcardTextureHash;
+ constexpr uint64_t kReplacementWildcardTlutHash = kWildcardTlutHash;
+ 
+@@ -133,6 +139,9 @@
+ 
+ std::mutex s_registryMutex;
+ absl::flat_hash_map<ReplacementKey, std::vector<ReplacementEntry>, ReplacementKeyHash> s_entriesByKey;
++// patches/0124: a host's own RGBA8 upload of a texture (a paletted texture it decoded itself) found under the Dolphin name of
++// the texture it came from: its data pointer -> that texture's source key (alias_pointer, remove_pointer_alias).
++absl::flat_hash_map<const void*, TextureSourceKey> s_pointerAliases;
+ absl::flat_hash_map<ReplacementKey, SelectedCache, ReplacementKeyHash> s_cacheByKey;
+ absl::flat_hash_set<uint64_t> s_failedIds;
+ absl::flat_hash_set<TextureSourceKey, SourceKeyHash> s_reportedMisses;
+@@ -1034,7 +1043,7 @@
+ }
+ 
+ void evict_replacement_cache_if_needed() noexcept {
+-  while (s_replacementCacheBytes > kReplacementCacheBudgetBytes && !s_replacementLru.empty()) {
++  while (s_replacementCacheBytes > s_cacheBudgetBytes.load(std::memory_order_relaxed) && !s_replacementLru.empty()) {
+     const auto key = s_replacementLru.back();
+     const auto cache = s_cacheByKey.find(key);
+     const uint64_t id = cache == s_cacheByKey.end() ? 0 : cache->second.id;
+@@ -1188,14 +1197,14 @@
+   return gfx::texture_replacement::ReplacementResult{.handle = std::move(handle), .id = entry->id};
+ }
+ 
+-bool dump_editable_texture_dds(const TextureSourceKey& key, const GXTexObj_& obj) noexcept {
++bool dump_editable_texture_dds(const TextureSourceKey& key, const GXTexObj_& obj, const GXTlutObj_* drawnTlut = nullptr) noexcept {
+   const ArrayRef texData{static_cast<const uint8_t*>(obj.data), UINT32_MAX};
+   const uint32_t texWidth = obj.width();
+   const uint32_t texHeight = obj.height();
+ 
+   gfx::ConvertedTexture pixels;
+   if (gx::is_palette_format(obj.format())) {
+-    const GXTlutObj_* tlut = get_loaded_tlut(obj);
++    const GXTlutObj_* tlut = drawnTlut != nullptr ? drawnTlut : get_loaded_tlut(obj);
+     if (tlut == nullptr) {
+       return false;
+     }
+@@ -1210,15 +1219,39 @@
+     return false;
+   }
+ 
++  if (!s_dumpDirectory.empty()) {
++    // patches/0124: Dolphin's dump, a PNG named like the replacement it would be. A host's own RGBA8 uploads (pictures it
++    // decoded or treated itself) have no Dolphin name: the host dumps those under the name of the texture they came from.
++    if (obj.format() == GX_TF_RGBA8_PC) {
++      return false;
++    }
++    auto name = format_replacement_filename(key);
++    name.replace(name.size() - 4, 4, ".png");
++    const auto path = s_dumpDirectory / name;
++    std::error_code ec;
++    if (std::filesystem::exists(path, ec)) {
++      return true;
++    }
++    const bool ok = gfx::png::write_png_rgba8(path, texWidth, texHeight, {pixels.data.data(), pixels.data.size()});
++    if (ok) {
++      s_dumpedCount.fetch_add(1, std::memory_order_relaxed);
++    }
++    return ok;
++  }
+   const auto dumpRoot = io::fs_path_from_string(g_config.cachePath) / "texture_dumps";
+   const auto path = dumpRoot / format_replacement_filename(key);
+   return gfx::dds::write_rgba8_dds(path, texWidth, texHeight, pixels.data);
+ }
+ 
+-bool report_missing_key(const TextureSourceKey& key, const GXTexObj_& obj) noexcept {
++bool report_missing_key(const TextureSourceKey& key, const GXTexObj_& obj, const GXTlutObj_* tlut = nullptr) noexcept {
+   if (!s_reportedMisses.insert(key).second) {
+     return false;
+   }
++  if (!s_dumpDirectory.empty() && g_config.allowTextureDumps) {
++    // patches/0124: a host's dump mode writes every texture once and says nothing per texture.
++    dump_editable_texture_dds(key, obj, tlut);
++    return true;
++  }
+ 
+   Log.warn("texture_replacement: missing runtime key {}", format_source_key_for_log(key));
+ 
+@@ -1688,6 +1721,52 @@
+   group = load_replacement_directory(root, options);
+ }
+ 
++// patches/0124: the host's texture pack controls.
++void set_texture_dumps(bool on, const std::filesystem::path& directory) {
++  std::lock_guard lk(s_registryMutex);
++  s_dumpDirectory = on ? directory : std::filesystem::path{};
++  if (on && !directory.empty()) {
++    std::error_code ec;
++    std::filesystem::create_directories(directory, ec);
++  }
++  g_config.allowTextureDumps = on;
++  s_reportedMisses.clear();
++}
++uint64_t dumped_texture_count() { return s_dumpedCount.load(std::memory_order_relaxed); }
++void set_replacement_cache_budget(uint64_t bytes) {
++  s_cacheBudgetBytes.store(bytes ? bytes : kReplacementCacheBudgetBytes, std::memory_order_relaxed);
++}
++void reload_textures() {
++  gx::clear_static_texture_cache();
++  gx::texture::invalidate_bindings();
++}
++size_t registered_replacement_count() {
++  std::lock_guard lk(s_registryMutex);
++  return s_sourceEntryCount;
++}
++std::string replacement_file_name(const GXTexObj* obj, const GXTlutObj* tlut) {
++  const auto* obj_ = reinterpret_cast<const GXTexObj_*>(obj);
++  const auto key = tlut != nullptr ? build_source_key(*obj_, *reinterpret_cast<const GXTlutObj_*>(tlut)) : build_source_key(*obj_);
++  auto name = format_replacement_filename(key);
++  name.replace(name.size() - 4, 4, ".png");
++  return name;
++}
++void count_host_dump() { s_dumpedCount.fetch_add(1, std::memory_order_relaxed); }
++bool alias_pointer(const void* pointer, const GXTexObj* obj, const GXTlutObj* tlut) {
++  const auto* obj_ = reinterpret_cast<const GXTexObj_*>(obj);
++  const auto key = tlut != nullptr ? build_source_key(*obj_, *reinterpret_cast<const GXTlutObj_*>(tlut)) : build_source_key(*obj_);
++  std::lock_guard lk(s_registryMutex);
++  if (pointer == nullptr || s_sourceEntryCount == 0 || !find_source_replacement_key_locked(key).has_value()) {
++    return false;
++  }
++  s_pointerAliases[pointer] = key;
++  return true;
++}
++void remove_pointer_alias(const void* pointer) {
++  std::lock_guard lk(s_registryMutex);
++  s_pointerAliases.erase(pointer);
++}
++
+ bool has_replacement(const GXTexObj* obj, const GXTlutObj* tlut) {
+   const auto* obj_ = reinterpret_cast<const GXTexObj_*>(obj);
+   if (tlut != nullptr) {
+@@ -1808,12 +1887,12 @@
+ }
+ 
+ std::optional<ReplacementResult> find_source_replacement_locked(const GXTexObj_& obj,
+-                                                                const TextureSourceKey& sourceKey) noexcept {
++                                                                const TextureSourceKey& sourceKey, const GXTlutObj_* tlut = nullptr) noexcept {
+   const auto replacementKey = find_source_replacement_key_locked(sourceKey);
+   if (!replacementKey.has_value()) {
+     const bool alwaysReportMissingKey = false; // Enable for debugging
+     if (g_config.allowTextureDumps || alwaysReportMissingKey) {
+-      report_missing_key(sourceKey, obj);
++      report_missing_key(sourceKey, obj, tlut);
+     }
+     return std::nullopt;
+   }
+@@ -1830,19 +1909,24 @@
+   std::lock_guard lk(s_registryMutex);
+   ReplacementKey pointerKey{TexturePointerKey{.data = obj.data}};
+   if (!s_entriesByKey.contains(pointerKey)) {
++    if (const auto alias = s_pointerAliases.find(obj.data); alias != s_pointerAliases.end()) {   // patches/0124
++      if (const auto key = find_source_replacement_key_locked(alias->second); key.has_value()) {
++        return find_replacement_for_key_locked(*key);
++      }
++    }
+     return std::nullopt;
+   }
+   return find_replacement_for_key_locked(pointerKey);
+ }
+ 
+ std::optional<ReplacementResult> find_source_replacement(const GXTexObj_& obj,
+-                                                         const TextureSourceKey& sourceKey) noexcept {
++                                                         const TextureSourceKey& sourceKey, const GXTlutObj_* tlut) noexcept {
+   ZoneScoped;
+   std::lock_guard lk(s_registryMutex);
+   if (s_sourceEntryCount == 0 && !g_config.allowTextureDumps) {
+     return std::nullopt;
+   }
+-  return find_source_replacement_locked(obj, sourceKey);
++  return find_source_replacement_locked(obj, sourceKey, tlut);
+ }
+ 
+ bool should_build_source_key() noexcept {
+--- a/lib/gfx/texture_replacement.hpp
++++ b/lib/gfx/texture_replacement.hpp
+@@ -19,8 +19,10 @@
+ void shutdown() noexcept;
+ StreamingStats process_streaming() noexcept;
+ std::optional<ReplacementResult> find_pointer_replacement(const GXTexObj_& obj) noexcept;
++// patches/0124: `tlut` is the palette a palette texture is drawn with (its dump needs it).
+ std::optional<ReplacementResult> find_source_replacement(const GXTexObj_& obj,
+-                                                         const texture::TextureSourceKey& sourceKey) noexcept;
++                                                         const texture::TextureSourceKey& sourceKey,
++                                                         const GXTlutObj_* tlut = nullptr) noexcept;
+ bool should_build_source_key() noexcept;
+ bool has_replacement(const GXTexObj_& obj) noexcept;
+ bool has_replacement(const GXTexObj_& obj, const GXTlutObj_& tlut) noexcept;
+--- a/lib/gx/texture.cpp
++++ b/lib/gx/texture.cpp
+@@ -722,7 +722,7 @@
+   if (!use_replacement(gfx::texture_replacement::find_pointer_replacement(obj), handle, replacementId)) {
+     keys = hash_texture_source(obj, &tlut, gfx::texture_replacement::should_build_source_key());
+     if (keys->sourceKey.has_value()) {
+-      use_replacement(gfx::texture_replacement::find_source_replacement(obj, *keys->sourceKey), handle, replacementId);
++      use_replacement(gfx::texture_replacement::find_source_replacement(obj, *keys->sourceKey, &tlut), handle, replacementId);
+     }
+   }
+   if (!handle) {

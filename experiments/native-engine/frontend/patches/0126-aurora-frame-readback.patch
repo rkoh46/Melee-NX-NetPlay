@@ -1,0 +1,260 @@
+Frame readback (Melee-NX-NetPlay 0.4.8): aurora_set_frame_readback, the presented game picture read back per channel at a chosen size for the host's frame capture burst and one-frame glitch detector. After 0109 and 0125.
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -150,6 +150,13 @@
+   float ssao;         /* patches/0125: screen-space ambient occlusion from the EFB's depth, 0 off .. 1 */
+ } AuroraPicture;
+ void aurora_set_picture(const AuroraPicture* picture);
++/** patches/0126: the presented game picture (before the ImGui layer) read back each presented frame while `callback` is set,
++ *  scaled to width x height (0: the picture's own size). `callback` gets RGBA8 rows, tightly packed, a frame or two later,
++ *  on whichever thread completes the GPU mapping; it must copy what it needs and return. Null turns the channel off. */
++#define AURORA_READBACK_CHANNELS 2
++typedef void (*AuroraReadbackCallback)(void* user, uint64_t frame, uint32_t width, uint32_t height, const uint8_t* rgba);
++void aurora_set_frame_readback(uint32_t channel, uint32_t width, uint32_t height, AuroraReadbackCallback callback, void* user);
++uint64_t aurora_frame_readback_dropped();   /* frames a channel missed because every buffer was still in flight */
+ /** Keeps the previous frame instead of clearing, for hosts that pause the
+  *  game: with nothing drawing, a cleared framebuffer presents as black. */
+ void aurora_preserve_frame_buffer(bool preserve);
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -1,6 +1,9 @@
+ #include <aurora/aurora.h>
+ #include <aurora/time.hpp>
++#include <array>
+ #include <cmath>
++#include <mutex>
++#include <vector>
+ #if defined(__SWITCH__)
+ #include "perf_switch.h"
+ #endif
+@@ -65,6 +68,168 @@
+   const auto scissorBottom = clamp_scissor_coord(std::ceil(viewport.top + viewport.height), surfaceHeight);
+   pass.SetScissorRect(scissorX, scissorY, scissorRight - scissorX, scissorBottom - scissorY);
+ }
++
++// patches/0126: the presented game picture (what the present pass shows, before the ImGui layer) read back for a host:
++// frame captures and the one-frame glitch detector. Each channel renders the picture into its own texture at the size it
++// asked for (the copy pipeline's bilinear sample), copies it into a mappable buffer and hands the pixels over a frame or
++// two later, from whichever thread Dawn completes the mapping on. Nothing is read back while no channel is set.
++struct ReadbackChannel {
++  uint32_t width = 0, height = 0;
++  AuroraReadbackCallback callback = nullptr;
++  void* user = nullptr;
++  webgpu::TextureWithSampler target;
++};
++struct ReadbackSlot {
++  wgpu::Buffer buffer;
++  uint64_t size = 0;
++  uint32_t width = 0, height = 0, rowBytes = 0;
++  int state = 0;   // 0 free, 1 copy encoded, 2 mapping
++  uint64_t frame = 0;
++  AuroraReadbackCallback callback = nullptr;
++  void* user = nullptr;
++  bool bgra = false;
++};
++std::mutex g_readbackMutex;
++std::array<ReadbackChannel, AURORA_READBACK_CHANNELS> g_readbackChannels;
++std::array<ReadbackSlot, 8> g_readbackSlots;
++uint64_t g_readbackFrame = 0, g_readbackDropped = 0;
++
++void encode_readbacks(const wgpu::CommandEncoder& encoder, const wgpu::BindGroup& source, uint32_t sourceWidth,
++                      uint32_t sourceHeight) {
++  std::lock_guard lock{g_readbackMutex};
++  ++g_readbackFrame;
++  const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
++  const bool bgra = format == wgpu::TextureFormat::BGRA8Unorm || format == wgpu::TextureFormat::BGRA8UnormSrgb;
++  for (auto& channel : g_readbackChannels) {
++    if (!channel.callback) {
++      continue;
++    }
++    const uint32_t width = channel.width ? channel.width : sourceWidth;
++    const uint32_t height = channel.height ? channel.height : sourceHeight;
++    if (width == 0 || height == 0) {
++      continue;
++    }
++    ReadbackSlot* slot = nullptr;
++    for (auto& candidate : g_readbackSlots) {
++      if (candidate.state == 0) {
++        slot = &candidate;
++        break;
++      }
++    }
++    if (slot == nullptr) {
++      ++g_readbackDropped;
++      continue;
++    }
++    if (!channel.target.texture || channel.target.size.width != width || channel.target.size.height != height) {
++      channel.target = webgpu::create_render_texture(width, height, false);
++    }
++    {
++      const std::array attachments{wgpu::RenderPassColorAttachment{
++          .view = channel.target.view,
++          .loadOp = wgpu::LoadOp::Clear,
++          .storeOp = wgpu::StoreOp::Store,
++      }};
++      const wgpu::RenderPassDescriptor descriptor{
++          .label = "Readback render pass",
++          .colorAttachmentCount = attachments.size(),
++          .colorAttachments = attachments.data(),
++      };
++      const auto pass = encoder.BeginRenderPass(&descriptor);
++      pass.SetPipeline(webgpu::g_CopyPipeline);
++      pass.SetBindGroup(0, source, 0, nullptr);
++      pass.SetViewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height), 0.f, 1.f);
++      pass.Draw(3);
++      pass.End();
++    }
++    const uint32_t rowBytes = (width * 4 + 255) & ~255u;
++    const uint64_t size = static_cast<uint64_t>(rowBytes) * height;
++    if (!slot->buffer || slot->size != size) {
++      const wgpu::BufferDescriptor bufferDescriptor{
++          .label = "Readback buffer",
++          .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst,
++          .size = size,
++      };
++      slot->buffer = g_device.CreateBuffer(&bufferDescriptor);
++      slot->size = size;
++    }
++    const wgpu::TexelCopyTextureInfo src{.texture = channel.target.texture};
++    const wgpu::TexelCopyBufferInfo dst{
++        .layout = {.offset = 0, .bytesPerRow = rowBytes, .rowsPerImage = height},
++        .buffer = slot->buffer,
++    };
++    const wgpu::Extent3D extent{.width = width, .height = height, .depthOrArrayLayers = 1};
++    encoder.CopyTextureToBuffer(&src, &dst, &extent);
++    slot->width = width;
++    slot->height = height;
++    slot->rowBytes = rowBytes;
++    slot->frame = g_readbackFrame;
++    slot->callback = channel.callback;
++    slot->user = channel.user;
++    slot->bgra = bgra;
++    slot->state = 1;
++  }
++}
++
++void complete_readback(size_t index, wgpu::MapAsyncStatus status) {
++  ReadbackSlot copy;
++  {
++    std::lock_guard lock{g_readbackMutex};
++    copy = g_readbackSlots[index];
++  }
++  std::vector<uint8_t> pixels;
++  if (status == wgpu::MapAsyncStatus::Success && copy.buffer) {
++    const auto* mapped = static_cast<const uint8_t*>(copy.buffer.GetConstMappedRange(0, copy.size));
++    if (mapped != nullptr) {
++      pixels.resize(static_cast<size_t>(copy.width) * copy.height * 4);
++      for (uint32_t y = 0; y < copy.height; ++y) {
++        const uint8_t* row = mapped + static_cast<size_t>(y) * copy.rowBytes;
++        uint8_t* out = pixels.data() + static_cast<size_t>(y) * copy.width * 4;
++        if (copy.bgra) {
++          for (uint32_t x = 0; x < copy.width; ++x) {
++            out[x * 4 + 0] = row[x * 4 + 2];
++            out[x * 4 + 1] = row[x * 4 + 1];
++            out[x * 4 + 2] = row[x * 4 + 0];
++            out[x * 4 + 3] = 255;
++          }
++        } else {
++          for (uint32_t x = 0; x < copy.width; ++x) {
++            out[x * 4 + 0] = row[x * 4 + 0];
++            out[x * 4 + 1] = row[x * 4 + 1];
++            out[x * 4 + 2] = row[x * 4 + 2];
++            out[x * 4 + 3] = 255;
++          }
++        }
++      }
++    }
++    copy.buffer.Unmap();
++  }
++  {
++    std::lock_guard lock{g_readbackMutex};
++    g_readbackSlots[index].state = 0;
++  }
++  if (!pixels.empty() && copy.callback) {
++    copy.callback(copy.user, copy.frame, copy.width, copy.height, pixels.data());
++  }
++}
++
++void map_readbacks() {
++  std::vector<std::pair<size_t, wgpu::Buffer>> pending;
++  {
++    std::lock_guard lock{g_readbackMutex};
++    for (size_t i = 0; i < g_readbackSlots.size(); ++i) {
++      auto& slot = g_readbackSlots[i];
++      if (slot.state != 1) {
++        continue;
++      }
++      slot.state = 2;
++      pending.emplace_back(i, slot.buffer);
++    }
++  }
++  for (auto& [index, buffer] : pending) {
++    buffer.MapAsync(wgpu::MapMode::Read, 0, wgpu::kWholeMapSize, wgpu::CallbackMode::AllowSpontaneous,
++                    [index](wgpu::MapAsyncStatus status, wgpu::StringView) { complete_readback(index, status); });
++  }
++}
+ #endif
+ 
+ #ifdef AURORA_ENABLE_GX
+@@ -216,6 +381,11 @@
+ #ifdef AURORA_ENABLE_GX
+   gx::fifo::shutdown();
+   gfx::render_worker::synchronize();
++  {   // patches/0126: the readback textures and buffers go before the device
++    std::lock_guard lock{g_readbackMutex};
++    for (auto& channel : g_readbackChannels) channel = {};
++    for (auto& slot : g_readbackSlots) slot = {};
++  }
+ #ifdef AURORA_ENABLE_RMLUI
+   rmlui::shutdown();
+ #endif
+@@ -367,6 +537,7 @@
+         const auto& resampledSource = webgpu::resample_present_source(encoder, viewport);
+         presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
+       }
++      encode_readbacks(encoder, presentBindGroup, static_cast<uint32_t>(viewport.width), static_cast<uint32_t>(viewport.height));
+       {
+         const std::array attachments{
+             wgpu::RenderPassColorAttachment{
+@@ -418,6 +589,7 @@
+     renderStep(2);
+ #endif
+     webgpu::gpu_prof::after_submit();
++    map_readbacks();
+     if (canPresent && g_surface) {
+       ZoneScopedN("Present");
+       /* Our pinned Dawn revision (chosen for proven Switch/NVK compatibility --
+@@ -548,6 +720,33 @@
+   if (picture) aurora::webgpu::set_picture(*picture);
+ #else
+   (void)picture;
++#endif
++}
++void aurora_set_frame_readback(uint32_t channel, uint32_t width, uint32_t height, AuroraReadbackCallback callback,
++                               void* user) {
++#ifdef AURORA_ENABLE_GX
++  if (channel >= AURORA_READBACK_CHANNELS) {
++    return;
++  }
++  std::lock_guard lock{aurora::g_readbackMutex};
++  auto& c = aurora::g_readbackChannels[channel];
++  c.width = width;
++  c.height = height;
++  c.callback = callback;
++  c.user = user;
++  if (!callback) {
++    c.target = {};
++  }
++#else
++  (void)channel; (void)width; (void)height; (void)callback; (void)user;
++#endif
++}
++uint64_t aurora_frame_readback_dropped() {
++#ifdef AURORA_ENABLE_GX
++  std::lock_guard lock{aurora::g_readbackMutex};
++  return aurora::g_readbackDropped;
++#else
++  return 0;
+ #endif
+ }
+ void aurora_preserve_frame_buffer(bool preserve) {
