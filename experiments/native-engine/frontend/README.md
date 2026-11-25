@@ -772,6 +772,52 @@ Onett's from the playlist folder `onetto+onetto2/`).
 - **Supersampling** (`ssaa 2..4`, upstream's key; the Picture page): the internal resolution rendered 2 to 4 times per axis and
   scaled down (4x, 9x, 16x SSAA); off by default, heavy on the console's GPU.
 
+### Graphics: texture packs, ambient occlusion, the Lab view, menu videos, captures (0.4.8)
+
+Every option here is display only and off by default, as melee-unlocked ships it; none of it reaches game memory, so the
+reference scripts, replays and online play are the same with any of it on. The settings module is `src/features/gfx.cpp`
+(settings.ini keys, the menu rows), the renderer side `src/gfx_render.cpp` (render thread, called from `overlay_draw.cpp`), the
+shared state `src/gfx_live.h`.
+
+| settings.ini (upstream's keys) | |
+|---|---|
+| `customtextures 1`, `texpackoff NAME\|NAME`, `dumptextures 1` | Dolphin-format texture packs from `Load/Textures/GALE01` and `TexturePacks` (each folder a pack), dumps as PNG into `Dump/Textures/GALE01` (VIDEO > Texture packs) |
+| `ssao 0..1` | screen-space ambient occlusion in the present pass (VIDEO > Picture) |
+| `labview 1`, `look_lab_fighters 0..3`, `look_lab_stage 0..3`, `lab_colour_p1..p4 RRGGBB`, `labskipscene 0/1` | melee-unlocked's Lab view; `look 12`, `13`, `14` are Stick Figures, Capsules and Minimal (VIDEO > Lab view, Looks) |
+| `videobackgrounds 1` | `VideoBackgrounds/sss.mp4` in place of the stage select's background (VIDEO > Menu video backgrounds) |
+| `capture_burst_frames N`, `flickerscan 1` | the capture burst's length (VIDEO > Advanced, "Capture frames": 3 s after the menu closes, into `capture/burst-N/`) and the one-frame glitch detector (`flicker/`, the log's `flicker:` lines) |
+
+| Path | What it is |
+|---|---|
+| `patches/0124-aurora-texture-packs.patch` | Aurora's Dolphin-format replacement for a host: PNG dumps in Dolphin's layout, a decoded-cache budget, a reload, the Dolphin name of a texture, pointer aliases (a decoded copy found under its source texture's name) |
+| `patches/0125-aurora-ssao.patch` | `AuroraPicture.ssao`: the occlusion from the EFB's depth in the resample pass |
+| `patches/0126-aurora-frame-readback.patch` | `aurora_set_frame_readback`: the presented game picture read back per channel at a chosen size |
+| `patches/0127-flicker-scan-on-the-switch.patch` | melee-unlocked's flicker_scan.cpp off Windows (build-time copy in gen/gfx) |
+| `patches/0128-gx-texture-pack-palettes.patch` | gx_aurora.cpp: paletted textures it decodes itself tied to their Dolphin name, and dumped under it |
+| `patches/0129-gx-lab-view-skips-the-scene.patch` | the bridge skips the world's draws under a covering Lab view |
+| `patches/0130-gx-video-backgrounds.patch` | gx_aurora.cpp: the scene for `src/video_bg.cpp`, the stage select's learned background texture shown as the video |
+| `src/lab.cpp`, `src/lab_shim/` | melee-unlocked's lab_view.cpp compiled from the fetched tree over small stand-ins; the game image's look snapshot; the silhouette packs' download (services program, SHA-256 checked) |
+| `src/video_bg.cpp`, `src/video_bg.h` | the menu video backgrounds over melee-unlocked's learning rules and its linux_media.cpp (FFmpeg) |
+| `src/mod_fingerprint.cpp` | a mod disc's content fingerprint as melee-unlocked computes it (the 2D-style m-ex build's recognition, mods.cpp) |
+| `test-gfx-linux.sh` | the cases below, with screenshots in `build/native-engine-gfx/run-gfx/<case>/shots` |
+
+FFmpeg: the console build links devkitPro's FFmpeg portlib; the Linux test build needs `./build.sh ffmpeg` once (FFmpeg n7.1, fetched
+by `../fetch.sh` from FFmpeg's own repository, LGPL-2.1-or-later as configured there); without it the Linux build simply has no menu
+videos.
+
+```sh
+./test-gfx-linux.sh DISC textures textures-same ssao capture flicker lab-stick lab-capsules lab-minimal lab-blobs video
+MU_LAB_ZIP=/path/to/MeleeUnlocked-Lab.zip ./test-gfx-linux.sh DISC lab lab-download   # melee-unlocked's content release zip
+MU_MODS_DIR=/path/to/mods ./test-gfx-linux.sh DISC fingerprint                          # the Akaneia disc: "recognized as Akaneia 1.0.1"
+./test-app-linux.sh DISC rvz                                                             # the RVZ conversion's progress screen
+```
+
+On the console: put a pack folder in `sdmc:/switch/melee-nx-netplay/TexturePacks/`, switch VIDEO > Texture packs > Custom
+textures on and check a match; turn VIDEO > Lab view on in a match (the first time it downloads the silhouettes, about 85 MB, in the
+app); put an MP4 (at most 1280x720) as `VideoBackgrounds/sss.mp4`, switch Menu video backgrounds on, and visit the stage select for a
+few seconds; VIDEO > Advanced > Capture frames, close the menu, and look in `capture/`. Frame times with each on are what to note:
+none of these has been measured on the console's GPU.
+
 ## melee-unlocked's interface
 
 The app's in-game menu and its screens before the game are melee-unlocked's own (v1.0.5), as faithfully as the console
@@ -1154,7 +1200,13 @@ under GPL-3.0-or-later, credited in the files); the LZMA SDK's decoders (public 
 and zlib is the system's or devkitPro's. Use custom music compiles melee-unlocked's `jukebox.cpp` (GPL-2.0-or-later) from
 the fetched tree with `patches/0118`, and decodes players' files with minimp3 (CC0 1.0), stb_vorbis (public domain or MIT),
 dr_wav and dr_flac (public domain or MIT No Attribution), fetched by `../fetch.sh` at pinned commits and never committed. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
-and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
+and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The display wave (0.4.8)
+compiles more of melee-unlocked's GPL-2.0-or-later files from the fetched tree: lab_view.cpp (its drawing after Slippi Lab, MIT),
+flicker_scan.cpp (with `patches/0127`), video_background_learning.h and video_background_style.h, port/linux/full/linux_media.cpp,
+source_mod_overlay.cpp and layer_fingerprint.h, the present-pass occlusion of present_shader.h adapted in `patches/0125`, and
+mapbox's earcut (ISC) beside the Lab view; FFmpeg (LGPL-2.1-or-later: devkitPro's portlib on the console, n7.1 built by
+`./build.sh ffmpeg` for the Linux test) decodes the menu videos. The Lab view's silhouette packs (Slippi Lab's animations converted by
+melee-unlocked) are downloaded by the player's app from melee-unlocked's release, never shipped. The built NRO
 contains the compiled game and must not be distributed.
 
 ## Fight a pro and the Practice menu
