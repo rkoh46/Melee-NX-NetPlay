@@ -276,7 +276,7 @@ void place(const std::string& page, int* cat, std::string* title) {
     {"Computer players", 2, "Computer players"}, {"Game", 2, "Input"}, {"Online", 2, "Online"}, {"Training", 2, "Training"},
     {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Mods", 7, "Game mods"}, {"Controller setup", 3, "Controller setup"},
     {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}, {"Audio", 1, "Output"}, {"PhobGCC", 3, "PhobGCC (GameCube adapter)"},
-    {"Skins", 7, "Choose skins"}};
+    {"Skins", 7, "Choose skins"}, {"Texture packs", 0, "Texture packs"}, {"Diagnostics", 0, "Advanced"}};
   for (const P& p : table) if (page == p.page) { *cat = p.cat; *title = p.title; return; }
   *cat = 2; *title = page;
 }
@@ -534,7 +534,7 @@ std::array<Category, 8> build_rows(bool in_game) {
     {0, "Upscaling (DLSS, XeSS, FSR), frame generation, NVIDIA Reflex, HDR, ray tracing", "PC graphics cards only."},
     {0, "Graphics backend", "One renderer on the Switch: Aurora on Vulkan."},
     {0, "Widescreen (true widescreen), Look, Visual effects, Lightweight", "Not wired on the Switch yet (the Picture shape and Aspect ratio rows above are)."},
-    {0, "RetroArch shader presets, texture packs, animated menu backgrounds", "Not wired on the Switch yet (the built-in CRT look is)."},
+    {0, "RetroArch shader presets, animated menu backgrounds", "Not wired on the Switch yet (the built-in CRT look is)."},
     {1, "WASAPI exclusive, ASIO, output device", "The console's audio output has no driver choice: Auto and Low latency are above."},
     {2, "Background input, Discord", "No other windows or Discord on the console."},
     {2, "YouGame", "Left out: melee-unlocked's own online service."},

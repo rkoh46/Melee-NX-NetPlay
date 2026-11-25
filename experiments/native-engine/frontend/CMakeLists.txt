@@ -168,6 +168,10 @@ else()
   # melee-unlocked's character select easter egg, from the fetched tree (gen/mu_ui/egg) over two small stand-ins (src/egg_shim).
   target_sources(mu_gx PRIVATE "${FE}/egg.cpp")
   set_source_files_properties("${FE}/egg.cpp" PROPERTIES INCLUDE_DIRECTORIES "${FE}/egg_shim;${GEN}/mu_ui/egg")
+  # The display wave (0.4.8): texture packs, ambient occlusion, the frame capture burst and the one-frame glitch detector
+  # (gfx_render.cpp over frontend/patches/0124-0126), melee-unlocked's flicker_scan.cpp (build.sh sync's copy with patches/0127).
+  target_sources(mu_gx PRIVATE "${FE}/gfx_render.cpp" "${GEN}/gfx/flicker_scan.cpp")
+  target_include_directories(mu_gx PRIVATE "${GEN}/gfx")
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the

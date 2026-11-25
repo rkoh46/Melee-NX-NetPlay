@@ -1,0 +1,68 @@
+Texture packs for paletted textures (Melee-NX-NetPlay 0.4.8): the frontend decodes CI4/CI8/CI14 textures to RGBA8 itself, which leaves them without a Dolphin name; while a pack is loaded the decoded copy is tied to the Dolphin name of the texture it came from (aurora::texture::alias_pointer, patches/0124), and while dumping the decoded picture is dumped under that name (src/gfx_render.cpp). After 0106, 0116 and 0120.
+--- a/port/runtime/gx/gx_aurora.cpp
++++ b/port/runtime/gx/gx_aurora.cpp
+@@ -27,6 +27,8 @@
+ #include <tuple>
+ #include <vector>
+ #include "looks_live.h"   // frontend/src: the looks (patches/0116)
++#include "gfx_live.h"     // frontend/src: texture packs and their dumps (patches/0128)
++#include <aurora/texture.hpp>
+ 
+ namespace gx {
+ namespace aurora_bridge { void set_matrix_overrides(const DrawMatrices* overrides); }   // patches/0106
+@@ -107,6 +109,7 @@
+     uint64_t last_frame = 0;
+     std::shared_ptr<const TextureSnapshot> source;
+     std::vector<uint8_t> converted;   // paletted textures: the decoded image Aurora samples instead of the indices
++    bool aliased = false;             // `converted` finds a texture pack's picture (patches/0128)
+   };
+   std::unordered_map<TextureKey, TextureObject, TextureKeyHash> textures;   // looked up for every texture of every draw
+   std::function<void()> overlay;
+@@ -173,6 +176,7 @@
+     for (auto& [address, token] : copy_tokens) GXDestroyCopyTex(token.get());
+     fifo::drain();
+     aurora::gfx::synchronize();
++    for (auto& [k, o] : textures) if (o.aliased) aurora::texture::remove_pointer_alias(o.converted.data());   // patches/0128
+     textures.clear(); copy_tokens.clear(); copy_history.clear();
+   }
+   TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source, uint8_t mark = 0) {
+@@ -185,7 +189,15 @@
+     // (every character-select icon and portrait, the stage tiles), while the same converter run on the
+     // same bytes decodes them correctly. Debug bit 1024 restores the native path for comparison.
+     const bool decode_palette = (format == 8 || format == 9 || format == 10) && !(g_debug & kDebugPaletteNative);
+-    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format | (decode_palette ? 0x100u : 0u) | (uint32_t(mark) << 12), t.mode0, t.mode1,
++    // Texture packs (patches/0128): a paletted texture decoded here reaches Aurora as RGBA8, under no Dolphin name. While a pack
++    // is loaded, the decoded copy is tied to the Dolphin name of the texture it came from (the indices' and the used palette
++    // range's XXH64, Aurora's own computation), so Aurora finds the pack's picture for it; while dumping, the decoded picture
++    // is dumped here under that name. The loader's count is in the key, so a texture is tied again after packs change.
++    auto& gfx_live = fe::gfx::live();
++    const bool packs_on = decode_palette && !mark && gfx_live.textures.load(std::memory_order_relaxed) && gfx_live.replacements.load(std::memory_order_relaxed);
++    const bool dumping = decode_palette && !mark && gfx_live.dump.load(std::memory_order_relaxed);
++    const uint32_t packs_ready = (packs_on || dumping) ? (gfx_live.packs_ready.load(std::memory_order_relaxed) & 0xF) + 1 : 0;
++    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format | (decode_palette ? 0x100u : 0u) | (uint32_t(mark) << 12) | (packs_ready << 20), t.mode0, t.mode1,
+                          t.tlut_format, t.mip_levels, unit};
+     auto [it, inserted] = textures.try_emplace(key);
+     auto& obj = it->second;
+@@ -228,6 +240,14 @@
+       if (!converted.data.empty()) {
+         obj.converted.assign(converted.data.data(), converted.data.data() + converted.data.size());
+         obj.has_palette = false;
++        if (packs_on || dumping) {
++          GXTlutObj tlut;
++          GXTexObj ci;
++          GXInitTlutObj(&tlut, t.data->palette.data(), static_cast<GXTlutFmt>(t.tlut_format), entries);
++          GXInitTexObjCI(&ci, source, uint16_t(t.width), uint16_t(t.height), static_cast<GXCITexFmt>(format), wrap_s, wrap_t, mips, unit);
++          if (packs_on) obj.aliased = aurora::texture::alias_pointer(obj.converted.data(), &ci, &tlut);
++          if (dumping) fe::gfx::dump_texture(aurora::texture::replacement_file_name(&ci, &tlut), t.width, t.height, obj.converted.data());
++        }
+         GXInitTexObj(&obj.texture, obj.converted.data(), uint16_t(t.width), uint16_t(t.height), GX_TF_RGBA8_PC, wrap_s, wrap_t, mips);
+       }
+     }
+@@ -520,6 +540,7 @@
+       if (it->second.last_frame + 3 < counters.frames) {
+         GXDestroyTexObj(&it->second.texture);
+         if (it->second.has_palette) GXDestroyTlutObj(&it->second.palette);
++        if (it->second.aliased) aurora::texture::remove_pointer_alias(it->second.converted.data());
+         it = textures.erase(it);
+       } else ++it;
+     }

@@ -104,6 +104,12 @@ sync_tree() {
   patch -s -p1 -d "$gen/geckosrc" < "$here/patches/0122-user-gecko-on-the-switch.patch"
   cmp -s "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp" || cp "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp"
   rm -rf "$gen/geckosrc"
+  # The display wave (0.4.8, src/gfx_render.cpp): melee-unlocked's one-frame glitch detector (flicker_scan.cpp/.h) with patches/0127.
+  rm -rf "$gen/gfxsrc"; mkdir -p "$gen/gfxsrc/port/runtime/gx" "$gen/gfx"
+  for f in flicker_scan.cpp flicker_scan.h; do perl -pe 's/\r$//' "$stage/mu/port/runtime/gx/$f" > "$gen/gfxsrc/port/runtime/gx/$f"; done
+  patch -s -p1 -d "$gen/gfxsrc" < "$here/patches/0127-flicker-scan-on-the-switch.patch"
+  for f in flicker_scan.cpp flicker_scan.h; do cmp -s "$gen/gfxsrc/port/runtime/gx/$f" "$gen/gfx/$f" || cp "$gen/gfxsrc/port/runtime/gx/$f" "$gen/gfx/$f"; done
+  rm -rf "$gen/gfxsrc"
   # melee-unlocked's jukebox (Use custom music, features/audio.cpp), LF line ends, with patches/0118: the app's MusicPacks folder.
   rm -rf "$gen/jukeboxsrc"; mkdir -p "$gen/jukeboxsrc/port/runtime/hle" "$gen/jukebox"
   perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/hle/jukebox.cpp" > "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp"
@@ -139,6 +145,7 @@ sync_tree() {
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0106-subframe-presentation.patch"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0116-gx-looks.patch"   # the looks: owner tokens, look rules, treated textures (src/looks_live.h)
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0120-gx-lcancel-flash-tint.patch"   # the L-cancel flash on the fighter's model (features/overlays.cpp)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0128-gx-texture-pack-palettes.patch"   # texture packs and dumps for paletted textures (src/gfx_render.cpp)
   for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds

@@ -1,0 +1,48 @@
+One-frame glitch detector (Melee-NX-NetPlay 0.4.8): melee-unlocked's flicker_scan.cpp (GPL-2.0-or-later) off Windows, its grids written into the host's folder (frontend src/gfx_render.cpp feeds it the read-back pictures, patches/0126).
+--- a/port/runtime/gx/flicker_scan.cpp
++++ b/port/runtime/gx/flicker_scan.cpp
+@@ -2,13 +2,16 @@
+ #include "flicker_scan.h"
+ #include "host.h"
+ 
+-#include <windows.h>
++#include <string>
++#include <sys/stat.h>
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
+ #include <cstring>
+ 
+ namespace gx {
++// patches/0127: the host's folder for the grids (frontend src/gfx_render.cpp), in place of the working folder.
++std::string flicker_folder();
+ namespace {
+ 
+ void write_grid(const float* grid, const char* path) {
+@@ -25,11 +28,11 @@
+ }
+ 
+ void write_trio(const float* a, const float* b, const float* c, const char* kind, uint64_t n, uint32_t frame) {
+-  CreateDirectoryA("flicker", nullptr);
++  mkdir(flicker_folder().c_str(), 0777);
+   const float* trio[3] = {a, b, c};
+   for (int k = 0; k < 3; ++k) {
+-    char path[160];
+-    std::snprintf(path, sizeof path, "flicker/%s%03llu_%u_%s.ppm", kind, (unsigned long long)n, frame,
++    char path[512];
++    std::snprintf(path, sizeof path, "%s/%s%03llu_%u_%s.ppm", flicker_folder().c_str(), kind, (unsigned long long)n, frame,
+                   k == 0 ? "1prev" : k == 1 ? "2BAD" : "3next");
+     write_grid(trio[k], path);
+   }
+--- a/port/runtime/gx/flicker_scan.h
++++ b/port/runtime/gx/flicker_scan.h
+@@ -17,6 +17,9 @@
+   // One presented frame's grid (kGrid * kGrid luminance values, 0-255), in presentation order.
+   // `frame` is the presented frame number it belongs to.
+   void push(const float* grid, uint32_t frame);
++  // patches/0127: the reports so far, for the host's end-of-run line.
++  uint64_t hits() const { return hits_; }
++  uint64_t cell_hits() const { return cell_hits_; }
+ 
+  private:
+   float sig_[3][kGrid * kGrid] = {};
