@@ -11,6 +11,7 @@
 #   latency   --auto-vs, latencytest 1: X + D-pad Down twice (black, then white), X + D-pad Up (the picture again)
 #   te        the 20XX TE save's profile (MU_MODS_DIR) with its input display bit set (te_options2 2000 in settings.ini.state):
 #             the input display in a VS match without inputoverlay
+#   adapter   adapterrate 1 with a scripted adapter (MELEE_TEST_ADAPTER_SCRIPT): the measured report rate on the overlay
 #   lagtest   lagtestnext 1: the Lossless adapter lag test start (boot to the character select with the test's rules, a
 #             10-second rumble on every port when it loads), the switch cleared for the next start
 #   te-flash  the 20XX TE save's profile (MU_MODS_DIR) with lcancel_flash_mode 4 (TE: both) and lcancel_success_flash 2: the game's
@@ -109,6 +110,15 @@ PY
     printf '%s\n' "te_options2 2000" > "$dir/settings.ini.state"
     run "$dir" 2200 2 "--auto-vs"
     ;;
+  adapter)
+    # adapterrate 1 with a scripted GameCube adapter (upstream's MELEE_TEST_ADAPTER_SCRIPT, started with the run by
+    # MU_TEST_ADAPTER_AT_START): the overlay's adapter line shows the report rate measured where the reports arrive
+    # (src/phob_adapter.cpp), the figure the console's adapter reader also feeds.
+    fresh "$dir"
+    printf '%s\n' "60000 128 128 128 128 0 0" > "$dir/adapter.txt"
+    printf '%s\n' "adapterrate 1" "showfps 1" > "$dir/settings.ini"
+    MU_RUN_ENV="-e MELEE_TEST_ADAPTER_SCRIPT=/out/adapter.txt -e MU_TEST_ADAPTER_AT_START=1" run "$dir" 900 3 "--auto-vs"
+    ;;
   lagtest)
     fresh "$dir"
     # The lag test boots to the character select (the lag test's rules: time, 99 stocks, Dream Land only on random) and rumbles
@@ -160,6 +170,6 @@ PY
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   echo "== $case"
-  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
+  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|gc adapter|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
   echo "shots: $(ls "$dir/shots" | wc -l | tr -d ' ')"
 done

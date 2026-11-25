@@ -25,6 +25,7 @@
 #            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
 #   phob     melee-unlocked's PhobGCC menu with a scripted GameCube adapter: PhobVision, setups, PhobScope's plots, the reaction test, the
 #            remap editor, Phob Check, the coordinate viewer (screenshots; see the case)
+#   box      box mode (Mod X bound) on an adapter port: B0XX coordinates, Mod X, second-input priority (the "the game gets" lines)
 #   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
 #            settings search with the software keyboard's test answer
 #   launcher the home screen's What's new, Language (Deutsch), launcher colour wheel and a rail picture (screenshots)
@@ -217,6 +218,22 @@ for case in "$@"; do
 2500 200 185 128 128 0 0
 30000 128 128 128 128 0 0" \
       'sleep 2; shot coord; sleep 1.5; tap B; sleep 0.5; shot scope-top; tap START'
+    ;;
+  box)
+    # Box controllers (upstream's box_melee.h through src/controls.cpp) on port 1 read as GameCube adapter port 1
+    # (MU_CONTROLS_TEST_ADAPTER=1), launcher.ini binding the stick's left/right to the D-pad's left/right and Mod X to D-pad up
+    # (the D-pad's own actions unbound): box mode. The panel is opened and closed (so the "the game gets" lines are logged),
+    # then D-pad right (the stick right: B0XX's full 1.0), D-pad up + right (Mod X: 0.6625), right then left held (second
+    # input priority: left), left let go (right again, no reactivation: neutral), all let go.
+    make_app "$dir" 1 2400 - "padx.gc1=m8=0,m10=0,m11=0,m18=1,m19=2,m22=8" home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_ADAPTER=1; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5; tap START; sleep 1.5
+      pad "DR"; sleep 0.6; pad "DR DU"; sleep 0.6; pad "DR"; sleep 0.4; pad "DR DL"; sleep 0.6; pad "DR"; sleep 0.6; pad ""; sleep 1
+      wait $app'
+    grep -E "controls:|menu: (closed|the game gets)" "$dir/console.log" | cut -c1-160 | tail -14
     ;;
   controls)
     # The controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1), a saved setup

@@ -20,6 +20,7 @@
 #include "replay_view.h"
 #include "proai/practice_state.h"   // practice_menu_draw (weak)
 #include "phob_menu_state.h"          // phob_menu_draw (weak)
+namespace fe::phob_adapter { double rate_hz(); }   // src/phob_adapter.cpp: adapter reports per second, measured where they arrive
 #include "host.h"                // shim: gcadapter_status
 
 #include <aurora/aurora.h>
@@ -315,6 +316,10 @@ void draw_stats(ImDrawList* dl, const overlay::Config& c, const overlay::Snapsho
     if (host::gcadapter_status(st)) {
       if (st.report_hz > 0) std::snprintf(line, sizeof line, "GameCube adapter %.0f reports/s (polled every %d ms)", st.report_hz, st.interval_ms);
       else std::snprintf(line, sizeof line, "GameCube adapter: no reports yet");
+    } else if (const double hz = phob_adapter::rate_hz(); hz > 0) {
+      // Reports measured where they arrive (src/phob_adapter.cpp, as melee-unlocked measures them): the Linux tests' scripted
+      // adapter (MELEE_TEST_ADAPTER_SCRIPT).
+      std::snprintf(line, sizeof line, "GameCube adapter %.0f reports/s (measured from the reports)", hz);
     } else {
 #ifdef __SWITCH__
       std::snprintf(line, sizeof line, "GameCube adapter: none found");
