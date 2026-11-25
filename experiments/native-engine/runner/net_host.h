@@ -29,6 +29,7 @@ namespace net_host {
 struct Options {
   std::string net;                  // --net INDEX:LOCAL_PORT:REMOTE_IP:REMOTE_PORT (two instances peer directly)
   std::string online;               // --online unranked|direct:CODE|teams|party (services builds only)
+  bool p2p = false, p2p_bad = false;   // --p2p-*: melee-unlocked's own peer-to-peer match (the options go to netplay_bridge::p2p_option)
   std::string user_dir;             // --user-dir: where user.json is (default: the app's folder on the console)
   bool fake_user = false;           // --fake-user: tests against a local mock service only
   int retry_seconds = 0;            // --net-retry: with --net, keep asking for the match this long when the peer is not there yet

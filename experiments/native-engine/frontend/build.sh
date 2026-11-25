@@ -71,10 +71,10 @@ sync_tree() {
   [ -d "$src/mu/.git" ] || { echo "run ../fetch.sh first" >&2; exit 1; }
   [ -f "$src/out/melee_game.so" ] || { echo "run ../build.sh game first" >&2; exit 1; }
   mkdir -p "$work" "$out" "$gen" "$work/mu" "$work/runner"
-  # The runner this frontend was last brought up against. Play mode needs the runner's automatic input delay
-  # (--net-delay auto, netplay_bridge::Setup::delay_auto), which is newer than 1c556fc and not committed yet: until
-  # it is, the files on disk are used. Pin this to the commit that contains them (MU_SYNC_REF=<commit> meanwhile).
-  local ref="${MU_SYNC_REF:-4137a64}" stage="$work/sync-stage"
+  # The runner this frontend was last brought up against: b3fa91a has net_host's --p2p-* mode and netplay_bridge's p2p_* calls
+  # (runner/p2p_bridge.cpp), which the lobby's peer-to-peer match uses. Pin this to the commit that contains a newer runner
+  # (MU_SYNC_REF=<commit>, or MU_SYNC_REF=worktree for the files on disk, meanwhile).
+  local ref="${MU_SYNC_REF:-b3fa91a}" stage="$work/sync-stage"
   # melee-unlocked as fetched, from the clone's own objects (the pinned commit, whatever state its working
   # files are in), exported once. Only what the host build reads and the patches touch.
   if [ ! -f "$work/mu-pristine/port/linux/host_services.cpp" ]; then
@@ -148,6 +148,15 @@ sync_tree() {
     cmp -s "$gen/phobsrc/port/runtime/$f" "$gen/phob/$(basename "$f")" || cp "$gen/phobsrc/port/runtime/$f" "$gen/phob/$(basename "$f")"
   done
   rm -rf "$gen/phobsrc"
+  # melee-unlocked's peer lobby (the home screen's Multiplayer Lobby, src/lobby.cpp): launcher_lobby_p2p.cpp/.h and the English
+  # launcher text as fetched (LF), in a folder of their own so that the lobby's includes find src/lobby_shim (POSIX sockets, its
+  # launcher_lang.h stand-in), not the fetched tree's launcher_lang.h. Its DHT (jech/dht, MIT) and Monocypher (BSD-2-Clause or CC0)
+  # are compiled from the fetched tree's port/third_party (CMakeLists.txt).
+  mkdir -p "$gen/lobby"
+  for f in launcher_lobby_p2p.cpp launcher_lobby_p2p.h launcher_lang_en.inl; do
+    perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/app/$f" > "$gen/lobby/$f.new"
+    if cmp -s "$gen/lobby/$f.new" "$gen/lobby/$f"; then rm -f "$gen/lobby/$f.new"; else mv "$gen/lobby/$f.new" "$gen/lobby/$f"; fi
+  done
   # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
   rsync -rlpc --delete "$stage/mu/" "$work/mu/"
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"
@@ -389,9 +398,13 @@ NET_INC="-I$W/runner -I$W/netsrc/port/runtime/hle -Iport/runtime/hle -Iport/runt
 # ../tools/mock_slippi_http.py).
 NET_DEF='-DSLIPPI_PIN_VERSION=\"3.7.0\" -DSLIPPI_PIN_TAG=\"v3.7.0\" -DSLIPPI_PIN_MATCHMAKING_URL=\"ws://127.0.0.1:8765\" -DSLIPPI_PIN_SERVICES_URL=\"http://127.0.0.1:8766\" -DMU_NET_SERVICES'
 NET_CXX='slippi_online slippi_net slippi_offline slippi_net_diag slippi_match_quality slippi_text slippi_version slippi_matchmaking_ws slippi_report slippi_http_curl slippi_login'
+# melee-unlocked's own peer-to-peer match (../runner/p2p_bridge.cpp, its mu_net session, Monocypher, the Win32 shim: ../build.sh P2P_*).
+P2P_VERSION=$(head -1 "$repo/build/native-engine/mu/VERSION" 2>/dev/null | tr -d '\r')
+P2P_INC='-I'$W'/netsrc/win32_shim -I'$W'/netsrc/port/runtime/mu_net -I'$W'/netsrc/port/third_party/monocypher -I'$W'/runner -Iport/third_party/enet/include -DMELEE_PORT_VERSION=\"'"$P2P_VERSION"'\"'
+P2P_CXX='rollback_session peer_connector peer_identity input_transport session_security result_outbox session_types'
 build_net_services_linux() {
   local o="$W/net/obj-linux-services$SAN_SFX" stamp
-  stamp="$(bash "$here/../net_sources.sh" "$work/netsrc")-$(cd "$repo" && cat "$W"/runner/netplay_bridge.* | shasum -a 256 | cut -c1-16)$SAN_SFX"
+  stamp="$(bash "$here/../net_sources.sh" "$work/netsrc")-$(cd "$repo" && cat "$W"/runner/netplay_bridge.* "$W"/runner/p2p_bridge.cpp | shasum -a 256 | cut -c1-16)$SAN_SFX"
   [ -f "$repo/$o/netplay.o" ] && [ "$(cat "$repo/$o/stamp" 2>/dev/null)" = "$stamp" ] && return 0
   dock 900 "$LINUX_IMG" "
     rm -rf $o; mkdir -p $o/net
@@ -400,6 +413,9 @@ build_net_services_linux() {
     done
     for f in $NET_CXX; do echo $W/netsrc/port/runtime/hle/\$f.cpp; done > $o/list; echo $W/runner/netplay_bridge.cpp >> $o/list
     xargs -P $jobs -I{} sh -c 'g++ -fPIE -std=gnu++20 -O2 -g -w $SAN_FLAGS -fvisibility=hidden -fvisibility-inlines-hidden $NET_INC $NET_DEF -c {} -o $o/net/\$(basename {} .cpp).o' < $o/list
+    for f in $P2P_CXX; do echo $W/netsrc/port/runtime/mu_net/\$f.cpp; done > $o/p2plist; echo $W/runner/p2p_bridge.cpp >> $o/p2plist; echo $W/netsrc/win32_shim/lobby_shim.cpp >> $o/p2plist
+    xargs -P $jobs -I{} sh -c 'g++ -fPIE -std=gnu++20 -O2 -g -w $SAN_FLAGS -fvisibility=hidden -fvisibility-inlines-hidden $P2P_INC -c {} -o $o/net/p2p_\$(basename {} .cpp).o' < $o/p2plist
+    for f in monocypher monocypher-ed25519; do gcc -fPIE -O2 -w $SAN_FLAGS -fvisibility=hidden -c $W/netsrc/port/third_party/monocypher/\$f.c -o $o/net/p2p_\$f.o; done
     ld -r --force-group-allocation $o/net/*.o -o $o/netplay.o
     objcopy --localize-hidden $o/netplay.o"
   echo "$stamp" > "$repo/$o/stamp"

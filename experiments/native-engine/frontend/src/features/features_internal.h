@@ -28,6 +28,7 @@ void register_gecko();               // gecko.cpp: the player's Gecko codes (Gec
 void register_phob();                // phob.cpp: PhobGCC settings per adapter port (src/phob_adapter.cpp)
 void register_gfx();
 __attribute__((weak)) void register_modlooks();   // ../modlooks.cpp: Get mod looks (Diet Melee, Animelee), builds with a picture                 // gfx.cpp: texture packs, ambient occlusion, frame capture, glitch detector, Lab view (src/gfx_render.cpp)
+__attribute__((weak)) void register_lobby();     // ../lobby.cpp: the Multiplayer Lobby's match hand-over and presence (services program)
 void register_pcsettings();          // pcsettings.cpp: the "PC Settings" row in Melee's Options menu
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.

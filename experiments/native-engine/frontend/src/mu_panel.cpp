@@ -78,6 +78,8 @@ struct ImTextureData { void* texture = nullptr; ImTextureID GetTexRef() const { 
 static std::string ui_source_asset_path(const char* source, const char* name) { return std::string(source) + "/" + name; }
 static ImTextureData* cosmetic_preview(const std::string& path) {
   static std::map<std::string, ImTextureData> cache;
+  static int gen = -1;
+  if (gen != fe::mu_ui::ui_generation()) { gen = fe::mu_ui::ui_generation(); cache.clear(); }   // textures of an earlier Aurora
   auto it = cache.find(path);
   if (it == cache.end()) it = cache.emplace(path, ImTextureData{fe::mu_ui::gd_texture(path)}).first;
   return it->second.texture ? &it->second : nullptr;
@@ -1417,8 +1419,15 @@ bool decode_png(const uint8_t* p, size_t n, int* w_out, int* h_out, std::vector<
 }  // namespace
 
 namespace mu_ui {
+int g_ui_generation = 0;
+ImGuiContext* g_font_context = nullptr;
+int ui_generation() { return g_ui_generation; }
 void fonts_init() {
-  if (!ImGui::GetCurrentContext() || g_heading) return;
+  if (!ImGui::GetCurrentContext()) return;
+  if (ImGui::GetCurrentContext() != g_font_context) {   // a new context: its atlas has none of the fonts loaded before
+    g_font_context = ImGui::GetCurrentContext(); ++g_ui_generation; g_heading = g_body = nullptr;
+  }
+  if (g_heading) return;
   ImGuiIO& io = ImGui::GetIO();
   if (io.Fonts->Fonts.empty()) io.Fonts->AddFontDefault();   // stays the default: every other overlay keeps its look
   ImFontConfig config;
@@ -1456,8 +1465,8 @@ void fonts_init() {
 }
 ImFont* heading_font() { return g_heading; }
 ImFont* body_font() { return g_body; }
-const Art& bailey() { static const Art a = decode_bmp(mu_ui_bailey, mu_ui_bailey_end); return a; }
-const Art& mark() { static const Art a = decode_bmp(mu_ui_mark, mu_ui_mark_end); return a; }
+const Art& bailey() { static Art a; static int gen = -1; if (gen != g_ui_generation) { gen = g_ui_generation; a = decode_bmp(mu_ui_bailey, mu_ui_bailey_end); } return a; }
+const Art& mark() { static Art a; static int gen = -1; if (gen != g_ui_generation) { gen = g_ui_generation; a = decode_bmp(mu_ui_mark, mu_ui_mark_end); } return a; }
 
 void panel_feed(const host::PadState pads[4]) {
   if (ImGui::GetCurrentContext()) feed_imgui(pads);

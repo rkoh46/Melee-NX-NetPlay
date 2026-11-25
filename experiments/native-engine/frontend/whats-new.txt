@@ -3,6 +3,7 @@
 Controls: a USB keyboard works as a controller (melee-unlocked's layout, every key rebindable) and for typing searches and codes.
 Stages: hold L, R, Z, B, X or Y as a stage loads for a mod disc's alternate stage; Z on Pokemon Stadium freezes it.
 Online: leave a Party match with L + R + A + Start. Replays: UCF 0.8 replays (Slippi before 2024) play back as recorded.
+Multiplayer Lobby: melee-unlocked's serverless lobby on the home screen: find players, chat (also privately), add friends, play Slippi Direct or melee-unlocked's own peer-to-peer matches, keep a match history.
 Graphics: RetroArch shader presets (.slangp in the Shaders folder), compiled on the console.
 Graphics: a looping video behind the character select too (VideoBackgrounds/css.mp4), and border art that plays an MP4.
 Graphics: Dolphin-format texture packs (TexturePacks folder) and texture dumps; screen-space ambient occlusion.

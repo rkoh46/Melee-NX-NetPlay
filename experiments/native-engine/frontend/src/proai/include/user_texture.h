@@ -27,6 +27,9 @@ struct ImTextureData {
 namespace gx {
 // Once a frame before drawing `tex` (render thread): uploads it the first time.
 inline void keep_user_texture(ImTextureData* tex, ImGuiContext*& registered_in) {
+  // A new ImGui context (Aurora started again: the app back on its home screen, or the game started again) has none of the
+  // earlier textures: uploaded again, as upstream's ImGui 1.92 does for a rebuilt overlay.
+  if (tex && registered_in != ImGui::GetCurrentContext()) tex->id = ImTextureID(0);
   registered_in = ImGui::GetCurrentContext();
   if (tex && !tex->id && tex->Width > 0) tex->id = aurora_imgui_add_texture(uint32_t(tex->Width), uint32_t(tex->Height), tex->Pixels.data());
 }

@@ -94,4 +94,12 @@ std::string tx(const std::string& english) {
   const auto it = table->find("@" + english);
   return it != table->end() && !it->second.empty() ? it->second : english;
 }
+// A line of the current language by upstream's key (the peer lobby's notices, src/lobby_shim/launcher_lang.h); "" for English.
+std::string by_key(const std::string& key) {
+  std::shared_ptr<const Table> table;
+  { std::lock_guard<std::mutex> lock(g_mutex); table = g_table; }
+  if (!table) return {};
+  const auto it = table->find(key);
+  return it != table->end() ? it->second : std::string();
+}
 }  // namespace fe::mu_lang

@@ -102,4 +102,22 @@ struct FrameTrace { int skip = 0; bool advanced = false; int32_t offset_us = 0; 
 NETPLAY_API FrameTrace frame_trace();
 // The input delay from the next game on: `frames` 1..9, or automatic (2..5 from the round trip at each game's start).
 NETPLAY_API void set_delay(int frames, bool automatic);
+// melee-unlocked's own peer-to-peer match (P2P Direct, its mu_net session; p2p_bridge.cpp), the --p2p-* options of its game
+// (melee-unlocked port/app/source_p2p.cpp). net_host answers the game's state saves and loads itself and gives the session
+// command bytes to p2p_handle; p2p_exit_request() >= 0 asks for the run to end with that code (the session's game is over, or
+// it failed before a match).
+struct P2pHooks {
+  void (*log)(const char* line) = nullptr;
+  void (*set_speed)(double speed) = nullptr;   // the time sync's frame rate, as Setup::set_speed
+};
+NETPLAY_API bool p2p_option(const std::string& name, const char* value);
+NETPLAY_API bool p2p_requested();
+NETPLAY_API int p2p_local_slot();
+NETPLAY_API int p2p_character();
+NETPLAY_API bool p2p_start(const P2pHooks& hooks, std::string* error);
+NETPLAY_API bool p2p_handle(uint8_t command, const uint8_t* payload, uint32_t size, std::vector<uint8_t>* reply);
+NETPLAY_API int p2p_exit_request();
+NETPLAY_API void p2p_report();
+NETPLAY_API void p2p_shutdown();
+NETPLAY_API void p2p_reset();
 }

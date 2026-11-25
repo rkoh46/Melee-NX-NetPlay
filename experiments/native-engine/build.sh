@@ -104,9 +104,16 @@ if [ "${MU_NET_SERVICES:-0}" = 1 ]; then
   NET_SUFFIX='-services'; NET_LIBS_LINUX='-lcurl'; NET_LIBS_NX='-lcurl -lmbedtls -lmbedx509 -lmbedcrypto'
 fi
 NET_C='callbacks compress host list packet peer protocol unix'
+# melee-unlocked's own peer-to-peer match (runner/p2p_bridge.cpp over its mu_net session; net_sources.sh copies mu_net, Monocypher
+# and the Win32 shim into the netplay sources): its own include path, so nothing of the shim reaches the Slippi sources.
+NETROOT=build/native-engine/netsrc
+P2P_VERSION=$(head -1 "$repo/build/native-engine/mu/VERSION" 2>/dev/null | tr -d '\r')
+P2P_INC='-I'$NETROOT'/win32_shim -I'$NETROOT'/port/runtime/mu_net -I'$NETROOT'/port/third_party/monocypher -Iexperiments/native-engine/runner -Iport/third_party/enet/include -DMELEE_PORT_VERSION=\"'"$P2P_VERSION"'\"'
+P2P_CXX="experiments/native-engine/runner/p2p_bridge.cpp $NETROOT/win32_shim/lobby_shim.cpp $NETROOT/port/runtime/mu_net/rollback_session.cpp $NETROOT/port/runtime/mu_net/peer_connector.cpp $NETROOT/port/runtime/mu_net/peer_identity.cpp $NETROOT/port/runtime/mu_net/input_transport.cpp $NETROOT/port/runtime/mu_net/session_security.cpp $NETROOT/port/runtime/mu_net/result_outbox.cpp $NETROOT/port/runtime/mu_net/session_types.cpp"
+P2P_C="$NETROOT/port/third_party/monocypher/monocypher.c $NETROOT/port/third_party/monocypher/monocypher-ed25519.c"
 # \$1 C compiler, \$2 C++ compiler, \$3 extra flags, \$4 object directory, \$5 ld, \$6 objcopy; run inside a container.
 # Everything but the bridge's own interface becomes local to the combined object.
-NET_BUILD='net_build() { mkdir -p $4/net; for f in '"$NET_C"'; do $1 $3 -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/$f.c -o $4/net/enet_$f.o; done; for f in '"$NET_CXX"'; do $2 $3 -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden '"$NET_INC $NET_DEF"' -c $f -o $4/net/$(basename $f .cpp).o; done; $5 -r --force-group-allocation $4/net/*.o -o $4/netplay.o; $6 --localize-hidden $4/netplay.o; }'
+NET_BUILD='net_build() { mkdir -p $4/net; for f in '"$NET_C"'; do $1 $3 -O2 -w -fvisibility=hidden -DHAS_FCNTL=1 -DHAS_POLL=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 -DHAS_SOCKLEN_T=1 -DHAS_MSGHDR_FLAGS=1 -include arpa/inet.h -Iport/third_party/enet/include -c port/third_party/enet/$f.c -o $4/net/enet_$f.o; done; for f in '"$NET_CXX"'; do $2 $3 -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden '"$NET_INC $NET_DEF"' -c $f -o $4/net/$(basename $f .cpp).o; done; for f in '"$P2P_CXX"'; do $2 $3 -std=gnu++20 -O2 -g -w -fvisibility=hidden -fvisibility-inlines-hidden '"$P2P_INC"' -c $f -o $4/net/p2p_$(basename $f .cpp).o; done; for f in '"$P2P_C"'; do $1 $3 -O2 -w -fvisibility=hidden -c $f -o $4/net/p2p_$(basename $f .c).o; done; $5 -r --force-group-allocation $4/net/*.o -o $4/netplay.o; $6 --localize-hidden $4/netplay.o; }'
 
 build_linux() {
   generate; bash "$here/net_sources.sh" "$repo/build/native-engine/netsrc" >/dev/null

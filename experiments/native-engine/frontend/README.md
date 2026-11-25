@@ -69,6 +69,8 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `src/feature_calls.h` | Play mode's weak calls into the feature modules (`src/feature_hooks.h`, `src/features/`; the modules' own interface). |
 | `patches/0104-game-menu-host-pages.patch` | Against a build-time copy of `game_menu.cpp/.h`: pages a host adds, greyed rows, hidden rows, row labels, the Quit action, a HUD extra, the console's row layout off the console (`MU_MENU_CONSOLE`). |
 | `patches/0105-switch-signin-off-console.patch` | Against a build-time copy of `switch_signin.cpp`: builds off the console (no software keyboard there), controllers through the host's input path. |
+| `src/lobby.cpp`, `src/lobby.h`, `src/mu_home_lobby.inl`, `src/lobby_shim/` | The home screen's Multiplayer Lobby (see "Multiplayer Lobby" below): melee-unlocked's peer lobby compiled from the fetched tree on a POSIX shim, its worker thread, the page, the hand-over of an accepted match to the game, the match history. |
+| `test-lobby-linux.sh`, `../tools/dht_bootstrap.py`, `../tools/lobby_peer.cpp` | The lobby test: a local one-node DHT on an internal Docker network, two apps and a headless peer of upstream's lobby code, a Direct match. |
 | `test-app-linux.sh` | The app without a console: boot, menu, handover (the menu with the D-pad, B to close, then A), sign-in, update, online cases. |
 | `app-build.sh`, `VERSION` | What the build computer runs to publish this app instead of the recompiled one (see "Publishing"). |
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
@@ -897,6 +899,74 @@ none of these has been measured on the console's GPU.
 - **Test aid**: `MU_AUTO_VS_STAGE="UP RIGHT PRESS HOLD"` moves `--auto-vs`'s stage select cursor (11 12 is Pokémon Stadium, 3 1
   Battlefield), taps PRESS and holds HOLD after the pick (hex pad bits).
 
+### Multiplayer Lobby (feat/lobby)
+
+melee-unlocked's Multiplayer Lobby tab, on the home screen between Settings and Replay Viewer (upstream's page order). It is a
+roster of melee-unlocked launchers found without any server of its own: the BitTorrent mainline DHT (BEP 5) gives candidate
+addresses, the launchers then talk to each other directly, signed and encrypted.
+
+- **Upstream's code, not a rewrite.** `build.sh sync` copies `port/app/launcher_lobby_p2p.cpp`, its header and the English launcher
+  text (`launcher_lang_en.inl`) from the fetched tree into `gen/lobby`, unchanged. CMake compiles it with upstream's vendored
+  jech/dht (MIT) and Monocypher (BSD-2-Clause or CC0) from `mu/port/third_party` over `src/lobby_shim`: the Win32 names it uses
+  (sockets, `GetTickCount64`, `GetLocalTime`, `BCryptGenRandom` on `getrandom` or the console's `randomGet`) and a stand-in for its
+  `launcher_lang.h` (English from upstream's table, the player's language from `src/mu_lang.cpp` by key). The wire format is
+  therefore upstream's: info hash BLAKE2b-160 of `melee-unlocked-lobby-v1-public` (and the friend and code topics), DHT version
+  "MU01", "MUL1" packets, Ed25519-signed hellos naming both match transports, X25519-derived XChaCha20-Poly1305 for the rest, lobby
+  protocol 4, its refusal reasons and version check.
+- **The worker** (`src/lobby.cpp`): upstream's `work()` loop in peer mode on a thread of its own (cores 0-1 on the console), a tick every
+  50 ms, commands queued from the page, a snapshot for the page under a lock; its hold and reopen around a peer-to-peer match
+  (upstream's close_lobby / open_lobby); auto reject (every incoming request cancelled, "Match request automatically declined.");
+  the match history. `<app folder>/Lobby/lobby-profile.json` (name, location, mains, `auto_reject_invites`, `request_sound`,
+  `request_volume`; upstream's developer keys `url`, a peer address or `dht://host:port` as the only DHT entry point, and
+  `peer_port`), `lobby-peer-identity.json` (the keys and friends), `lobby-history.json` (the games) and `p2p-results/` are upstream's
+  files; `lobby.log` is upstream's log (no IP addresses). The profile announced: the display name (the Slippi account's unless one
+  is typed), the account's connect code, a location, three mains, the history's wins and losses, `build` = melee-unlocked's version
+  and `source` (`1.0.5:source`, as upstream's Linux launcher announces its Source Port), `open` vanilla, `ready` once the disc is
+  there and an account is signed in. Without an account Go Online says so.
+- **The page** (`src/mu_home_lobby.inl`), in the launcher's palette: Go Online / Leave and the network state; tabs Players (cards: the
+  first main's initials, name, build, status / location / ping, mains, for the picked one their W / L and code and this console's
+  record against them, stocks in a match; on a row Left / Right pick the action under the list: Send match request (Slippi
+  Direct), Peer-to-peer match (melee-unlocked's own), Private chat, Add friend, and A does it), Lobby chat (the public chat and a
+  tab per private room: a request to answer with Accept / Decline, messages, Close), Friends (friend requests, Invite to Match,
+  Remove Friend, Add friend by code), Match history (the record and the games), Your profile (name and location with the keyboard,
+  mains with Left / Right, Auto reject invites, Request sound and Volume); the request bar (Accept / Decline, or Cancel, the time
+  left, the measured ping or "Ping unavailable"); upstream's notices on the status line. Empty states with upstream's words,
+  "Looking for players" while the DHT has found nobody (with the node count) and the reason when the lobby cannot start. An
+  incoming request rings (upstream's chime: 660 Hz then 880 Hz, 0.3 s, at the chosen volume, through SDL's audio output, on any
+  page) and takes the focus to Accept. Log lines `home: lobby focus <item>`, `home: rail <page>`, `lobby: ...` (tests follow them).
+- **A Slippi Direct match.** Upstream's launcher starts its game with `--lobby-direct CODE --lobby-character N`; the game plays one match
+  and ends. Here the home screen closes and the game starts with Slippi's menus; from the main menu it goes to Training as the first
+  main (features/training.cpp) and searches Slippi Direct for the opponent's code from there (features/search.cpp's Practice menu
+  search, upstream's static recomp path); when the two searches meet, Slippi's Direct select, locked in, and the match. When it is
+  over (the online match scene left after fighting), or when no connection came in 90 s, the run ends.
+- **A peer-to-peer match** (melee-unlocked's own mu_net session, no Slippi account involved): the lobby closes for it (the game takes
+  over its UDP port), the game is started with upstream's `p2p_arguments(...)` as the runner's `--p2p-*` mode (../runner/net_host.cpp,
+  ../runner/p2p_bridge.cpp adapted from upstream's source_p2p.cpp, mu_net in the netplay object; see FEATURES.md "mu_net P2P
+  Direct"), boots straight into the match on a memory card folder of its own (`LobbyMatchCard`, never the player's), and ends three
+  seconds after the game's end report.
+- **Back on the page.** After either match the app returns to its home screen on this page in the same process: play_main.cpp runs
+  the home screen and the game it starts in a loop (one visit each), putting back what a session changed (the netplay options, the
+  card folder, the settings words); Aurora starts again with the home screen, and the UI's fonts and pictures are uploaded again
+  for the new ImGui context (`mu_ui::ui_generation`). The lobby, held for a peer-to-peer match, opens again on the same port.
+- **The match history** (upstream's record_match and p2p_outcome): each lobby game is recorded from the game's own end-of-game report
+  (command 0xBD): ended normally with a winner, a win or a loss for this player; anything else incomplete.
+- **While the game runs** the lobby stays online (for a Slippi Direct match): "In game", or "In match" with this player's stocks
+  (upstream's lobby-game-status.json mailbox), from the simulation thread's retrace through two atomics; other players' requests
+  are refused as busy. At the process's end the worker leaves the roster and is joined (atexit) before the statics it uses go away.
+- Not tried against a real melee-unlocked PC or on the public DHT; the test's PC stand-in is upstream's own lobby code as fetched
+  with this repository's runner as its game.
+
+`test-lobby-linux.sh DISC`: one container on an internal Docker network (no route out), a one-node DHT (`../tools/dht_bootstrap.py`,
+BEP 5 written for the test, which computes upstream's topic hash on its own and logs the announces on it), the matchmaking stand-in,
+two apps driven through the home screen with the test pad file, and a PC stand-in (`../tools/lobby_peer.cpp`: upstream's lobby code
+as fetched, commands from a file, an accepted peer-to-peer match played by `../build.sh linux`'s headless runner with
+`p2p_arguments`). Steps: Go Online and the roster through the DHT; public chat; private chat (request, accept, a message);
+auto reject (the stand-in's request declined at once); a peer-to-peer match from the stand-in to an app (the request chime recorded
+by SDL's disk audio driver and found at 660 and 880 Hz; the lobby closed and opened again; the match to Game End; confirmed states
+identical between the app and the stand-in's runner; back on the page; the history); a Slippi Direct match between the two apps
+(Training, the Direct select, the match to Game End, confirmed states identical, both back on the page, a win and a loss in the
+histories); the Match history tab (screenshots).
+
 ## melee-unlocked's interface
 
 The app's in-game menu and its screens before the game are melee-unlocked's own (v1.0.5), as faithfully as the console
@@ -929,7 +999,7 @@ NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's n
   keyboard's, the styles above). `menu_open_extra(title)` opens the category holding that page, and the focus walks down to
   it as a player's D-pad would. Practice menu: a "Practice menu" row on GAME > Training when features/proai.cpp is linked.
   Log lines: `settings: opened on ...`, `settings: <CATEGORY>`, `settings: focus <row>` (the tests follow these).
-- **Before the game** (`src/mu_home.cpp`): the launcher's rail (mark, Play, Settings, Replay Viewer, Mods, Bailey) and content
+- **Before the game** (`src/mu_home.cpp`): the launcher's rail (mark, Play, Settings, Multiplayer Lobby, Replay Viewer, Mods, Bailey) and content
   column at its 720 x 480 layout scaled to the screen (1.5 at 720p, 2.25 at 1080p). Play: the disc, GAME BUILD (Source Port or
   Vanilla), PLAY, the version line with the build computer's update ("Update and restart": download, check, swap, then the app
   closes), the Slippi account with Sign in (the app's sign-in screen, `switch_signin.cpp`), the mod profile, the launcher colour.
