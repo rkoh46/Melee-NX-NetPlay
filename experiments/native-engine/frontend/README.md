@@ -764,13 +764,52 @@ Onett's from the playlist folder `onetto+onetto2/`).
   on the GameCube adapter's raw reports, stepped on the usb:hs reader thread once per millisecond of reports; `PhobGCC/port<N>.ini`;
   CONTROLS > PhobGCC (port, on/off, the firmware's values, Stick calibration, Notch fix, soft reset). Calibration: the steps on
   the overlay, A/L/R records, Z back, X/Y turn a notch, B resets it, Start stops; the game gets a resting controller from that
-  port meanwhile. Console only (the Linux build reads no adapter). Test: `../tools/phob_check.sh`.
+  port meanwhile. Test: `../tools/phob_check.sh`; the full PhobGCC menu (0.4.8) below.
 - **Lossless adapter lag test**: `lagtestnext 1` (VIDEO > Advanced) or `--lag-test` makes the next start the lag test (the switch
   goes back to 0), with an empty `LagTestCard` folder. Test: `./test-overlays-linux.sh DISC lagtest`.
 - **RVZ and WIA discs** (`app.cpp` `app_disc_convert`): an .rvz or .wia named by `iso=`, or beside the expected GALE01.iso, is
   checked and written once as GALE01.iso (melee-unlocked's disc_rvz.cpp). Test: `../tools/rvz_check.sh` (upstream's own test).
 - **Supersampling** (`ssaa 2..4`, upstream's key; the Picture page): the internal resolution rendered 2 to 4 times per axis and
   scaled down (4x, 9x, 16x SSAA); off by default, heavy on the console's GPU.
+
+### PhobGCC menu, Gecko codes online, PC Settings and the rest of the controller rows (0.4.8)
+
+- **PhobGCC menu** (`src/phob_menu_glue.cpp`, `src/phob_menu_state.h`, `src/phob_shim/`, `patches/0140`): melee-unlocked's own
+  full-screen menu (its `gx/phob_menu.cpp` and `host/phob_store.cpp`, copied by `build.sh sync` to `gen/phob`; `host/phobscope.cpp`
+  from the fetched tree), drawn with the Practice menu's gold look and the game's font in the overlay pass: PhobVision's screens
+  (calibration, notch fix, snapback, waveshaping, smoothing, cardinal snapping, radius, the remap editor, trigger modes, lockouts,
+  resets), PhobScope (input viewer, stickmaps, value-over-time plots with snapback, dashback, pivot and powershield odds, button
+  timing, reaction test, continuous scope, gate visualizer, CSV export, coordinate viewer), Phob Check and named setups
+  (`PhobGCC/Setups/<name>.ini`). CONTROLS > PhobGCC: "Open the PhobGCC menu" or "Controller test" (PhobScope as the top screen).
+  While it is open every controller drives it and the game gets resting controllers; B on the top screen goes back to the panel,
+  Start closes it. `src/phob_adapter.cpp` keeps 4096 reports per port and the measured report rate (also on the overlay with
+  `adapterrate 1`). Off the console, upstream's `MELEE_TEST_ADAPTER_SCRIPT=<file>` plays a scripted adapter in socket 1
+  (`<ms> <ax> <ay> <cx> <cy> <la> <ra> [buttons]`, raw bytes, 1 kHz), started by the menu or at the run's start with
+  `MU_TEST_ADAPTER_AT_START=1`. Test: `./test-app-linux.sh DISC phob` (`MU_PHOB_RUNS="nav scope ..."` for some of its runs).
+- **Gecko codes online** (`features/gecko.cpp`, `patches/0141`, `../patches/net-0014`): settings.ini `gecko_online 1` (GECKO
+  CODES > Online), off by default. In a Direct 1v1 against another Melee-NX-NetPlay player who turned it on too, each side offers
+  its switched-on codes that can run online and ticks the other's; a match runs every code one side offered and the other
+  accepted (melee-unlocked's gecko_session rules, the lock before each selection), at every simulated frame's input exchange,
+  rollback frames included. `MU_TEST_GECKO_ACCEPT=all` (tests) accepts everything offered. Test: `test-online-linux.sh` with
+  `MU_PADS_A=scripts/online_direct_a.txt MU_PADS_B=scripts/online_direct_b.txt MU_USER_A=scripts/users/direct-a
+  MU_USER_B=scripts/users/direct-b MU_FILES_A=scripts/gecko_online_a MU_FILES_B=scripts/gecko_online_b
+  MU_INI_A=scripts/gecko_online_a.ini MU_INI_B=scripts/gecko_online_b.ini MU_ENV_B="MU_TEST_GECKO_ACCEPT=all MELEE_NET_LAG_MS=40
+  MELEE_NET_JITTER_MS=10" MU_ENV_A="MELEE_NET_LAG_MS=40 MELEE_NET_JITTER_MS=10"`. Fixed with it: the player's own codes never
+  ran, because they were read before the game image (and its writer) was loaded.
+- **PC Settings in Melee's Options menu** (`features/pcsettings.cpp`): a line names Z while the Options menu is open, and Z there
+  opens the settings panel (`pcsettings_row 0` turns it off). Test: `./test-app-linux.sh DISC pcsettings`.
+- **Lab dummy** (`features/training.cpp`): `lab_di 0..3` (none, in, out, random), `lab_react 0..3` (nothing, jump, shield, spot
+  dodge), `lab_tech 0..4` (its own, in place, toward, away, random); the Training page's rows. Offline Training only. Test:
+  `./test-overlays-linux.sh DISC lab-dummy`.
+- **Music and the replay viewer**: the jukebox's song stops while the viewer is paused or jumping. Test:
+  `./test-replays-linux.sh DISC music` (SDL's disk driver records the output).
+- **Developer aid**: `MELEE_SYNC_SMOOTH=1` (net-0014, upstream's) starts time sync's speed correction at 2 ms.
+- **Tests added**: `test-app-linux.sh` `box` (box mode on an adapter port), `dolphin` (a Dolphin profile imported onto an SDL
+  virtual gamepad, `MU_TEST_VIRTUAL_PAD=1`), `MU_APP_SKIN=1 ... online` (the skins-off-online note; `../tools/make_test_skin.py`);
+  `test-overlays-linux.sh` `adapter`, `lagtest-match` (the Lossless lag test into its Dream Land match), `te` with lock settings
+  (`MU_TEST_TE_LOCK=1`); `test-mods-linux.sh tmce-osd`; `test-net-linux.sh` `MU_NET_ENV_A` / `MU_NET_ENV_B` (the network condition
+  simulator per side); `test-online-linux.sh` `MU_FILES_A/B`, `MU_SKIN_A=1`. `test-mods-linux.sh training-menu` now opens the panel's
+  Training page with the Practice chord (the walk through the categories timed out).
 
 ## melee-unlocked's interface
 
@@ -1153,7 +1192,11 @@ DJW decoder in `src/modinstall/mi_vcdiff.cpp` is adapted from xdelta 3.1.0's `xd
 under GPL-3.0-or-later, credited in the files); the LZMA SDK's decoders (public domain) are compiled from the fetched tree
 and zlib is the system's or devkitPro's. Use custom music compiles melee-unlocked's `jukebox.cpp` (GPL-2.0-or-later) from
 the fetched tree with `patches/0118`, and decodes players' files with minimp3 (CC0 1.0), stb_vorbis (public domain or MIT),
-dr_wav and dr_flac (public domain or MIT No Attribution), fetched by `../fetch.sh` at pinned commits and never committed. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
+dr_wav and dr_flac (public domain or MIT No Attribution), fetched by `../fetch.sh` at pinned commits and never committed. The PhobGCC
+menu compiles melee-unlocked's `phob.cpp`, `phob_menu.cpp` and `phobscope.cpp` (GPL-3.0-only, from PhobGCC by Phobos132, FrostSSBM,
+CarVac, NiceMitch and contributors; stickmaps by venus23gg with Altimor's visualizer) and `phob_store.cpp` (GPL-3.0-or-later)
+from the fetched tree, so a build that contains them is distributed under GPL-3.0; Gecko codes online compile its
+`gecko_session.cpp` and `gecko_online.cpp` (GPL-2.0-or-later). The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
 
