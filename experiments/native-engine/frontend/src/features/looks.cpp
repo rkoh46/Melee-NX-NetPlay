@@ -51,7 +51,7 @@ bool setting(const std::string& key, const std::string& value) {
 
 MuHostApi* g_host = nullptr;
 uint32_t (*orig_display)() = nullptr;
-int32_t owner_tracking() { return fe::looks::active() ? 1 : 0; }   // read by the game for every draw: follows the menu at once
+int32_t owner_tracking() { return fe::looks::active() || live().flash_on.load(std::memory_order_relaxed) ? 1 : 0; }   // looks, the L-cancel flash   // read by the game for every draw: follows the menu at once
 // True widescreen (settings.cpp truewidescreen): how much wider the picture is than the game's cameras (320/219 at 16:9);
 // the game widens the camera Fountain of Dreams' reflection is rendered with by it (mu_host.h picture_widen).
 float picture_widen() { return live().true_widescreen.load(std::memory_order_relaxed) ? 320.0f / 219.0f : 1.0f; }

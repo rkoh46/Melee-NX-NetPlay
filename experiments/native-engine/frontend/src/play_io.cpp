@@ -12,13 +12,14 @@
 #include "host.h"                // shim
 #if MU_FE_AURORA
 #include "audio.h"
-namespace host { void audio_set_speed(double speed); }   // patches/0110: the build-time copy of audio_sdl.cpp
+namespace host { void audio_set_speed(double speed); int audio_buffer_ms(); }   // patches/0110, 0117: the build-time copy of audio_sdl.cpp
 #include "window.h"
 #include "jukebox.h"
 #include <dolphin/pad.h>
 #include "app/game_menu.h"       // menu_is_open (the build-time copy with patches/0104)
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -239,11 +240,12 @@ extern "C" void mu_frontend_audio(const int16_t* rl, uint32_t frames) {
   // After the game stalled (a scene loading from the SD card) the ring is empty and the output is holding
   // its last sample. The app's output code would then rebuild its cushion only by playing 1.5% slow, a few
   // seconds during which every late frame is another gap. Put the cushion back at once instead: the gap has
-  // happened, 40 ms of silence makes it a little longer and ends it.
+  // happened, the buffer's worth of silence (Auto's or Low latency's, features/audio.cpp; patches/0117) ends it.
   if (fe::block_fill == 0 && host::audio_buffered_ms() < 6) {
     static const uint8_t silence[640] = {};
     ++fe::refills;
-    for (int i = 0; i < 8; ++i) { host::audio_push(silence, sizeof silence); fe::refill_ms += 5; }
+    const int blocks = std::clamp((host::audio_buffer_ms() + 4) / 5, 1, 24);
+    for (int i = 0; i < blocks; ++i) { host::audio_push(silence, sizeof silence); fe::refill_ms += 5; }
   }
   // The settings panel's menu sounds (mu_panel.cpp), mixed into this block of the game's output; the game's own samples are untouched.
   static std::vector<int16_t> with_tick;
@@ -488,7 +490,10 @@ uint32_t gcadapter_poll(PadState out[4]) {
 }
 #endif
 }  // namespace host
-namespace slippi::jukebox { void mix(int16_t*, size_t, int) {} }   // the Slippi music player is not part of this program
+// audio_sdl.cpp's device thread calls the app's music player here: melee-unlocked's jukebox when Use custom music is on
+// (features/audio.cpp), else nothing.
+extern "C" __attribute__((weak)) void fe_jukebox_mix(int16_t* out, size_t frames, int volume);
+namespace slippi::jukebox { void mix(int16_t* out, size_t frames, int volume) { if (fe_jukebox_mix) fe_jukebox_mix(out, frames, volume); } }
 
 // The screens before the game (switch_signin.cpp with patches/0105) read the controllers here: the app's whole
 // input path (GameCube adapter, SDL gamepads through Aurora's PAD, the MELEE_PAD_FILE test file), as PADStatus.

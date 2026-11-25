@@ -21,8 +21,11 @@ void register_replay_library();      // replay_library.cpp, from register_replay
 void register_search();
 void register_proai();               // proai.cpp: Fight a pro (command 0xEA) and the Practice menu's simulation-thread half
 void register_cosmetics();            // cosmetics.cpp: skins (commands 0xF9, 0xFB-0xFD), the online costume rule
-void register_looks();
-void register_egg();                 // egg_command.cpp: the character select frame command (0xDA) for the easter egg               // looks.cpp: look presets, Lightweight, Visual effects (the renderer: patches/0115)
+void register_looks();               // looks.cpp: look presets, Lightweight, Visual effects (the renderer: patches/0115)
+void register_egg();                 // egg_command.cpp: the character select frame command (0xDA) for the easter egg
+void register_audio();               // audio.cpp: Audio buffer (Auto, Low latency) and Use custom music (the jukebox)
+void register_gecko();               // gecko.cpp: the player's Gecko codes (GeckoCodes.ini), offline
+void register_phob();                // phob.cpp: PhobGCC settings per adapter port (src/phob_adapter.cpp)
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off

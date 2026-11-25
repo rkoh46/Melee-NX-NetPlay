@@ -19,7 +19,7 @@ struct Config {
   bool fps = false, graph = false;              // showfps, performance
   bool nicknames = false;                       // playernicknames
   bool combo = false;                           // arcade_combo_counter
-  int lcancel = 0;                              // lcancel_flash_mode: 0 off, 1 missed, 5 made, 6 both (upstream's renderer modes)
+  int lcancel = 0;                              // lcancel_flash_mode: 0 off, 1 missed, 5 made, 6 both (upstream's renderer modes); 2, 3, 4 TE's own (missed, made, both)
   int lcancel_success = 2;                      // lcancel_success_flash: 0 none, 1 white, 2 green
   bool latency_test = false;                    // latencytest: X + D-pad Down paints black, then white, X + D-pad Up ends
   bool adapter_rate = false;                    // adapterrate: the GameCube adapter's measured report rate on screen
@@ -32,6 +32,7 @@ struct Config {
   std::string border;                           // borderart: empty none, "grid", or a .bmp file in <folder>/Borders
   int border_edge = 1;                          // borderedge: 1 the picture casts a soft shadow on the art
   int scale = 0;                                // scale: internal resolution, 0 Auto (the display), 1..4 times 640x480
+  int ssaa = 1;                                 // ssaa (upstream's key): 1 off, 2..4 = 4x, 9x, 16x supersampling of that resolution
   uint32_t generation = 0;                      // bumped whenever a picture option changes
 };
 

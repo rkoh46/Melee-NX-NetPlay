@@ -1,0 +1,23 @@
+Use custom music (Melee-NX-NetPlay 0.4.7): play mode may ask for the game's music through the host jukebox (features/audio.cpp
+answers mu_frontend_jukebox), as melee-unlocked's hosts play it; otherwise the game's own AX stream, as before. After 0101.
+--- a/port/linux/host_services.cpp
++++ b/port/linux/host_services.cpp
+@@ -79,6 +79,8 @@
+ // command: slippi_command; INT32_MIN when the frontend does not know it.
+ __attribute__((weak)) void mu_frontend_disc_ready(void);
+ __attribute__((weak)) int mu_frontend_disc_read(uint64_t offset, void* out, size_t bytes);
++// Play mode with Use custom music on (features/audio.cpp, patches/0119): the game hands its songs to the host jukebox.
++__attribute__((weak)) int mu_frontend_jukebox(void);
+ __attribute__((weak)) int32_t mu_frontend_command(uint8_t command, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size);
+ }
+ namespace linux_host {
+@@ -1174,7 +1176,8 @@
+   if (!cfg.input_script.empty() && !input_script.load(cfg.input_script,error)) return startup_failed();
+   // Linux uses the game's own native AX music stream until a native jukebox
+   // service is wired. Keep ordinary Melee Unlocked gameplay options enabled.
+-  if (!std::getenv("MELEE_NO_JUKEBOX")) setenv("MELEE_NO_JUKEBOX","1",0);
++  if (mu_frontend_jukebox && mu_frontend_jukebox()) unsetenv("MELEE_NO_JUKEBOX");   // the host jukebox (patches/0119)
++  else if (!std::getenv("MELEE_NO_JUKEBOX")) setenv("MELEE_NO_JUKEBOX","1",0);
+   if (!load_disc(error)) return startup_failed();
+   if (cfg.has_time_base) boot_ticks=cfg.time_base;
+   else {

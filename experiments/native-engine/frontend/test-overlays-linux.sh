@@ -11,10 +11,16 @@
 #   latency   --auto-vs, latencytest 1: X + D-pad Down twice (black, then white), X + D-pad Up (the picture again)
 #   te        the 20XX TE save's profile (MU_MODS_DIR) with its input display bit set (te_options2 2000 in settings.ini.state):
 #             the input display in a VS match without inputoverlay
+#   lagtest   lagtestnext 1: the Lossless adapter lag test start (boot to the character select with the test's rules, a
+#             10-second rumble on every port when it loads), the switch cleared for the next start
+#   te-flash  the 20XX TE save's profile (MU_MODS_DIR) with lcancel_flash_mode 4 (TE: both) and lcancel_success_flash 2: the game's
+#             own TE flash from TE's word 2 bits, set by the overlays module
 #   picture   --auto-vs, brightness, contrast, vibrance, sharpening, the home television CRT look, 73:60, grid border art
 #   studio    --auto-vs, the studio monitor CRT look, 4:3, a .bmp border (made here), shadow off
 #   scale1, scale2   --auto-vs with internal resolution 640x480 and 1280x960
+#   ssaa      --auto-vs with ssaa 2 (4x supersampling of the display's resolution)
 # Output: build/native-engine-gfx/run-overlays/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
+# MU_RUN_ENV: more docker arguments (for example "-e MU_TEST_FLASH_FRAMES=60": the L-cancel flash held long enough to be shot).
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -28,7 +34,7 @@ mkdir -p "$root"
 run() {
   local dir=$1 frames=$2 every=$3 extra=$4
   local mods=(); [ -n "${MU_MODS_DIR:-}" ] && mods=(-v "$MU_MODS_DIR:/out/mods:ro")
-  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} \
+  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-overlays}-$(basename "$dir")" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} ${MU_RUN_ENV:-} \
     -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$extra" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
@@ -103,6 +109,19 @@ PY
     printf '%s\n' "te_options2 2000" > "$dir/settings.ini.state"
     run "$dir" 2200 2 "--auto-vs"
     ;;
+  lagtest)
+    fresh "$dir"
+    # The lag test boots to the character select (the lag test's rules: time, 99 stocks, Dream Land only on random) and rumbles
+    # every port for 10 s when it loads; the adapter's own input sequence takes it from there (not scripted here).
+    printf '%s\n' "lagtestnext 1" > "$dir/settings.ini"
+    run "$dir" 900 2 ""
+    echo "settings.ini after the start: $(grep lagtestnext "$dir/settings.ini")"
+    ;;
+  te-flash)
+    fresh "$dir"; match_script "$dir/script.txt"
+    printf '%s\n' "mod_profile te" "lcancel_flash_mode 4" "lcancel_success_flash 2" > "$dir/settings.ini"
+    run "$dir" 2400 1 "--auto-vs"
+    ;;
   picture)
     fresh "$dir"
     printf '%s\n' "brightness 1.20" "contrast 1.15" "vibrance 1.60" "sharpness 1.00" "crt_filter 2" "crt_curve 1.50" "aspect 1" "borderart grid" "borderedge 1" > "$dir/settings.ini"
@@ -128,6 +147,11 @@ PY
     printf '%s\n' "crt_filter 1" "aspect 2" "borderart ramp.bmp" "borderedge 0" > "$dir/settings.ini"
     run "$dir" 1300 2 "--auto-vs"
     ;;
+  ssaa)
+    fresh "$dir"
+    printf '%s\n' "ssaa 2" > "$dir/settings.ini"
+    run "$dir" 1300 2 "--auto-vs"
+    ;;
   scale1|scale2)
     fresh "$dir"
     printf '%s\n' "scale ${case#scale}" > "$dir/settings.ini"
@@ -136,6 +160,6 @@ PY
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   echo "== $case"
-  grep -hE "^overlay|^overlays|^training|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
+  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
   echo "shots: $(ls "$dir/shots" | wc -l | tr -d ' ')"
 done

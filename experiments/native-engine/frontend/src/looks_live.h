@@ -35,6 +35,11 @@ struct Live {
   std::atomic<bool> owners{false};                       // the game marks draw owners (MuHostApi.native_owner_tracking), set by the module
   std::atomic<bool> true_widescreen{false};              // settings.ini truewidescreen: the renderer widens to 16:9 (bridge, patches/0116)
   std::atomic<uint8_t> scene_major{0};                   // the scene of the newest frame the renderer converted (the opening movie stays 4:3)
+  // The L-cancel flash (features/overlays.cpp, upstream host/lcancel.cpp publish_tints): per player slot 0..5, 0 none or
+  // 0x1000000 | RGB, the colour that slot's fighter model takes while it flashes (the bridge's tint, patches/0120);
+  // flash_on: a renderer flash mode is chosen, so the game marks draw owners.
+  std::atomic<uint32_t> flash[6] = {};
+  std::atomic<bool> flash_on{false};
   // Measurements for the picture test's timing lines (render thread only writes them).
   std::atomic<uint64_t> frames{0}, rule_ns{0}, skipped{0}, drawn{0}, treated_textures{0}, tinted{0}, wired{0};
 };

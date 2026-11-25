@@ -1,0 +1,130 @@
+Auto L-cancel in Direct when every player agrees (Melee-NX-NetPlay 0.4.7): melee-unlocked allows the automatic L-cancel in
+Direct (host/lcancel_policy.h); here a Direct match uses it only when every player's build offered it, through two more
+flags of the build message of net-0004 (0x08: reads the agreement, 0x10: this player has Auto L-cancel on), so both
+sides decide from the same exchanged bytes. The press only changes the local controller's input, which then goes to the
+other side as any input does. Against Slippi Dolphin or an older build: never. Applied by ../net_sources.sh after net-0010.
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -562,14 +562,17 @@
+       nx.pause_rule = (flags & 1) != 0;
+       nx.no_pause = nx.pause_rule && (flags & 2) != 0;
+       nx.pick_previews = version >= 2 && (flags & 4) != 0;   // patches/net-0005
++      nx.lcancel_rule = version >= 2 && (flags & 8) != 0;    // patches/net-0011: reads the Auto L-cancel agreement
++      nx.auto_lcancel = nx.lcancel_rule && (flags & 16) != 0;   // and offers it
+       if ((packet >> has_shield) && has_shield == 1 && (packet >> r >> g >> bl)) nx.shield = 0x1000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | bl;
+       if ((packet >> c1) && (packet >> c2)) {
+         nx.port_colour[0] = c1 >= 1 && c1 <= 4 ? (int8_t)(c1 - 1) : (int8_t)-1;
+         nx.port_colour[1] = c2 >= 1 && c2 <= 4 ? (int8_t)(c2 - 1) : (int8_t)-1;
+       }
+       { std::lock_guard<std::mutex> lk(nx_mutex_); remote_nx_[port] = nx; }
+-      host::log("slippi: opponent %u is a Melee-NX-NetPlay build: Direct pause %s, shield colour %s%06X, port colours %d/%d", port,
+-                nx.no_pause ? "off" : "on", nx.shield ? "" : "none ", nx.shield & 0xFFFFFFu, nx.port_colour[0], nx.port_colour[1]);
++      host::log("slippi: opponent %u is a Melee-NX-NetPlay build: Direct pause %s, shield colour %s%06X, port colours %d/%d, Auto L-cancel %s", port,
++                nx.no_pause ? "off" : "on", nx.shield ? "" : "none ", nx.shield & 0xFFFFFFu, nx.port_colour[0], nx.port_colour[1],
++                nx.auto_lcancel ? "offered" : nx.lcancel_rule ? "not offered" : "unknown (older build)");
+       break;
+     }
+     case NP_MSG_NX_PICK: {      // patches/net-0005
+@@ -982,19 +985,20 @@
+   const auto& cfg = slippi::online::config();
+   if (!cfg.nx_build_message) { host::log("slippi: no build message (test: behaving as Slippi Dolphin)"); return; }
+   sent_no_pause_ = !cfg.direct_pause;
++  sent_auto_lcancel_ = cfg.auto_lcancel_direct;   // patches/net-0011
+   for (int i = 0; i < 2; ++i) sent_port_colour_[i] = (int8_t)std::clamp(cfg.port_colour[i], -1, 3);
+   auto p = std::make_unique<Packet>();
+   // Version 2 (patches/net-0005): flag 0x04, this build reads live pick previews (NP_MSG_NX_PICK). A version 1 reader
+   // ignores the flag; the layout after the flags is unchanged.
+   *p << (uint8_t)NP_MSG_NX_BUILD << (uint8_t)'N' << (uint8_t)'X' << (uint8_t)'B' << (uint8_t)2 << player_idx_
+-     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0) | (cfg.pick_previews ? 4 : 0));
++     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0) | (cfg.pick_previews ? 4 : 0) | 8 | (sent_auto_lcancel_ ? 16 : 0));   // 0x08, 0x10: patches/net-0011
+   const uint32_t shield = cfg.shield_online;
+   if (shield & 0x1000000u) *p << (uint8_t)1 << (uint8_t)(shield >> 16) << (uint8_t)(shield >> 8) << (uint8_t)shield;
+   else *p << (uint8_t)0;
+   *p << (uint8_t)(sent_port_colour_[0] + 1) << (uint8_t)(sent_port_colour_[1] + 1);
+   { std::lock_guard<std::mutex> lk(async_mutex_); async_queue_.push_front(std::move(p)); }
+-  host::log("slippi: build message queued (Direct pause %s, shield colour %s%06X, port colours %d/%d)", sent_no_pause_ ? "off" : "on",
+-            (shield & 0x1000000u) ? "" : "none ", shield & 0xFFFFFFu, sent_port_colour_[0], sent_port_colour_[1]);
++  host::log("slippi: build message queued (Direct pause %s, shield colour %s%06X, port colours %d/%d, Auto L-cancel %s)", sent_no_pause_ ? "off" : "on",
++            (shield & 0x1000000u) ? "" : "none ", shield & 0xFFFFFFu, sent_port_colour_[0], sent_port_colour_[1], sent_auto_lcancel_ ? "offered" : "not offered");
+ }
+ bool NetplayClient::PauseOff() const {
+   std::lock_guard<std::mutex> lk(nx_mutex_);
+@@ -1010,6 +1014,19 @@
+   }
+   return seen == remote_player_count_ && off;     // a remote player without the message (Slippi Dolphin): Slippi's rule
+ }
++// patches/net-0011: Auto L-cancel in Direct only when every player offered it (each side decides from the same exchanged bytes).
++bool NetplayClient::AutoLcancelAgreed() const {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  if (remote_player_count_ == 0 || !sent_auto_lcancel_) return false;
++  int seen = 0;
++  for (int port = 0; port < 4; ++port) {
++    if (port == player_idx_) continue;
++    if (!remote_nx_[port].received) continue;          // not a player of this match, or no message (counted below)
++    if (!remote_nx_[port].auto_lcancel) return false;
++    ++seen;
++  }
++  return seen == remote_player_count_;               // a remote player without the message (Slippi Dolphin): no
++}
+ bool NetplayClient::SendPickPreview(const uint8_t* wire, size_t size) {
+   if (GetSlippiConnectStatus() != ConnectStatus::CONNECTED || !slippi::online::config().pick_previews) return false;
+   bool any = false;
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -214,13 +214,15 @@
+   MatchInfo GetMatchInfoSnapshot() const { std::lock_guard<std::mutex> lk(match_mutex_); return match_info_; }
+   PlayerSelections GetSlippiRemoteChatMessage(bool chat_enabled);
+   // patches/net-0004: what the other players' builds said (NP_MSG_NX_BUILD), by port 0..3.
+-  struct NxBuild { bool received = false, pause_rule = false, no_pause = false, pick_previews = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
++  struct NxBuild { bool received = false, pause_rule = false, no_pause = false, pick_previews = false, lcancel_rule = false, auto_lcancel = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
+   NxBuild RemoteNxBuild(uint8_t port) const { std::lock_guard<std::mutex> lk(nx_mutex_); return port < 4 ? remote_nx_[port] : NxBuild{}; }
+   // Direct pausing is off: every remote player's build reads the rule and this player or one of them turned it off. Both
+   // sides decide from the same bytes: each sent its own once at connection, before its selections.
+   bool PauseOff() const;
+   // An online 1v1 where the other build sent its port colour choices: this side's as sent, theirs.
+   bool PortColours(int8_t mine[2], int8_t theirs[2]) const;
++  // patches/net-0011: this side and every remote player's build offered Auto L-cancel (flags 0x08 reads the rule, 0x10 offers it).
++  bool AutoLcancelAgreed() const;
+   // patches/net-0005: live pick previews between Melee-NX-NetPlay builds. SendPickPreview queues this side's pick (the wire
+   // bytes of mu_pick_preview.h) to every connected remote whose build reads them; false when none does.
+   // RemotePickPreview: the newest pick a remote port sent (false: none since connection).
+@@ -313,6 +315,7 @@
+   mutable std::mutex nx_mutex_;
+   NxBuild remote_nx_[4];
+   bool sent_no_pause_ = false;
++  bool sent_auto_lcancel_ = false;   // patches/net-0011
+   int8_t sent_port_colour_[2] = {-1, -1};
+   std::vector<uint8_t> remote_pick_[4];   // patches/net-0005, under nx_mutex_
+   PlayerSelections remote_chat_message_;
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -1173,6 +1173,11 @@
+ // 16.7 ms frames), at least Slippi's default 2 and at most 5. At 95 ms with delay 2 the console rolled
+ // back two frames every fourth frame and fell behind 800 times in 46 s (Nov 2026); delay 3 removes most
+ // of those rollbacks for one frame of input lag.
++// patches/net-0011
++bool auto_lcancel_agreed() {
++  return g_last_search.mode == Matchmaking::DIRECT && g_netplay &&
++         g_netplay->GetSlippiConnectStatus() == NetplayClient::ConnectStatus::CONNECTED && g_netplay->AutoLcancelAgreed();
++}
+ int effective_delay() {
+   if (!g_config.delay_auto) return g_config.delay;
+   const unsigned rtt = g_netplay ? g_netplay->RoundTripMs() : 0;
+--- a/port/runtime/hle/slippi_online.h
++++ b/port/runtime/hle/slippi_online.h
+@@ -27,10 +27,15 @@
+   bool nx_build_message = true;      // tests: false behaves as Slippi Dolphin (sends no build message, ignores the other's)
+   // Melee-NX-NetPlay 0.4.4 (patches/net-0005): live pick previews on the online character select, between two of its builds.
+   bool pick_previews = true;
++  // Melee-NX-NetPlay 0.4.7 (patches/net-0011): this player has Auto L-cancel on and offers it for Direct (melee-unlocked allows
++  // it there). Active only when every player's build says the same (build message flags 0x08, 0x10).
++  bool auto_lcancel_direct = false;
+ };
+ Config& config();
+ // The input delay the next game uses: config().delay, or the automatic choice from the measured ping.
+ int effective_delay();
++// patches/net-0011: a connected Direct match where every player's build offered Auto L-cancel (this one included).
++bool auto_lcancel_agreed();
+ 
+ void init();
+ void shutdown();
