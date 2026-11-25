@@ -731,6 +731,24 @@ Destination plays `AF.hps` / `CE.hps` instead of its single song `30.hps`). In V
 took the Z press (it adds the hovered fighter to a squad); `../patches/0005` leaves Z to the pack on its seven paired
 icons when the pack is loaded.
 
+### Audio buffer and Use custom music (0.4.7)
+
+`src/features/audio.cpp`, with `patches/0117` (the output's buffer can be set while it plays), `patches/0118` (melee-unlocked's
+`jukebox.cpp`, compiled from the fetched tree into `gen/jukebox/`) and `patches/0119` (the host asks play mode whether the game's
+music goes through the jukebox). The panel's AUDIO page has the rows.
+
+| settings.ini | |
+|---|---|
+| `audio_mode 0` (default) | Auto: melee-unlocked's `AudioBufferPolicy` (compiled from the fetched tree). Starts at what this output settled on last time (`<app folder>/audio-auto.txt`; the handheld speaker and the TV each keep their own) or 40 ms, grows 4 ms after each gap during a match (gaps over 60 ms are stalls and are left alone), settles back 1 ms per 10 s without one, never under 10 ms. Log: `audio: buffer Auto for the ...`, `audio: Auto buffer N ms after a gap in the match`, `... ends at N ms (kept for the next session)` |
+| `audio_mode 1`, `audio_buffer_ms 5..120` | Low latency: that buffer, fixed (30 when picked from the panel, as upstream) |
+| `musicpacks 1` (default 0) | Use custom music, from the next start: the game hands every song to the jukebox (commands 0xD6, 0xD7, 0xD8, 0xEB), which plays the disc's HPS song or a player's file of the same name from `<app folder>/MusicPacks/audio/` (`name.mp3`, `.wav`, `.flac`, `.ogg` or `.hps`; a folder `name/` or `name+other/` of files: a random one each time). `Tracks.txt` (the disc's song names) and `README.txt` are written into the folder at start. M4A/AAC is not decoded (the disc's song plays). A player's file is capped at five minutes on the console (upstream: ten). Off: the game's own music stream, as before |
+
+The music only reaches the sound output, never the game, so a pack plays online too (upstream's packs play locally). Tests:
+`../tools/music_decode_test.sh` (tones made with ffmpeg in WAV, MP3, OGG, FLAC, mono WAV: rate, length, pitch and level as
+written; M4A refused; the length limit) and `./test-audio-linux.sh DISC auto fixed jukebox packs` (SDL's disk audio driver
+records the output: with `packs` a 440 Hz test tone is in every second of the recording, the menu's song from `menu01.mp3`,
+Onett's from the playlist folder `onetto+onetto2/`).
+
 ## melee-unlocked's interface
 
 The app's in-game menu and its screens before the game are melee-unlocked's own (v1.0.5), as faithfully as the console
@@ -1091,7 +1109,9 @@ Our files are GPL-3.0-or-later, except `src/controls_core.h` and `src/controls_f
 installer, the catalog checks of `src/modinstall/mi_catalog.cpp` follow melee-unlocked's `launcher_mod_catalog.cpp` and the
 DJW decoder in `src/modinstall/mi_vcdiff.cpp` is adapted from xdelta 3.1.0's `xdelta3-djw.h` (both GPL-2.0-or-later, used
 under GPL-3.0-or-later, credited in the files); the LZMA SDK's decoders (public domain) are compiled from the fetched tree
-and zlib is the system's or devkitPro's. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
+and zlib is the system's or devkitPro's. Use custom music compiles melee-unlocked's `jukebox.cpp` (GPL-2.0-or-later) from
+the fetched tree with `patches/0118`, and decodes players' files with minimp3 (CC0 1.0), stb_vorbis (public domain or MIT),
+dr_wav and dr_flac (public domain or MIT No Attribution), fetched by `../fetch.sh` at pinned commits and never committed. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
 

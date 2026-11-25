@@ -1,0 +1,96 @@
+melee-unlocked's jukebox (port/runtime/hle/jukebox.cpp, GPL-2.0-or-later) on the Switch (Melee-NX-NetPlay 0.4.7): the music packs
+folder is the app's own (jukebox_switch.h, src/jukebox_shim/), the README it writes names the console's settings panel and
+decoders, Tracks.txt is always written, nothing is opened in a file browser, and a player's file is capped at five minutes
+on the console. Player files decode through linux_media::decode_audio (src/media_decode.cpp: minimp3, stb_vorbis, dr_wav,
+dr_flac). Against a build-time copy with LF line ends and no byte-order mark (frontend/build.sh).
+--- a/port/runtime/hle/jukebox.cpp
++++ b/port/runtime/hle/jukebox.cpp
+@@ -21,8 +21,7 @@
+ #include <functional>
+ #include <new>
+ #include <string>
+-#include <windows.h>
+-#include <shellapi.h>
++#include "jukebox_switch.h"   // Melee-NX-NetPlay: the MusicPacks folder, the few Windows names used below
+ #ifdef _WIN32
+ #include <mfapi.h>
+ #include <mfidl.h>
+@@ -164,7 +163,11 @@
+ }
+ 
+ // Ten minutes at 32 kHz, or the same 154 MB memory budget at higher native rates.
++#ifdef __SWITCH__
++constexpr size_t MAX_CUSTOM_FRAMES = OUTPUT_RATE * 60u * 5u;    // the console: five minutes (77 MB of decoded song)
++#else
+ constexpr size_t MAX_CUSTOM_FRAMES = OUTPUT_RATE * 60u * 10u;
++#endif
+ using PcmSink = std::function<bool(const float* pcm, size_t frames)>;
+ 
+ // A player's file in any format the system decodes (all but HPS), to `sink` piece by piece as
+@@ -365,15 +368,8 @@
+   const std::string first = disc.begin() == disc.end() ? std::string() : disc.begin()->string();
+   if (_stricmp(first.c_str(), "audio") != 0) return false;
+ 
+-  wchar_t module[32768];
+-  const DWORD n = GetModuleFileNameW(nullptr, module, (DWORD)_countof(module));
+-  if (!n || n >= _countof(module)) return false;
+-#ifdef __APPLE__
+-  // The player's user folder (--user-dir), never the read-only .app bundle the game may run from.
+-  const std::filesystem::path root = std::filesystem::u8path(slippi::online::config().user_dir) / "MusicPacks";
+-#else
+-  const std::filesystem::path root = std::filesystem::path(std::wstring(module, n)).parent_path() / L"MusicPacks";
+-#endif
++  const std::filesystem::path root = jukebox_switch::music_packs_root();   // the app's folder on the SD card
++  if (root.empty()) return false;
+   const std::filesystem::path direct = root / disc;
+   std::error_code ec;
+   if (std::filesystem::is_regular_file(direct, ec) && !ec) { *out = direct; return true; }
+@@ -498,19 +494,12 @@
+ void set_music_packs_enabled(bool enabled) { g_music_packs_enabled.store(enabled, std::memory_order_relaxed); }
+ bool music_packs_enabled() { return g_music_packs_enabled.load(std::memory_order_relaxed); }
+ void open_music_packs_folder() {
+-  wchar_t path[32768];
+-  const DWORD length = GetModuleFileNameW(nullptr, path, (DWORD)_countof(path));
+-#ifdef __APPLE__
+-  const std::filesystem::path folder = std::filesystem::u8path(slippi::online::config().user_dir) / "MusicPacks";
+-#else
+-  const std::filesystem::path folder = length && length < _countof(path)
+-      ? std::filesystem::path(std::wstring(path, length)).parent_path() / L"MusicPacks"
+-      : std::filesystem::path(L"MusicPacks");
+-#endif
++  const std::filesystem::path folder = jukebox_switch::music_packs_root();
++  if (folder.empty()) return;
+   std::error_code ec;
+   std::filesystem::create_directories(folder, ec);
+   if (ec) { host::log("jukebox: cannot create music folder (%s)", ec.message().c_str()); return; }
+-  if (!g_music_pack_reader.load()) {
++  {   // the host here has no reader of its own: the list is always written
+     std::vector<std::string> paths;
+     if (host::disc_music_paths(&paths) && !paths.empty()) {
+       std::ofstream list(folder / L"Tracks.txt", std::ios::trunc);
+@@ -524,10 +513,10 @@
+   if (!std::filesystem::exists(readme, ec)) {
+     std::ofstream note(readme);
+     note << "Custom music / audio packs\n\n"
+-            "1. In F1 > Audio, enable Use custom music and use Open music packs to open this build's folder.\n"
+-            "2. Open Tracks.txt for the exact original names. Start the game with its ISO loaded, then open this folder again if the list is missing.\n"
++            "1. In the settings panel (L + R + Start) > AUDIO, turn on Use custom music. This folder is switch/melee-nx-netplay/MusicPacks on the SD card.\n"
++            "2. Open Tracks.txt for the exact original names (written each time the game starts with Use custom music on).\n"
+             "3. Extract downloaded ZIP packs first. The audio folder goes directly inside MusicPacks, without an extra pack-name folder.\n"
+-            "Tracks.txt lists the original menu and stage music files (refresh it from Audio settings while the game is running). For /audio/name.hps, replace it with\n"
++            "Tracks.txt lists the original menu and stage music files. For /audio/name.hps, replace it with\n"
+             "MusicPacks/audio/name.hps (HPS), or MusicPacks/audio/name.mp3 (MP3), MusicPacks/audio/name.wav\n"
+             "(WAV), or another supported audio extension. For a random playlist, put audio files in\n"
+             "MusicPacks/audio/name/. The game picks one each time it starts that song.\n"
+@@ -535,10 +524,9 @@
+             "One folder can serve several tracks (a stage's main and alternate songs): name it after each joined with +, like MusicPacks/audio/name+othername/.\n"
+             "A direct replacement takes priority over the random playlist. Leave and re-enter the stage/menu to start the new song.\n"
+             "These packs replace music, not character voices or sound effects. Check the Music and Volume sliders if silent.\n"
+-            "Windows Media Foundation handles common formats; HPS files must be stereo.\n"
++            "The console decodes MP3, WAV, FLAC and OGG Vorbis (not M4A/AAC); HPS files must be stereo.\n"
+             "Custom tracks play locally; other players do not need the same pack. Vanilla audio mode keeps the disc music.\n";
+   }
+-  ShellExecuteW(nullptr, L"open", folder.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+ }
+ void stop() {
+   ++g_song_generation;

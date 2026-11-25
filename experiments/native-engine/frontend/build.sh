@@ -96,6 +96,13 @@ sync_tree() {
   for p in "$stage"/patches/0*.patch; do patch -s -p1 -d "$stage/mu" < "$p"; done
   cp "$stage/mu/port/linux/host_services.cpp" "$gen/host_services.base.cpp"     # what patches/0101 is a diff against
   patch -s -p1 -d "$stage/mu" < "$here/patches/0101-host-frontend-hooks.patch"
+  patch -s -p1 -d "$stage/mu" < "$here/patches/0119-host-jukebox-hook.patch"   # Use custom music: the host jukebox (features/audio.cpp)
+  # melee-unlocked's jukebox (Use custom music, features/audio.cpp), LF line ends, with patches/0118: the app's MusicPacks folder.
+  rm -rf "$gen/jukeboxsrc"; mkdir -p "$gen/jukeboxsrc/port/runtime/hle" "$gen/jukebox"
+  perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/hle/jukebox.cpp" > "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp"
+  patch -s -p1 -d "$gen/jukeboxsrc" < "$here/patches/0118-jukebox-on-the-switch.patch"
+  cmp -s "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp" "$gen/jukebox/jukebox.cpp" || cp "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp" "$gen/jukebox/jukebox.cpp"
+  rm -rf "$gen/jukeboxsrc"
   # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
   rsync -rlpc --delete "$stage/mu/" "$work/mu/"
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"
@@ -135,6 +142,7 @@ sync_tree() {
   # The sound output follows the game's speed (online time sync; patches/0110).
   rm -rf "$gen/audiosrc"; mkdir -p "$gen/audiosrc/port/runtime/host"; cp "$repo/port/runtime/host/audio_sdl.cpp" "$gen/audiosrc/port/runtime/host/"
   patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0110-audio-follows-game-speed.patch"
+  patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0117-audio-buffer-setting.patch"   # the player's buffer: Auto or Low latency (features/audio.cpp)
   cmp -s "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp" || cp "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp"
   rm -rf "$gen/audiosrc"
   # The app's in-game menu (patches/0104: pages a host adds, greyed rows, the Quit action, a HUD extra) and its sign-in

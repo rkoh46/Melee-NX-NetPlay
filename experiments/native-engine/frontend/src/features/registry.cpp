@@ -26,7 +26,7 @@ Registry& registry() { static Registry r; return r; }
 void ensure() {
   static std::once_flag once;
   std::call_once(once, [] {
-    register_options(); register_training(); register_replays(); register_overlays(); register_spectator(); register_netoverlay(); register_search(); register_proai(); register_looks(); register_cosmetics();
+    register_options(); register_training(); register_replays(); register_overlays(); register_spectator(); register_netoverlay(); register_search(); register_proai(); register_looks(); register_cosmetics(); register_audio();
     if (present::linked()) { present::register_settings(); present::configure_from_arguments(options.rest); }
   });
 }

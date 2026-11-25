@@ -246,7 +246,7 @@ void place(const std::string& page, int* cat, std::string* title) {
     {"Picture", 0, "Picture"}, {"Game options", 2, "Game"}, {"Picture and HUD", 2, "HUD"}, {"Community codes", 2, "Community codes"},
     {"Computer players", 2, "Computer players"}, {"Game", 2, "Input"}, {"Online", 2, "Online"}, {"Training", 2, "Training"},
     {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Mods", 7, "Game mods"}, {"Controller setup", 3, "Controller setup"},
-    {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}};
+    {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}, {"Audio", 1, "Output"}};
   for (const P& p : table) if (page == p.page) { *cat = p.cat; *title = p.title; return; }
   *cat = 2; *title = page;
 }
@@ -260,7 +260,7 @@ bool place_row(const std::string& label, int* cat, std::string* title) {
     {"Language", 2, "Language"}, {"Everything unlocked", 2, "Language"},
     {"Frozen Pokemon Stadium", 2, "Stages"}, {"Frozen Final Destination", 2, "Stages"},
     {"Automatic L-cancel (offline)", 2, "L-cancel"}, {"Offline input delay", 2, "Input delay"},
-    {"Console low-pass on voices (next start)", 1, "Music and sound"},
+    {"Console low-pass on voices (next start)", 1, "Music and sound"}, {"Use custom music (next start)", 1, "Music and sound"},
     // melee-unlocked's VIDEO page has the Arcade look section
     {"Show hitboxes", 0, "Arcade look"}, {"Projectile hitboxes", 0, "Arcade look"}, {"Hitboxes behind fighters", 0, "Arcade look"},
     {"2D camera", 0, "Arcade look"}, {"Grid behind the stage", 0, "Arcade look"}, {"Combo counter (offline)", 0, "Arcade look"}};
@@ -439,8 +439,8 @@ std::array<Category, 8> build_rows(bool in_game) {
     {0, "Graphics backend", "One renderer on the Switch: Aurora on Vulkan."},
     {0, "Widescreen (true widescreen), Look, Visual effects, Lightweight", "Not wired on the Switch yet (the Picture shape and Aspect ratio rows above are)."},
     {0, "RetroArch shader presets, texture packs, animated menu backgrounds", "Not wired on the Switch yet (the built-in CRT look is)."},
-    {1, "Audio mode, ASIO buffer, Audio buffer", "The console's audio output has no driver choice."},
-    {1, "Use custom music, Menu sounds", "Not wired on the Switch yet."},
+    {1, "WASAPI exclusive, ASIO, output device", "The console's audio output has no driver choice: Auto and Low latency are above."},
+    {1, "Menu sounds", "Not wired on the Switch yet."},
     {2, "Background input, Discord", "No other windows or Discord on the console."},
     {2, "YouGame", "Left out: melee-unlocked's own online service."},
     {3, "Keyboard and HID controller editors, PhobGCC menu", "The Switch's controllers come through the system and the GameCube adapter: the rows above."},
