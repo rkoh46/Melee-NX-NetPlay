@@ -109,6 +109,7 @@ namespace fe::features {   // features/gecko.cpp: the player's Gecko codes (GECK
 __attribute__((weak)) std::vector<GeckoRow> gecko_rows();
 __attribute__((weak)) std::string gecko_file();
 __attribute__((weak)) void gecko_toggle(const std::string& name);
+__attribute__((weak)) std::vector<GeckoRow> gecko_online_rows();   // GECKO CODES > Online (patches/net-0014)
 }
 
 namespace fe {
@@ -529,6 +530,17 @@ std::array<Category, 8> build_rows(bool in_game) {
     where.text = "switch/melee-nx-netplay/GeckoCodes.ini, in Dolphin's format ([Gecko], $Name, then XXXXXXXX YYYYYYYY lines). Read at each start.";
     g.rows.push_back(where);
   }
+  // GECKO CODES > Online (features/gecko.cpp, patches/net-0014): codes agreed in Direct with another Melee-NX-NetPlay player.
+  if (&fe::features::gecko_online_rows) {
+    Section& g = section(cats[6], "Online (Direct, Melee-NX-NetPlay players)");
+    for (const auto& c : fe::features::gecko_online_rows()) {
+      if (c.info) { Row r; r.kind = Kind::Info; r.label = c.name; r.text = c.reason; g.rows.push_back(r); continue; }
+      Row r = toggle(c.name + "###geckoon-" + c.key, c.enabled, Action{Act::Gecko});
+      if (c.action) r.kind = Kind::Action;
+      r.action.key = c.key; r.enabled = c.supported; r.hint = c.reason;
+      g.rows.push_back(r);
+    }
+  }
   // melee-unlocked's rows the Switch does not have, greyed under each page, with the reason (FEATURES.md has each one).
   static const struct { int cat; const char* label; const char* why; } kAbsent[] = {
     {0, "Frame rate, VSync, Display, Window size", "The console's display runs at 60 Hz with its own sync; there is no window."},
@@ -539,7 +551,6 @@ std::array<Category, 8> build_rows(bool in_game) {
     {2, "Background input, Discord", "No other windows or Discord on the console."},
     {2, "YouGame", "Left out: melee-unlocked's own online service."},
     {3, "Keyboard and HID controller editors", "The Switch's controllers come through the system and the GameCube adapter: the rows above."},
-    {3, "PhobVision screens (stick maps, scope plots, reaction test), named Phob setups, the remap editor", "Not on the Switch yet: the PhobGCC rows above set the firmware's values; the remap is read from PhobGCC/port<N>.ini."},
     {4, "Controller overlay placement (dragging)", "No pointer: the overlays have fixed places."},
     {5, "Menu style gallery (screenshots), the colour wheel, menu artwork", "No pointer: the style is a list, the accent three sliders."},
     {6, "Add, edit or import a code here", "Needs a keyboard: put codes in GeckoCodes.ini on the SD card (above)."},

@@ -38,6 +38,7 @@ namespace fe::features {
 __attribute__((weak)) bool practice_menu_chord(int port);
 __attribute__((weak)) bool practice_menu_open();
 __attribute__((weak)) void practice_menu_pads(MuPadStatus pads[4]);
+__attribute__((weak)) void phob_menu_pads(MuPadStatus pads[4]);   // features/phob.cpp: the full-screen PhobGCC menu
 }
 
 namespace fe {
@@ -104,8 +105,28 @@ uint32_t sdl_buttons(SDL_Gamepad* pad) {
   return bits;
 }
 
+// Tests off the console: MU_TEST_VIRTUAL_PAD=1 attaches one SDL virtual gamepad (no input), so the pages that need an SDL
+// controller (the Dolphin import) can be driven in a container that has none.
+void attach_test_pad() {
+#ifndef __SWITCH__
+  static bool done = false;
+  if (done || !std::getenv("MU_TEST_VIRTUAL_PAD")) return;
+  done = true;
+  SDL_VirtualJoystickDesc desc;
+  SDL_INIT_INTERFACE(&desc);
+  desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+  desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+  desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+  desc.name = "Test virtual gamepad";
+  const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+  if (id) SDL_OpenGamepad(id);
+  say("controls: test: virtual gamepad %s", id ? "attached" : SDL_GetError());
+#endif
+}
+
 // The devices the pages offer: SDL gamepads, then each adapter port with a controller. Simulation thread.
 void refresh_devices_locked(bool files = true) {
+  attach_test_pad();
   const std::string keep = selected < devices.size() ? devices[selected].id : std::string();
   const Kind kept_kind = selected < devices.size() ? devices[selected].kind : Kind::Sdl;
   devices.clear();
@@ -115,6 +136,7 @@ void refresh_devices_locked(bool files = true) {
     if (ports & (1u << p)) devices.push_back({"gc" + std::to_string(p + 1), "GameCube controller, adapter port " + std::to_string(p + 1), Kind::Adapter, p});
   selected = 0;
   for (size_t i = 0; i < devices.size(); ++i) if (devices[i].id == keep) selected = i;
+  if (std::getenv("MU_TEST_VIRTUAL_PAD")) say("controls: test: %zu devices (%s)", devices.size(), devices.empty() ? "none" : devices[0].name.c_str());
   const Kind kind = devices.empty() ? Kind::Sdl : devices[selected].kind;
   if (!files && kind == kept_kind) return;
   profile_names = profile_list(profiles_folder(), kind);
@@ -247,6 +269,7 @@ bool controls_capture_frame(const void* raw_v) {
 // (upstream hold_lone_start), so the pause menu does not open under the Training page.
 void controls_chords(void* pads_v) {
   auto* pads = static_cast<host::PadState*>(pads_v);
+  attach_test_pad();   // tests off the console: early, so the gamepad is listed by the time a page opens
   static bool settings_down[4] = {}, practice_down[4] = {};
   static int start_waited[4] = {};
   MuStatePod state{};
@@ -278,6 +301,8 @@ void controls_chords(void* pads_v) {
   // While the Practice menu is open its controller is the menu's and the game gets neutral pads (features/proai.cpp).
   static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
   if (&features::practice_menu_pads) features::practice_menu_pads(reinterpret_cast<MuPadStatus*>(pads));
+  // While the PhobGCC menu is open the controllers drive it and the game gets resting controllers (features/phob.cpp).
+  if (&features::phob_menu_pads) features::phob_menu_pads(reinterpret_cast<MuPadStatus*>(pads));
 }
 
 void controls_saved(void (*put)(const std::string&, const std::string&)) {

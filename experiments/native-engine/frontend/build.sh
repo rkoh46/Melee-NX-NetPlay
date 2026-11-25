@@ -104,6 +104,10 @@ sync_tree() {
   perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/host/user_gecko.cpp" > "$gen/geckosrc/port/runtime/host/user_gecko.cpp"
   patch -s -p1 -d "$gen/geckosrc" < "$here/patches/0122-user-gecko-on-the-switch.patch"
   cmp -s "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp" || cp "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp"
+  # Its Gecko session (codes agreed online between two of this app's builds, features/gecko.cpp), with patches/0141.
+  perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/host/gecko_session.cpp" > "$gen/geckosrc/port/runtime/host/gecko_session.cpp"
+  patch -s -p1 -d "$gen/geckosrc" < "$here/patches/0141-gecko-session-player-switch.patch"
+  cmp -s "$gen/geckosrc/port/runtime/host/gecko_session.cpp" "$gen/gecko/gecko_session.cpp" || cp "$gen/geckosrc/port/runtime/host/gecko_session.cpp" "$gen/gecko/gecko_session.cpp"
   rm -rf "$gen/geckosrc"
   # The display wave (0.4.8, src/gfx_render.cpp): melee-unlocked's one-frame glitch detector (flicker_scan.cpp/.h) with patches/0127.
   rm -rf "$gen/gfxsrc"; mkdir -p "$gen/gfxsrc/port/runtime/gx" "$gen/gfx"
@@ -131,6 +135,18 @@ sync_tree() {
   patch -s -p1 -d "$gen/jukeboxsrc" < "$here/patches/0118-jukebox-on-the-switch.patch"
   cmp -s "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp" "$gen/jukebox/jukebox.cpp" || cp "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp" "$gen/jukebox/jukebox.cpp"
   rm -rf "$gen/jukeboxsrc"
+  # melee-unlocked's PhobGCC menu (PhobVision, PhobScope, Phob Check, setups; src/phob_menu_glue.cpp) and its setups store, LF,
+  # with patches/0140, in a folder of their own so that their includes find src/phob_shim, not the fetched tree's host.h.
+  rm -rf "$gen/phobsrc"; mkdir -p "$gen/phobsrc/port/runtime/gx" "$gen/phob"
+  for f in gx/phob_menu.cpp gx/phob_menu.h gx/phob_stickmaps.h host/phob_store.cpp; do
+    mkdir -p "$gen/phobsrc/port/runtime/$(dirname "$f")"
+    perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/$f" > "$gen/phobsrc/port/runtime/$f"
+  done
+  patch -s -p1 -d "$gen/phobsrc" < "$here/patches/0140-phob-menu-reads-settings-on-open.patch"
+  for f in gx/phob_menu.cpp gx/phob_menu.h gx/phob_stickmaps.h host/phob_store.cpp; do
+    cmp -s "$gen/phobsrc/port/runtime/$f" "$gen/phob/$(basename "$f")" || cp "$gen/phobsrc/port/runtime/$f" "$gen/phob/$(basename "$f")"
+  done
+  rm -rf "$gen/phobsrc"
   # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
   rsync -rlpc --delete "$stage/mu/" "$work/mu/"
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"

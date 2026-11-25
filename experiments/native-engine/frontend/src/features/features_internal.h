@@ -28,6 +28,7 @@ void register_gecko();               // gecko.cpp: the player's Gecko codes (Gec
 void register_phob();                // phob.cpp: PhobGCC settings per adapter port (src/phob_adapter.cpp)
 void register_gfx();
 __attribute__((weak)) void register_modlooks();   // ../modlooks.cpp: Get mod looks (Diet Melee, Animelee), builds with a picture                 // gfx.cpp: texture packs, ambient occlusion, frame capture, glitch detector, Lab view (src/gfx_render.cpp)
+void register_pcsettings();          // pcsettings.cpp: the "PC Settings" row in Melee's Options menu
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -58,6 +59,9 @@ bool training_practice_combo();      // the Practice menu's Tools: combo counter
 bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
 std::vector<uint8_t> training_replay_defense(int setting);   // a takeover's opponents (0xE9): MuPcConfig bytes, empty to follow the recording
 
+// pcsettings.cpp: Z in Melee's Options menu opens the settings panel (the Z is kept from the game)
+void pcsettings_pad_hook(MuPadStatus pads[4]);
+
 // search.cpp: the keep-search question's and the search-again offer's buttons (options.cpp pad_read).
 void search_pad_hook(MuPadStatus pads[4]);
 
@@ -71,6 +75,9 @@ void proai_spar_end();
 // overlays.cpp
 bool overlay_draws_training();       // a picture overlay draws the Training panel (frame advantage included)
 void overlay_names(std::string out[4]);   // the players' Slippi names in an online match (empty otherwise)
+
+// audio.cpp: the replay viewer paused or jumping holds the jukebox's music where it is (false: it goes on)
+void music_hold(bool hold);
 
 // replays.cpp
 bool replay_playing();               // a .slp is being played back

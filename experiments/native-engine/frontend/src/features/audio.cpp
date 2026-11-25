@@ -54,6 +54,7 @@ __attribute__((weak)) void set_music_packs_enabled(bool enabled);
 using DiscReader = bool (*)(uint32_t offset, void* dst, uint32_t size);
 __attribute__((weak)) void set_disc_reader(DiscReader reader);
 __attribute__((weak)) void mix(int16_t* out, size_t frames, double master, double output_rate, uint32_t device_rate);
+__attribute__((weak)) void set_paused(bool paused);
 }
 namespace linux_host {   // melee-unlocked's host services (patches/0101): the disc table and the retail disc
 int32_t fe_disc_find(const char* path, uint32_t* start, uint32_t* length);
@@ -294,6 +295,16 @@ void register_rows() {
     persist_music});
 }
 }  // namespace
+
+// The replay viewer paused or jumping (replays.cpp): the jukebox's song stops where it is and goes on from there, as melee-unlocked's
+// replay controls hold it (jukebox.h set_paused). The game's own music stops by itself then (its mixer runs with the game); the
+// jukebox mixes in the sound output's callback, so it is held here.
+void music_hold(bool hold) {
+  static std::atomic<bool> held{false};
+  if (!g_jukebox_on || !slippi::jukebox::set_paused || held.exchange(hold) == hold) return;
+  slippi::jukebox::set_paused(hold);
+  say("audio: the jukebox's music %s with the replay viewer", hold ? "stops" : "goes on");
+}
 
 void register_audio() {
   add_setting(setting);

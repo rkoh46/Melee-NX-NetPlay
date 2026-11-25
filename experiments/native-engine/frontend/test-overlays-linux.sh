@@ -8,9 +8,12 @@
 #             adapter rate line, combo counter, L-cancel flash (both)
 #   training  Go to Training (--feature-test training) with lab_overlay 1: the Training panel (actions, inputs) and the
 #             frame advantage of jabs on the dummy (command 0xF4)
+#   lab-dummy Training with the Lab dummy's DI (out), reaction (shield) and tech (random): the game's "[lab] dummy" lines
 #   latency   --auto-vs, latencytest 1: X + D-pad Down twice (black, then white), X + D-pad Up (the picture again)
 #   te        the 20XX TE save's profile (MU_MODS_DIR) with its input display bit set (te_options2 2000 in settings.ini.state):
 #             the input display in a VS match without inputoverlay
+#   lagtest-match  the lag test into its Dream Land match (Fox picked, random stage), then X held (white) and A held (black)
+#   adapter   adapterrate 1 with a scripted adapter (MELEE_TEST_ADAPTER_SCRIPT): the measured report rate on the overlay
 #   lagtest   lagtestnext 1: the Lossless adapter lag test start (boot to the character select with the test's rules, a
 #             10-second rumble on every port when it loads), the switch cleared for the next start
 #   te-flash  the 20XX TE save's profile (MU_MODS_DIR) with lcancel_flash_mode 4 (TE: both) and lcancel_success_flash 2: the game's
@@ -97,6 +100,22 @@ PY
     printf '%s\n' "lab 1" "lab_overlay 1" "arcade_combo_counter 1" "lcancel_flash_mode 6" "lcancel_success_flash 2" > "$dir/settings.ini"
     run "$dir" 2400 1 "--feature-test training"
     ;;
+  lab-dummy)
+    # The Lab dummy's own reactions (training.cpp lab_di / lab_react / lab_tech, the game's mu_lab.c): Training with the jabs and
+    # aerials of the training case, the dummy DI-ing out and shielding after hitstun; the game logs each hit's DI and reaction.
+    fresh "$dir"
+    python3 -I - "$dir/script.txt" <<'PY'
+import sys
+lines = ["@scene 1c 02", "100 sx=127", "136"]
+t = 160
+for i in range(16): lines += [f"{t} A", f"{t+3}"]; t += 24
+for i in range(6): lines += [f"{t} sx=127 A", f"{t+3}", f"{t+60}"]; t += 90      # forward smashes: hitstun, tumble
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    printf '%s\n' "lab_di 2" "lab_react 2" "lab_tech 4" > "$dir/settings.ini"
+    run "$dir" 2000 2 "--feature-test training"
+    grep -h "\[lab\] dummy" "$dir/console.log" | head -8
+    ;;
   latency)
     fresh "$dir"
     printf '%s\n' "@scene 02 02" "300 X" "310 X DD" "316 X" "320" "480 X" "490 X DD" "496 X" "500" "660 X" "670 X DU" "676 X" "680" > "$dir/script.txt"
@@ -106,8 +125,19 @@ PY
   te)
     fresh "$dir"; match_script "$dir/script.txt"
     printf '%s\n' "mod_profile te" > "$dir/settings.ini"
-    printf '%s\n' "te_options2 2000" > "$dir/settings.ini.state"
-    run "$dir" 2200 2 "--auto-vs"
+    # Input display (2000) and lock settings (40000) on; MU_TEST_TE_LOCK sends TE's settings menu command (0xF8) as the menu
+    # would: a change while locked is refused, taken once the lock is off (mods.cpp).
+    printf '%s\n' "te_options2 42000" > "$dir/settings.ini.state"
+    MU_RUN_ENV="-e MU_TEST_TE_LOCK=1" run "$dir" 2200 2 "--auto-vs"
+    ;;
+  adapter)
+    # adapterrate 1 with a scripted GameCube adapter (upstream's MELEE_TEST_ADAPTER_SCRIPT, started with the run by
+    # MU_TEST_ADAPTER_AT_START): the overlay's adapter line shows the report rate measured where the reports arrive
+    # (src/phob_adapter.cpp), the figure the console's adapter reader also feeds.
+    fresh "$dir"
+    printf '%s\n' "60000 128 128 128 128 0 0" > "$dir/adapter.txt"
+    printf '%s\n' "adapterrate 1" "showfps 1" > "$dir/settings.ini"
+    MU_RUN_ENV="-e MELEE_TEST_ADAPTER_SCRIPT=/out/adapter.txt -e MU_TEST_ADAPTER_AT_START=1" run "$dir" 900 3 "--auto-vs"
     ;;
   lagtest)
     fresh "$dir"
@@ -116,6 +146,16 @@ PY
     printf '%s\n' "lagtestnext 1" > "$dir/settings.ini"
     run "$dir" 900 2 ""
     echo "settings.ini after the start: $(grep lagtestnext "$dir/settings.ini")"
+    ;;
+  lagtest-match)
+    # The lag test end to end, with this script playing the adapter's part: on the character select (P1's hand put on Fox by the
+    # game's test aid MELEE_TEST_CSS_CHAR) A and Start, the stage select's random pick (Dream Land, the only stage on random),
+    # then in the match X held (the background white) and A held (black), as the adapter does while its light sensor times it.
+    fresh "$dir"
+    printf '%s\n' "lagtestnext 1" > "$dir/settings.ini"
+    printf '%s\n' "@scene 02 00" "90 A" "96" "120 sy=127" "144 sx=127" "149" "180 A" "186" "200 sx=127 sy=-127" "208 sy=-127" "210" "230 A" "236" "300 START" "306" "@scene 02 01" "60 START" "66" "120 A" "126" \
+      "@scene 02 02" "240 X" "420" "480 A" "660" > "$dir/script.txt"
+    MU_RUN_ENV="-e MELEE_TEST_CSS_CHAR=2" run "$dir" 1500 1 ""
     ;;
   te-flash)
     fresh "$dir"; match_script "$dir/script.txt"
@@ -160,6 +200,6 @@ PY
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   echo "== $case"
-  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
+  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|gc adapter|TE lock|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
   echo "shots: $(ls "$dir/shots" | wc -l | tr -d ' ')"
 done

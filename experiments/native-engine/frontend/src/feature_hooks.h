@@ -114,8 +114,13 @@ std::vector<HudLine> hud_lines();
 // closes; true hands the arguments over once.
 bool take_restart_request(std::vector<std::string>* extra_args);
 // gecko.cpp: the player's Gecko codes (GeckoCodes.ini) as the panel's GECKO CODES page shows them, and a switch (simulation thread).
-struct GeckoRow { std::string name; bool enabled = false, supported = false; std::string reason; };
+struct GeckoRow {
+  std::string name; bool enabled = false, supported = false; std::string reason;
+  std::string key;            // gecko_toggle's argument when not the name (GECKO CODES > Online: "@online", "@tick:<id>", "@answer", "@none")
+  bool info = false, action = false;   // a line of text; a button rather than a switch
+};
 std::vector<GeckoRow> gecko_rows();
+std::vector<GeckoRow> gecko_online_rows();   // GECKO CODES > Online (codes agreed with another Melee-NX-NetPlay build, patches/net-0014)
 std::string gecko_file();
 void gecko_toggle(const std::string& name);
 // The replays on the SD card, newest first (file names in the replay folder), for a launcher's list.

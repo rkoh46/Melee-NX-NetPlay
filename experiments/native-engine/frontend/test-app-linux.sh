@@ -23,6 +23,11 @@
 #            saved setup in launcher.ini (X and Y swapped): Start + D-pad Down + Z opens the panel on Controller profiles
 #            (MU_CONTROLS_TEST_PAGE), "Save as a new profile", the A binding pressed onto Z, stick left/right inverted, Stick radius 90
 #            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
+#   phob     melee-unlocked's PhobGCC menu with a scripted GameCube adapter: PhobVision, setups, PhobScope's plots, the reaction test, the
+#            remap editor, Phob Check, the coordinate viewer (screenshots; see the case)
+#   dolphin  a Dolphin GCPad profile imported onto an SDL virtual gamepad (MU_TEST_VIRTUAL_PAD) from the Controller profiles page
+#   pcsettings  "PC Settings" in Melee's Options menu: Z there opens the settings panel
+#   box      box mode (Mod X bound) on an adapter port: B0XX coordinates, Mod X, second-input priority (the "the game gets" lines)
 #   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
 #            settings search with the software keyboard's test answer
 #   launcher the home screen's What's new, Language (Deutsch), launcher colour wheel and a rail picture (screenshots)
@@ -36,6 +41,7 @@
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
 # MU_APP_SETTINGS="playernicknames 1" ./test-app-linux.sh DISC online).
+# MU_APP_SKIN=1 (online case): the first app has a skin the online rule turns off: the "skins are off" note (screenshots).
 # MU_SANITIZE=address|thread runs the sanitizer build (build.sh with MU_SANITIZE; reports in san.* beside each console log);
 # MU_DEAD_FIRST=N (online case): the stand-in matches each app's first N searches with a peer that never answers, so each
 # of those connection attempts fails and the app searches again before the two apps are paired.
@@ -57,6 +63,13 @@ make_app() {
   [ "$script" = - ] || cp "$script" "$dir/"
   # MU_APP_SETTINGS="key value;key value": a settings.ini with these lines (the app writes its template around them).
   [ -z "${MU_APP_SETTINGS:-}" ] || printf '%s\n' "$MU_APP_SETTINGS" | tr ';' '\n' > "$dir/melee-nx-netplay/settings.ini"
+  # MU_APP_SKIN=1: user 1's app folder gets a Falco skin made from the disc (../tools/make_test_skin.py, joint moved 5 units), picked
+  # for Falco's standard costume: melee-unlocked's online rule turns it off, and the online screens show the panel's note.
+  if [ "${MU_APP_SKIN:-0}" = 1 ] && [ "$user" = 1 ]; then
+    mkdir -p "$dir/melee-nx-netplay/Cosmetics/Costumes"
+    python3 -I "$here/../tools/make_test_skin.py" "$disc/GALE01.iso" "$dir/melee-nx-netplay/Cosmetics/Costumes/PlFcNr - Moved bone.dat"
+    printf '# test\n/plfcnr.dat\tMoved bone\n' > "$dir/melee-nx-netplay/Cosmetics/selection.txt"
+  fi
   if [ "$user" != 0 ]; then
     printf '{"uid":"mock-test-%s","playKey":"mock-test-only","connectCode":"MOCK#00%s","displayName":"Mock %s"}\n' "$user" "$user" "$user" > "$dir/melee-nx-netplay/User/Slippi/user.json"
   fi
@@ -96,7 +109,7 @@ report() {
   local dir=$1
   echo "== $(basename "$dir")"
   [ -f "$dir/harness.log" ] && cat "$dir/harness.log"
-  grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40}
+  grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|skins off online|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40} || true   # a case with sub-runs (phob) has no console.log of its own
   echo "shots: $(ls "$dir/shots" 2>/dev/null | wc -l | tr -d ' ')"
   if [ -n "${MU_SANITIZE:-}" ]; then
     echo "sanitizer reports: $(find "$dir" -name 'san.*' | wc -l | tr -d ' ') files, $(find "$dir" -name 'san.*' -exec cat {} + 2>/dev/null | grep -cE '^(WARNING: ThreadSanitizer|==[0-9]+==ERROR: AddressSanitizer)') reports"
@@ -155,6 +168,126 @@ for case in "$@"; do
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
     grep -E "launcher.ini:|music [0-9]+%" "$dir/console2.log" | cut -c1-200 | head -3
     ;;
+  phob)
+    # melee-unlocked's PhobGCC menu (src/phob_menu_glue.cpp, features/phob.cpp) with a scripted GameCube adapter in socket 1
+    # (MELEE_TEST_ADAPTER_SCRIPT, upstream's test aid: raw adapter reports at 1 kHz through src/phob_adapter.cpp). Each run opens the
+    # panel on the PhobGCC page (Start + D-pad Down + Z with MU_CONTROLS_TEST_PAGE) and presses "Open the PhobGCC menu" or "Controller
+    # test"; MELEE_TEST_PHOB=<screen> (upstream's aid) starts it on that screen and logs its screen and controller ("phob test:").
+    #   nav       PhobVision's top screen: PhobGCC Settings on (A), Setups > Save New Setup (PhobGCC/Setups/Setup 1.ini), PhobScope >
+    #             Input Viewer, back (B) to the top and back to the panel, Start
+    #   scope     Value vs Time Plots (snapback on the left stick X, then dashback): flicks from the script, the results, then Phob Check
+    #   stickmap  Stickmap Plots: Start records, the script rolls the stick around; then the Gate Visualizer
+    #   reaction  Reaction Time Test: Start, the square, the script's press; the delay logged
+    #   remap     Button Remapping, listening for A (upstream's remap:0): the script presses B, so B presses A (port1.ini remap)
+    #   coord     Controller test (PhobScope as the top screen): Coordinate Viewer at 4x with the stick in a notch
+    # MU_PHOB_RUNS="nav scope ..." runs only those.
+    phob_run() {   # $1 name, $2 MELEE_TEST_PHOB screen, $3 action, $4 the open row, $5 adapter script, $6 the taps once it is open
+      case " ${MU_PHOB_RUNS:-nav scope stickmap reaction remap coord} " in *" $1 "*) ;; *) return 0 ;; esac
+      local sub="$dir/$1"; make_app "$sub" 1 3600 - home=0
+      printf '%s\n' "$5" > "$sub/adapter.txt"
+      run "$sub" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_PAGE=PhobGCC MELEE_TEST_ADAPTER_SCRIPT=/out/adapter.txt MELEE_TEST_PHOB='"$2"' MELEE_TEST_PHOB_ACTION="'"$3"'"
+        [ "'"$1"'" = coord ] && export MELEE_TEST_CONTROLLER_TEST=1
+        pad ""
+        cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+        app=$!
+        wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+        pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
+        focus "'"$4"'"; shot panel; tap A; sleep 2; shot open
+        '"$6"'
+        wait $app'
+      echo "== $1"; grep -aE "phob|gc adapter: test|exit code" "$sub/console.log" | grep -v "menu pad" | cut -c1-200 | tail -25
+      grep -a "phob test: menu pad" "$sub/console.log" | awk '{print $NF}' | uniq | tr '\n' ' '; echo "(screens visited)"
+    }
+    mkdir -p "$dir"
+    phob_run nav 0 "" "Open the PhobGCC menu (PhobVision, setups, remap)" "60000 128 128 128 128 0 0" \
+      'tap DD; tap A; sleep 0.5; shot settings-on; for i in 1 2 3 4 5; do tap DD; done; tap A; sleep 0.8; shot setups
+       tap DD; tap DD; tap A; sleep 0.8; shot setup-saved; tap B; sleep 0.5; tap DU; tap DU; tap A; sleep 0.5; tap A; sleep 2; shot inputview
+       tap B; sleep 0.4; tap B; sleep 0.4; tap B; sleep 2; shot back-to-panel; tap START; sleep 1'
+    echo "setups: $(ls "$dir/nav/melee-nx-netplay/PhobGCC/Setups" 2>/dev/null | tr '\n' ' ')"; echo "port1.ini: $(grep -iE '^(enabled|phob_hardware)' "$dir/nav/melee-nx-netplay/PhobGCC/port1.ini" 2>/dev/null | tr '\n' ' ')"
+    # Flicks: from the rim (X 230) let go to the centre with an overshoot the other way (snapback), every 1.5 s; then dashes.
+    flicks=""; for i in 1 2 3 4 5 6; do flicks="$flicks
+1200 128 128 128 128 0 0
+250 230 128 128 128 0 0
+4 175 128 128 128 0 0
+4 110 128 128 128 0 0
+5 92 128 128 128 0 0
+6 118 128 128 128 0 0"; done
+    phob_run scope 27 "input:0" "Open the PhobGCC menu (PhobVision, setups, remap)" "4000 128 128 128 128 0 0$flicks
+2000 128 128 128 128 0 0" \
+      'sleep 12; shot snapback; tap B; sleep 0.4; tap B; sleep 0.4; for i in 1 2 3 4 5; do tap DD; done; tap A; sleep 1.5; shot phobcheck; tap START'
+    circle=""; for a in 0 30 60 90 120 150 180 210 240 270 300 330 360; do x=$(python3 -c "import math;print(int(128+100*math.cos(math.radians($a))))"); y=$(python3 -c "import math;print(int(128+100*math.sin(math.radians($a))))"); circle="$circle
+40 $x $y 128 128 0 0"; done
+    phob_run stickmap 26 "map:2" "Open the PhobGCC menu (PhobVision, setups, remap)" "6000 128 128 128 128 0 0$circle$circle$circle
+8000 128 128 128 128 0 0$circle$circle$circle$circle
+3000 128 128 128 128 0 0" \
+      'tap START; sleep 4; shot stickmap; tap B; sleep 0.4; for i in 1 2 3 4 5 6; do tap DD; done; tap A; sleep 4; shot gate; tap START'
+    presses=""; for i in $(seq 70); do presses="$presses
+60 128 128 128 128 0 0 A
+140 128 128 128 128 0 0"; done
+    phob_run reaction 29 "" "Open the PhobGCC menu (PhobVision, setups, remap)" "3000 128 128 128 128 0 0$presses" \
+      'tap START; sleep 11; shot reaction; tap B; sleep 0.5; tap START'
+    phob_run remap 18 "remap:0" "Open the PhobGCC menu (PhobVision, setups, remap)" "3000 128 128 128 128 0 0
+120 128 128 128 128 0 0 B
+30000 128 128 128 128 0 0" \
+      'sleep 5; shot remap; tap START'
+    echo "port1.ini after the remap: $(grep -i 'remap' "$dir/remap/melee-nx-netplay/PhobGCC/port1.ini" 2>/dev/null | tr '\n' ' ')"
+    phob_run coord 35 "zoom:2" "Controller test (PhobScope, Phob Check)" "3000 128 128 128 128 0 0
+2500 200 185 128 128 0 0
+30000 128 128 128 128 0 0" \
+      'sleep 2; shot coord; sleep 1.5; tap B; sleep 0.5; shot scope-top; tap START'
+    ;;
+  box)
+    # Box controllers (upstream's box_melee.h through src/controls.cpp) on port 1 read as GameCube adapter port 1
+    # (MU_CONTROLS_TEST_ADAPTER=1), launcher.ini binding the stick's left/right to the D-pad's left/right and Mod X to D-pad up
+    # (the D-pad's own actions unbound): box mode. The panel is opened and closed (so the "the game gets" lines are logged),
+    # then D-pad right (the stick right: B0XX's full 1.0), D-pad up + right (Mod X: 0.6625), right then left held (second
+    # input priority: left), left let go (right again, no reactivation: neutral), all let go.
+    make_app "$dir" 1 2400 - "padx.gc1=m8=0,m10=0,m11=0,m18=1,m19=2,m22=8" home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_ADAPTER=1; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5; tap START; sleep 1.5
+      pad "DR"; sleep 0.6; pad "DR DU"; sleep 0.6; pad "DR"; sleep 0.4; pad "DR DL"; sleep 0.6; pad "DR"; sleep 0.6; pad ""; sleep 1
+      wait $app'
+    grep -E "controls:|menu: (closed|the game gets)" "$dir/console.log" | cut -c1-160 | tail -14
+    ;;
+  dolphin)
+    # Dolphin profile import (controls_files.cpp) onto an SDL controller: an SDL virtual gamepad (MU_TEST_VIRTUAL_PAD=1, no
+    # controller in the container) and a Dolphin GCPad profile in <app folder>/Dolphin/Melee.ini (SDL bindings, sticks swapped,
+    # a dead zone): the panel on Controller profiles, "Import it into this controller"; the import's line and the saved profile.
+    make_app "$dir" 1 2400 - home=0
+    mkdir -p "$dir/melee-nx-netplay/Dolphin"
+    printf '%s\n' '[Profile]' 'Device = SDL/0/Test virtual gamepad' 'Buttons/A = `Button E`' 'Buttons/B = `Button S`' 'Buttons/X = `Button N`' \
+      'Main Stick/Up = `Right Y+`' 'Main Stick/Down = `Right Y-`' 'Main Stick/Left = `Right X-`' 'Main Stick/Right = `Right X+`' \
+      'C-Stick/Up = `Left Y+`' 'C-Stick/Down = `Left Y-`' 'Main Stick/Dead Zone = 12.0' > "$dir/melee-nx-netplay/Dolphin/Melee.ini"
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_TEST_VIRTUAL_PAD=1 MU_CONTROLS_TEST_PAGE="Controller profiles"; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
+      # An SDL controller has many binding rows above the profiles: a longer walk than focus allows.
+      for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus Import it into this controller" ] && break; tap DD 0.08 0.25; done
+      sleep 0.5; shot import; tap A; sleep 1; shot imported; tap START
+      wait $app'
+    grep -E "controls:" "$dir/console.log" | cut -c1-200 | tail -6
+    for f in "$dir"/melee-nx-netplay/ControllerProfiles/*.profile; do [ -f "$f" ] && { echo "== $(basename "$f")"; head -5 "$f" | tr '\n' ' '; echo; }; done
+    ;;
+  pcsettings)
+    # The "PC Settings" row in Melee's Options menu (features/pcsettings.cpp): from Online Play (menu 8), B to 1P (menu 1), B to
+    # the main menu (menu 0), down to Options, A (menu 4), down twice, Z: the settings panel opens (the Z is kept from the game).
+    # feature_test=menu-trace logs the menu and row as they change (the fourth slot, upstream's PC Settings row, is skipped).
+    make_app "$dir" 1 3000 - home=0 feature_test=menu-trace
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""; shots 4
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      tap B; sleep 1.5; tap B; sleep 1.5
+      for i in 1 2 3 4 5 6; do grep -aq "pc settings: menu 0 row 3" /out/console.log && break; tap DD 0.12 0.6; done; tap A; sleep 1.5
+      tap DD; tap DD; sleep 0.5; shot options-row; tap Z; sleep 1.5; shot panel
+      wait $app'
+    grep -E "pc settings:|settings: opened" "$dir/console.log" | cut -c1-160 | tail -12
+    ;;
   controls)
     # The controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1), a saved setup
     # in launcher.ini (X and Y swapped), through the test pad file: Start + D-pad Down + Z opens the panel on the Controller profiles
@@ -184,7 +317,9 @@ for case in "$@"; do
       app=$!
       wait_log /out/console2.log "online menu: row 1" 120 && sleep 3
       pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
-      focus "Load this profile"; tap A; sleep 0.5; tap START; sleep 1.5; tap X 0.2
+      # The rows above the profiles grew (PhobGCC): a longer walk than focus allows (it timed out since 0.4.7).
+      for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console2.log | tail -1)" = "settings: focus Load this profile" ] && break; tap DD 0.08 0.25; done
+      tap A; sleep 0.5; tap START; sleep 1.5; tap X 0.2
       wait $app'
     echo "second start:"; grep -E "controls:|menu: the game gets" "$dir/console2.log" | cut -c1-160
     echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"

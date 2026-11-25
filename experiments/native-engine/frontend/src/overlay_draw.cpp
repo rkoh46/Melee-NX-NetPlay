@@ -19,6 +19,8 @@
 #include "looks_live.h"   // True widescreen: the opening movie stays 4:3
 #include "replay_view.h"
 #include "proai/practice_state.h"   // practice_menu_draw (weak)
+#include "phob_menu_state.h"          // phob_menu_draw (weak)
+namespace fe::phob_adapter { double rate_hz(); }   // src/phob_adapter.cpp: adapter reports per second, measured where they arrive
 #include "host.h"                // shim: gcadapter_status
 #include "gfx_live.h"            // the display wave: texture packs, ambient occlusion, readback, Lab view (gfx_render.cpp)
 #include "video_bg.h"            // load_picture: border art in PNG, JPG or WebP (FFmpeg builds)
@@ -329,6 +331,10 @@ void draw_stats(ImDrawList* dl, const overlay::Config& c, const overlay::Snapsho
     if (host::gcadapter_status(st)) {
       if (st.report_hz > 0) std::snprintf(line, sizeof line, "GameCube adapter %.0f reports/s (polled every %d ms)", st.report_hz, st.interval_ms);
       else std::snprintf(line, sizeof line, "GameCube adapter: no reports yet");
+    } else if (const double hz = phob_adapter::rate_hz(); hz > 0) {
+      // Reports measured where they arrive (src/phob_adapter.cpp, as melee-unlocked measures them): the Linux tests' scripted
+      // adapter (MELEE_TEST_ADAPTER_SCRIPT).
+      std::snprintf(line, sizeof line, "GameCube adapter %.0f reports/s (measured from the reports)", hz);
     } else {
 #ifdef __SWITCH__
       std::snprintf(line, sizeof line, "GameCube adapter: none found");
@@ -689,6 +695,8 @@ void overlay_draw(int ww, int wh) {
   }
   // The Practice menu (Start + D-pad Up + Z in offline Training; src/proai/practice_overlay.cpp), or its corner hint.
   if (&practice_menu_draw) practice_menu_draw(float(ww), float(wh), g.x0, g.y0, g.x1, g.y1);
+  // The PhobGCC menu (the panel's PhobGCC page: PhobVision, PhobScope, Phob Check; src/phob_menu_glue.cpp) covers the picture.
+  if (&phob_menu_draw) { phob_menu_draw(float(ww), float(wh), g.x0, g.y0, g.x1, g.y1); if (phob_menu::is_open()) return; }
   overlay::Snapshot s;
   features::overlay_snapshot(s);
   if (!s.valid) return;

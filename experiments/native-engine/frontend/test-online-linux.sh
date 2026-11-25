@@ -20,6 +20,10 @@
 #                          reports, replay uploads, saved to uploads/); MU_HTTP_ARGS more options for it (--no-upload)
 #   MU_USER_A, MU_USER_B   a folder whose files go into that side's Slippi user folder first (direct-codes.json, teams-codes.json)
 #   MU_ENV_A, MU_ENV_B     environment for one side ("NAME=value ...", test aids such as MELEE_NET_TEST_CHECKSUM)
+#   MU_FILES_A, MU_FILES_B a folder whose files go into that side's app folder first (GeckoCodes.ini for codes agreed online)
+#   MU_SKIN_A=1            side a gets a skin made here from the disc's PlFcNr.dat (never committed) with a joint moved 5 units, which
+#                          melee-unlocked's online rule turns off, picked for Falco's standard costume (Cosmetics/selection.txt): the
+#                          online screens serve the standard file (the panel's note is the app's: test-app-linux.sh MU_APP_SKIN=1 online)
 #   MU_VARIANT=null        the program without a graphics device (no picture, no controllers: pass MU_ARGS_A and MU_ARGS_B
 #                          "--online unranked"; the match is played by generated inputs). ThreadSanitizer runs use it: the
 #                          sanitizer's runtime can hang inside Mesa's software driver
@@ -50,6 +54,13 @@ PY
 for side in a b; do
   user="MU_USER_$(echo $side | tr a-z A-Z)"
   if [ -n "${!user:-}" ]; then mkdir -p "$run/$side/user"; cp -R "${!user}"/. "$run/$side/user/"; fi
+  files="MU_FILES_$(echo $side | tr a-z A-Z)"
+  if [ -n "${!files:-}" ]; then cp -R "${!files}"/. "$run/$side/"; fi
+  if [ "$side" = a ] && [ "${MU_SKIN_A:-0}" = 1 ]; then
+    mkdir -p "$run/a/Cosmetics/Costumes"
+    python3 -I "$here/../tools/make_test_skin.py" "$disc/GALE01.iso" "$run/a/Cosmetics/Costumes/PlFcNr - Moved bone.dat"
+    printf '# test\n/plfcnr.dat\tMoved bone\n' > "$run/a/Cosmetics/selection.txt"
+  fi
   ini="MU_INI_$(echo $side | tr a-z A-Z)"
   if [ -n "${!ini:-}" ]; then cp "${!ini}" "$run/$side/settings.ini"; else echo "slippi_menus 1" > "$run/$side/settings.ini"; fi
 done
@@ -103,5 +114,5 @@ done
 for side in a b; do
   [ -f "$run/$side/console.log" ] || continue
   echo "== $side"
-  grep -E "^net|^play:|^online|slippi: (match id|opponent found|connected|online connection|matchmaking|logged in)|DIVERGED|desync|Desync|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "net: slow frame\|^\[net\] slippi: \(netplay\|ping\)" | tail -40 | cut -c1-260
+  grep -E "^net|^play:|^online|^gecko|Gecko|skins off online|cosmetics: .*(online|standard)|slippi: (match id|opponent found|connected|online connection|matchmaking|logged in)|DIVERGED|desync|Desync|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "net: slow frame\|^\[net\] slippi: \(netplay\|ping\)" | tail -40 | cut -c1-260
 done

@@ -42,6 +42,8 @@
 #   tmce-ess        the TM-CE event select's controls: R (help with its QR code, R again closes it), the pages with the
 #                   D-pad, X and Y (jumps), then Training Lab and in it the Additional Codes: A+B held (the match starts
 #                   again) and L+R+A (back to the select)
+#   tmce-osd        Training Mode CE's on-screen displays: in the Lab, General > OSD Menu, every display switched on, then Fox's
+#                   L-cancels, wavedashes, dashbacks and a jump out of shield (the displays' messages in the screenshots, every 1 s)
 #   gecko           the player's Gecko codes (features/gecko.cpp): a GeckoCodes.ini made here with a code that writes a game
 #                   variable (P1's model scale in the VS start data, 1.5), a PowerPC injection (C2) and a function rewrite (waxo's
 #                   No Character Shadows), all three switched on in settings.ini; --auto-vs: the first runs (P1 giant in the match),
@@ -104,7 +106,7 @@ for case in "$@"; do
         export DISPLAY=:99
         for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
         pad() { printf "%s\n" "$1" > /out/pad.txt; }
-        tap() { pad "$1"; sleep 0.2; pad ""; sleep 0.45; }
+        tap() { pad "$1"; sleep 0.08; pad ""; sleep 0.45; }   # a short press: a longer one let the D-pad repeat past a row
         focus() { for i in $(seq 140); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1"; return 1; }
         wait_log() { for i in $(seq $(( $2 * 10 ))); do grep -aq "$1" /out/console.log 2>/dev/null && return 0; sleep 0.1; done; return 1; }
         pad ""
@@ -112,9 +114,12 @@ for case in "$@"; do
         pid=$!
         (n=0; while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true; done) &
         wait_log "online menu: row 1" 120 && sleep 3
-        pad "L R START"; sleep 1.2; pad ""; sleep 1.5
-        tap DD; tap DD; tap A; sleep 0.5
-        focus "Practice CPU"; tap DR
+        # Start + D-pad Up + Z (melee-unlocked'"'"'s Practice chord; outside offline Training it opens the menu on its Training page):
+        # the walk through the categories from VIDEO depended on where the panel had its focus and timed out when it was not there.
+        pad "START DU Z"; sleep 0.3; pad ""; sleep 1.5
+        # The panel opens on GAME with its focus at the category'"'"'s top; the Training rows sit far below (more with mod profiles).
+        for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus Practice CPU" ] && break; pad DD; sleep 0.08; pad ""; sleep 0.25; done
+        tap DR
         focus "Random numbers (items, turnips)"; tap DR
         focus "Random numbers: seed number"; tap DR; tap DR; tap DR
         focus "Practice CPU: save to slot 1"; tap A
@@ -242,7 +247,7 @@ for case in "$@"; do
     grep -h "low-pass\|DSP coefficient" "$dir/console.log" "$dir/host.log" 2>/dev/null | cut -c1-200
     continue
     ;;
-  tmce-lab|tmce-ess)
+  tmce-lab|tmce-ess|tmce-osd)
     tmce_mods="${MU_TMCE_MODS:-$repo/build/mod-discs}"
     [ -f "$tmce_mods/tmce/tmce.iso" ] || { echo "== $case: skipped: no $tmce_mods/tmce/tmce.iso (see the case's note)"; continue; }
     fresh "$dir"
@@ -269,7 +274,24 @@ L += ["@scene 2b 00", "60 sy=127", "70", "72 sx=127", "78", "100 A", "104", "180
       "@scene 2b 02", "60 sy=127", "66", "90 A", "94",                                          # a stage
       "@scene 2b 01"]
 t = 200
-if case == "tmce-ess":
+if case == "tmce-osd":
+    # The Lab menu: General (row 0) > OSD Menu (row 13), every on-screen display switched on (right, then down; 18 rows), back
+    # out and close; then Fox's moves that the displays read: short-hop neutral airs L-cancelled and not, wavedashes (jump, air
+    # dodge down-right), dashbacks, a shield and a jump out of it.
+    p("START", gap=60); p("A", gap=60)
+    p("sy=-127", 13, gap=16); p("A", gap=60)
+    for _ in range(18): p("sx=127", gap=16); p("sy=-127", gap=16)
+    p("START", gap=80)                                            # Start closes the menu from the submenu (B at the top leaves the Lab)
+    for i in range(6):                                            # short-hop nairs, L 4 frames before landing on even ones
+        L.extend([f"{t} X", f"{t+2}", f"{t+5} A", f"{t+8}"])
+        if i % 2 == 0: L.extend([f"{t+30} L", f"{t+32}"])
+        t += 70
+    for i in range(4):                                            # wavedashes
+        L.extend([f"{t} X", f"{t+2}", f"{t+4} R sx=90 sy=-90", f"{t+8}"]); t += 60
+    for i in range(4):                                            # dashbacks
+        L.extend([f"{t} sx=127", f"{t+5} sx=-127", f"{t+12}"]); t += 50
+    L.extend([f"{t} R", f"{t+40} R X", f"{t+44}"]); t += 120      # shield, jump out of it
+elif case == "tmce-ess":
     t = 300; L.extend([f"{t} sx=127", f"{t+40}"]); t += 120      # walk, then A+B held: the Lab starts again (salty runback)
     L.extend([f"{t} A+B", f"{t+90}"]); t += 300
     L.extend([f"{t} L+R+A", f"{t+60}"]); t += 200                 # back to the select (Additional Codes)
@@ -294,7 +316,11 @@ else:
     L.extend([f"{t} L+R+A", f"{t+60}"]); t += 200                 # back to the select (Additional Codes)
 open(sys.argv[1], "w").write("\n".join(L) + "\n")
 PY
-    MU_MODS_DIR="$tmce_mods" run "$dir" "$([ "$case" = tmce-lab ] && echo 5600 || echo 2600)" 2 ""
+    # tmce-osd: the run is ended by the time limit (240 s): with the Lab's menu used, the frame limit was not reached in time.
+    [ "$case" = tmce-osd ] && export MU_TEST_LIMIT="${MU_TEST_LIMIT:-240}"
+    frames=2600; every=2   # (no case inside $(...): macOS's bash 3.2 cannot parse it)
+    if [ "$case" = tmce-lab ]; then frames=5600; elif [ "$case" = tmce-osd ]; then frames=4000; every=1; fi
+    MU_MODS_DIR="$tmce_mods" run "$dir" "$frames" "$every" ""
     echo "card folder: $(ls "$dir/card-tmce" 2>/dev/null | tr '\n' ' ')"
     grep -h "scene: major" "$dir/console.log" | tail -4
     ;;

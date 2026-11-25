@@ -31,6 +31,8 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <cstdlib>
+#include <utility>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -574,6 +576,28 @@ extern "C" int32_t mu_frontend_command(uint8_t command, const uint8_t* payload, 
   // The feature modules first (feature_hooks.h); play mode only, so the scripted runs never reach them.
   if (options.play) { const int32_t taken = features::call_command(command, payload, size, response, capacity, response_size); if (taken != INT32_MIN) return taken; }
   if (!configured) return INT32_MIN;
+  // Tests only (MU_TEST_TE_LOCK=1, the 20XX TE save loaded): TE's in-game settings menu's own command (0xF8) sent here as the
+  // menu sends it: a change while "lock settings" is on is refused (only the lock itself may go off), then accepted once it is off.
+  static bool te_lock_tested = false;
+  if (!te_lock_tested && te_owned && std::getenv("MU_TEST_TE_LOCK")) {
+    te_lock_tested = true;
+    uint8_t r[8]; uint32_t n = 0;
+    const auto send = [&](uint32_t a, uint32_t b) {
+      const uint8_t p[8] = {uint8_t(a >> 24), uint8_t(a >> 16), uint8_t(a >> 8), uint8_t(a), uint8_t(b >> 24), uint8_t(b >> 16), uint8_t(b >> 8), uint8_t(b)};
+      mu_frontend_command(0xF8, p, 8, r, sizeof r, &n);
+      return std::pair<uint32_t, uint32_t>(be32(r), be32(r + 4));
+    };
+    const uint32_t w1 = settings_te_word(1), w2 = settings_te_word(2);
+    const auto locked = send(w1 ^ 0x0020u, w2 | MU_GAME_OPTION2_TE_LOCK_SETTINGS);   // a change of word 1 with the lock still on
+    say("mods: test: TE lock settings: words %08X %08X; a change while locked leaves %08X %08X (%s)", w1, w2, locked.first, locked.second,
+        locked.first == w1 && locked.second == w2 ? "refused" : "TAKEN");
+    const auto unlocked = send(w1, w2 & ~MU_GAME_OPTION2_TE_LOCK_SETTINGS);            // the lock off
+    const auto changed = send(w1 ^ 0x0020u, unlocked.second);                           // the change again
+    say("mods: test: TE lock settings off: %08X %08X; the change now gives %08X %08X (%s)", unlocked.first, unlocked.second, changed.first,
+        changed.second, changed.first == (w1 ^ 0x0020u) ? "taken" : "REFUSED");
+    send(w1, unlocked.second | (w2 & MU_GAME_OPTION2_TE_LOCK_SETTINGS));                // back as it was (the lock can only be set here by the test)
+    settings_te_word(2) = w2;
+  }
   std::vector<uint8_t> reply;
   const auto read32 = [&](uint32_t at) { return be32(payload + at); };
   if (command == MU_HP_COMMAND && size >= 1 && payload[0] == MU_HP_OP_CPU_WORD) {         // the pack's menu: CPU training options

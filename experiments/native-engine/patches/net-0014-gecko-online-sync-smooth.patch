@@ -1,0 +1,250 @@
+Gecko codes online between two Melee-NX-NetPlay builds, and the smoother time sync developer aid (Melee-NX-NetPlay 0.4.8).
+melee-unlocked's Gecko code messages (host/gecko_online.h: offer, answer, lock; upstream keeps them off, kOnlineCodes) travel as
+NP_MSG_NX_GECKO (0xD3) to a peer whose build message has flag 0x40 (its player turned Gecko codes online on); the session rules
+(gecko_session.cpp) run in the program (frontend/src/features/gecko.cpp) behind weak mu_net_gecko_* hooks: a Direct 1v1 only, the
+lock just before every selection on the same ordered queue, the decision at the match's first frame from both locks. Against
+Slippi Dolphin, melee-unlocked or a build without it: no flag, nothing sent. MELEE_SYNC_SMOOTH=1 (upstream's developer aid):
+time sync's speed correction from 2 ms, this side's pacing only. Applied by ../net_sources.sh after net-0012 (and net-0013).
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -48,6 +48,10 @@
+   // then melee-unlocked's pick preview bytes (port/runtime/abi/mu_pick_preview.h, MU_PICK_PREVIEW_WIRE). Sent only to a peer
+   // whose build message (version 2 or later) has flag 0x04; display only, never match setup.
+   NP_MSG_NX_PICK = 0xD1,
++  // Melee-NX-NetPlay 0.4.8 only (patches/net-0014): melee-unlocked's Gecko code messages (its host/gecko_online.h: offer, answer,
++  // lock, 'M' 'U' 'G' 1 ...) as the payload, to a peer whose build message has flag 0x40 (it takes them: its player turned
++  // Gecko codes online on). Upstream sends the same bytes as its own 0xE8 only to melee-unlocked builds; it keeps them off.
++  NP_MSG_NX_GECKO = 0xD3,
+ };
+ 
+ // sf::Packet wire format: integers big-endian, bool as one byte, strings as u32 length + bytes.
+@@ -214,7 +218,7 @@
+   MatchInfo GetMatchInfoSnapshot() const { std::lock_guard<std::mutex> lk(match_mutex_); return match_info_; }
+   PlayerSelections GetSlippiRemoteChatMessage(bool chat_enabled);
+   // patches/net-0004: what the other players' builds said (NP_MSG_NX_BUILD), by port 0..3.
+-  struct NxBuild { bool received = false, pause_rule = false, no_pause = false, pick_previews = false, lcancel_rule = false, auto_lcancel = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
++  struct NxBuild { bool received = false, pause_rule = false, no_pause = false, pick_previews = false, lcancel_rule = false, auto_lcancel = false, gecko = false; uint32_t shield = 0; int8_t port_colour[2] = {-1, -1}; };
+   NxBuild RemoteNxBuild(uint8_t port) const { std::lock_guard<std::mutex> lk(nx_mutex_); return port < 4 ? remote_nx_[port] : NxBuild{}; }
+   // Direct pausing is off: every remote player's build reads the rule and this player or one of them turned it off. Both
+   // sides decide from the same bytes: each sent its own once at connection, before its selections.
+@@ -228,6 +232,15 @@
+   // RemotePickPreview: the newest pick a remote port sent (false: none since connection).
+   bool SendPickPreview(const uint8_t* wire, size_t size);
+   bool RemotePickPreview(uint8_t port, std::vector<uint8_t>* wire) const;
++  // patches/net-0014: Gecko codes online between two Melee-NX-NetPlay builds (melee-unlocked's gecko_online messages, carried
++  // as NP_MSG_NX_GECKO). GeckoPeer: a 1v1 where this side and the other build both said they take them (flag 0x40).
++  // SendNxGecko queues one message to that peer; PopNxGecko hands the game thread the next one received. ResendSelections
++  // sends this side's selection again behind a fresh lock (the codes were agreed after it locked in).
++  bool GeckoPeer() const;
++  bool SendNxGecko(const std::vector<uint8_t>& message);
++  bool PopNxGecko(std::vector<uint8_t>& out);
++  void ResendSelections();
++  void SendNxGeckoLock();
+   uint8_t GetSlippiRemoteSentChatMessage(bool chat_enabled);
+   int32_t CalcTimeOffsetUs();
+   bool IsWaitingForDesyncRecovery();
+@@ -318,6 +331,8 @@
+   bool sent_auto_lcancel_ = false;   // patches/net-0011
+   int8_t sent_port_colour_[2] = {-1, -1};
+   std::vector<uint8_t> remote_pick_[4];   // patches/net-0005, under nx_mutex_
++  bool sent_gecko_ = false;                                // patches/net-0014: this side said it takes Gecko messages
++  std::deque<std::vector<uint8_t>> nx_gecko_inbox_;        // patches/net-0014, under nx_mutex_
+   PlayerSelections remote_chat_message_;
+ };
+ 
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -40,6 +40,13 @@
+ #ifdef __APPLE__
+ #include <sys/socket.h>
+ #endif
++
++// patches/net-0014: Gecko codes online between Melee-NX-NetPlay builds. The program's half (frontend/src/features/gecko.cpp:
++// melee-unlocked's gecko_session.cpp and gecko_online.cpp compiled from the fetched tree) through these hooks; weak, so a
++// program without them (the headless runner) never offers or locks anything.
++extern "C" __attribute__((weak)) int mu_net_gecko_wanted(void);
++extern "C" __attribute__((weak)) size_t mu_net_gecko_lock(uint8_t* out, size_t capacity);
++
+ namespace {
+ // Apple Wi-Fi and cellular stacks map the socket's service type to a traffic class; voice
+ // (NET_SERVICE_TYPE_VO) gets the lowest-latency queue, which is what rollback input packets want.
+@@ -585,6 +592,7 @@
+       nx.pick_previews = version >= 2 && (flags & 4) != 0;   // patches/net-0005
+       nx.lcancel_rule = version >= 2 && (flags & 8) != 0;    // patches/net-0011: reads the Auto L-cancel agreement
+       nx.auto_lcancel = nx.lcancel_rule && (flags & 16) != 0;   // and offers it
++      nx.gecko = version >= 2 && (flags & 0x40) != 0;          // patches/net-0014: takes Gecko code messages
+       if ((packet >> has_shield) && has_shield == 1 && (packet >> r >> g >> bl)) nx.shield = 0x1000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | bl;
+       if ((packet >> c1) && (packet >> c2)) {
+         nx.port_colour[0] = c1 >= 1 && c1 <= 4 ? (int8_t)(c1 - 1) : (int8_t)-1;
+@@ -594,6 +602,7 @@
+       host::log("slippi: opponent %u is a Melee-NX-NetPlay build: Direct pause %s, shield colour %s%06X, port colours %d/%d, Auto L-cancel %s", port,
+                 nx.no_pause ? "off" : "on", nx.shield ? "" : "none ", nx.shield & 0xFFFFFFu, nx.port_colour[0], nx.port_colour[1],
+                 nx.auto_lcancel ? "offered" : nx.lcancel_rule ? "not offered" : "unknown (older build)");
++      if (nx.gecko) host::log("slippi: opponent %u takes Gecko codes online (patches/net-0014)", port);
+       break;
+     }
+     case NP_MSG_NX_PICK: {      // patches/net-0005
+@@ -609,6 +618,16 @@
+         if (logged < 3) { ++logged; host::log("slippi: pick preview from port %u (%zu bytes, fighter %d)", port, wire.size(), wire.size() > 1 ? (int)wire[1] : -1); }
+       }
+       remote_pick_[port] = std::move(wire);
++      break;
++    }
++    case NP_MSG_NX_GECKO: {     // patches/net-0014
++      if (!slippi::online::config().nx_build_message || !sent_gecko_) { host::log("slippi: unknown netplay message %u", mid); break; }
++      std::vector<uint8_t> message;
++      uint8_t b = 0;
++      while (message.size() < 8192 && (packet >> b)) message.push_back(b);
++      std::lock_guard<std::mutex> lk(nx_mutex_);
++      if (nx_gecko_inbox_.size() >= 16) { host::log("slippi: Gecko message inbox full, message dropped"); break; }
++      nx_gecko_inbox_.push_back(std::move(message));
+       break;
+     }
+     default: host::log("slippi: unknown netplay message %u", mid); break;
+@@ -1037,12 +1056,13 @@
+   if (!cfg.nx_build_message) { host::log("slippi: no build message (test: behaving as Slippi Dolphin)"); return; }
+   sent_no_pause_ = !cfg.direct_pause;
+   sent_auto_lcancel_ = cfg.auto_lcancel_direct;   // patches/net-0011
++  sent_gecko_ = mu_net_gecko_wanted && mu_net_gecko_wanted() != 0;   // patches/net-0014
+   for (int i = 0; i < 2; ++i) sent_port_colour_[i] = (int8_t)std::clamp(cfg.port_colour[i], -1, 3);
+   auto p = std::make_unique<Packet>();
+   // Version 2 (patches/net-0005): flag 0x04, this build reads live pick previews (NP_MSG_NX_PICK). A version 1 reader
+   // ignores the flag; the layout after the flags is unchanged.
+   *p << (uint8_t)NP_MSG_NX_BUILD << (uint8_t)'N' << (uint8_t)'X' << (uint8_t)'B' << (uint8_t)2 << player_idx_
+-     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0) | (cfg.pick_previews ? 4 : 0) | 8 | (sent_auto_lcancel_ ? 16 : 0));   // 0x08, 0x10: patches/net-0011
++     << (uint8_t)(1 | (sent_no_pause_ ? 2 : 0) | (cfg.pick_previews ? 4 : 0) | 8 | (sent_auto_lcancel_ ? 16 : 0) | (sent_gecko_ ? 0x40 : 0));   // 0x08, 0x10: patches/net-0011; 0x40: net-0014
+   const uint32_t shield = cfg.shield_online;
+   if (shield & 0x1000000u) *p << (uint8_t)1 << (uint8_t)(shield >> 16) << (uint8_t)(shield >> 8) << (uint8_t)shield;
+   else *p << (uint8_t)0;
+@@ -1050,6 +1070,7 @@
+   { std::lock_guard<std::mutex> lk(async_mutex_); async_queue_.push_front(std::move(p)); }
+   host::log("slippi: build message queued (Direct pause %s, shield colour %s%06X, port colours %d/%d, Auto L-cancel %s)", sent_no_pause_ ? "off" : "on",
+             (shield & 0x1000000u) ? "" : "none ", shield & 0xFFFFFFu, sent_port_colour_[0], sent_port_colour_[1], sent_auto_lcancel_ ? "offered" : "not offered");
++  if (sent_gecko_) host::log("slippi: this build takes Gecko codes online (patches/net-0014)");
+ }
+ bool NetplayClient::PauseOff() const {
+   std::lock_guard<std::mutex> lk(nx_mutex_);
+@@ -1115,8 +1136,45 @@
+     match_info_.local.player_idx = player_idx_;
+     local = match_info_.local;
+   }
++  auto spac = std::make_unique<Packet>();
++  WriteSelections(*spac, local);
++  SendNxGeckoLock();   // patches/net-0014: the Gecko lock goes just before each selection, on the same ordered queue
++  SendAsync(std::move(spac));
++}
++// patches/net-0014: Gecko codes online between Melee-NX-NetPlay builds.
++bool NetplayClient::GeckoPeer() const {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  if (!sent_gecko_ || remote_player_count_ != 1) return false;
++  for (int port = 0; port < 4; ++port) if (port != player_idx_ && remote_nx_[port].received) return remote_nx_[port].gecko;
++  return false;
++}
++bool NetplayClient::SendNxGecko(const std::vector<uint8_t>& message) {
++  if (!GeckoPeer() || message.empty()) return false;
++  auto p = std::make_unique<Packet>();
++  *p << (uint8_t)NP_MSG_NX_GECKO;
++  for (uint8_t b : message) *p << b;
++  SendAsync(std::move(p));
++  return true;
++}
++bool NetplayClient::PopNxGecko(std::vector<uint8_t>& out) {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  if (nx_gecko_inbox_.empty()) return false;
++  out = std::move(nx_gecko_inbox_.front());
++  nx_gecko_inbox_.pop_front();
++  return true;
++}
++void NetplayClient::SendNxGeckoLock() {
++  if (!mu_net_gecko_lock || !GeckoPeer()) return;
++  uint8_t lock[64];
++  const size_t n = mu_net_gecko_lock(lock, sizeof lock);
++  if (n > 0 && n <= sizeof lock) SendNxGecko(std::vector<uint8_t>(lock, lock + n));
++}
++void NetplayClient::ResendSelections() {
++  PlayerSelections local;
++  { std::lock_guard<std::mutex> lk(match_mutex_); local = match_info_.local; }
+   auto spac = std::make_unique<Packet>();
+   WriteSelections(*spac, local);
++  SendNxGeckoLock();
+   SendAsync(std::move(spac));
+ }
+ void NetplayClient::SendGamePrepStep(const GamePrepStepResults& s) {
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -79,10 +79,20 @@
+ #include <unordered_map>
+ 
+ namespace slippi::online {
++// patches/net-0014: Gecko codes online between two Melee-NX-NetPlay builds in Direct (melee-unlocked's gecko_session.h rules,
++// compiled into the program: frontend/src/features/gecko.cpp). Weak: without them nothing is offered or run.
++extern "C" __attribute__((weak)) void mu_net_gecko_connected(int consent);
++extern "C" __attribute__((weak)) void mu_net_gecko_disconnected(void);
++extern "C" __attribute__((weak)) void mu_net_gecko_receive(const uint8_t* data, size_t size);
++extern "C" __attribute__((weak)) size_t mu_net_gecko_take(uint8_t* out, size_t capacity);
++extern "C" __attribute__((weak)) int mu_net_gecko_take_resend(void);
++extern "C" __attribute__((weak)) void mu_net_gecko_match_started(void);
++
+ namespace {
+ 
+ Config g_config;
+ bool g_initialized = false;
++bool g_gecko_connected = false;   // patches/net-0014: this connection's Gecko session was started
+ // Local two-instance peering is a test harness: never report those games or fetch ranks for them.
+ static bool reporting_enabled() { return !Matchmaking::local_peer.enabled; }
+ bool g_offline = true;
+@@ -381,6 +391,7 @@
+ 
+ void cleanup_connection() {
+   host::log("slippi: connection cleanup%s", g_search_kept ? " (the kept search ends)" : "");
++  if (g_gecko_connected) { g_gecko_connected = false; if (mu_net_gecko_disconnected) mu_net_gecko_disconnected(); }   // patches/net-0014
+   g_search_kept = false;     // patches/net-0005
+   g_pick_sent = false;
+   suggest::stop("connection cleanup");
+@@ -478,7 +489,15 @@
+     int32_t offset = g_netplay->CalcTimeOffsetUs();
+     g_trace_offset_us = offset;   // patches/net-0005
+     float deviation = 0;
+-    if (offset > -250 && offset < 8000) deviation = 0;
++    // patches/net-0014, a developer aid as melee-unlocked has it (hle/slippi_online.cpp): MELEE_SYNC_SMOOTH=1 starts the speed
++    // correction at 2 ms instead of 8 ms ahead, up to the same 1 %, so the two games meet again before a frame has to be halted
++    // or skipped. Only this side's own pacing changes (never the simulation); unset, nothing changes.
++    static const bool smooth = [] { const char* v = std::getenv("MELEE_SYNC_SMOOTH"); const bool on = v && *v == '1'; if (on) host::log("slippi: MELEE_SYNC_SMOOTH: speed correction from 2 ms (developer aid)"); return on; }();
++    if (smooth) {
++      if (offset > -2000 && offset < 2000) deviation = 0;
++      else if (offset < 0) deviation = std::min(-offset / (2 * 16683.0f), 1.0f) * 0.01f;
++      else deviation = std::min(offset / (2 * 16683.0f), 1.0f) * -0.01f;
++    } else if (offset > -250 && offset < 8000) deviation = 0;
+     else if (offset < 0) deviation = std::min(-offset / (3 * 16683.0f), 1.0f) * 0.01f;
+     else deviation = std::min(offset / (3 * 16683.0f), 1.0f) * -0.005f;
+     // The native engine's host runs a frame in exactly 1/60 s; Slippi's time sync (and a Dolphin peer) counts
+@@ -622,6 +641,7 @@
+       const int ms = std::atoi(slow);
+       if (ms > 0 && ms <= 60000) { host::log("slippi: test aid: the first online frame waits %d ms", ms); std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+     }
++    if (g_gecko_connected && mu_net_gecko_match_started) mu_net_gecko_match_started();   // patches/net-0014: decided from both locks
+     g_available_savestates.clear();
+     g_active_savestates.clear();
+     for (int i = 0; i < ROLLBACK_MAX_FRAMES; ++i) g_available_savestates.push_back(std::make_unique<Savestate>());
+@@ -884,6 +904,21 @@
+     }
+     bool connected = g_netplay->GetSlippiConnectStatus() == NetplayClient::ConnectStatus::CONNECTED;
+     if (g_netplay->GetActivePlayerIndices().size() != g_matchmaking->RemotePlayerCount()) connected = false;
++    // patches/net-0014: Gecko codes online. Once per connection: the session starts, consenting in Direct 1v1 when both builds
++    // take Gecko messages (each player turned it on); then every poll its messages go both ways and a fresh lock follows an
++    // agreement (the selection is sent again behind it).
++    if (connected && mu_net_gecko_connected) {
++      if (!g_gecko_connected) {
++        g_gecko_connected = true;
++        const bool consent = g_last_search.mode == Matchmaking::DIRECT && g_matchmaking->RemotePlayerCount() == 1 && g_netplay->GeckoPeer();
++        mu_net_gecko_connected(consent ? 1 : 0);
++      }
++      std::vector<uint8_t> message;
++      while (g_netplay->PopNxGecko(message)) if (mu_net_gecko_receive) mu_net_gecko_receive(message.data(), message.size());
++      uint8_t out[8192];
++      for (size_t n; mu_net_gecko_take && (n = mu_net_gecko_take(out, sizeof out)) > 0 && n <= sizeof out;) g_netplay->SendNxGecko(std::vector<uint8_t>(out, out + n));
++      if (mu_net_gecko_take_resend && mu_net_gecko_take_resend()) g_netplay->ResendSelections();
++    }
+     if (connected) {
+       const MatchInfo match_info = g_netplay->GetMatchInfoSnapshot();   // the netplay thread merges selections in
+       const MatchInfo* mi = &match_info;

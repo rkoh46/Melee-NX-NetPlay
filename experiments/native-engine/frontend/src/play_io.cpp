@@ -379,12 +379,14 @@ bool swallow_triggers[4] = {};
 bool menu_was_open = false;
 bool combo_hold[4] = {};                 // per port: the menu's L + R + Start is held (kept from the game until let go)
 uint16_t logged_buttons[4] = {};
+int8_t logged_stick[4][2] = {};          // and the stick (a box's button-made stick changes with no button the game sees)
 uint32_t log_until = 0;                  // retrace until which button changes after a close are logged
 void log_changes(const PadState pads[4], const char* who) {
   for (int i = 0; i < 4; ++i) {
     const uint16_t b = pads[i].err == 0 ? pads[i].button : 0;
-    if (b == logged_buttons[i]) continue;
-    logged_buttons[i] = b;
+    const int8_t sx = pads[i].err == 0 ? int8_t(pads[i].stick_x) : 0, sy = pads[i].err == 0 ? int8_t(pads[i].stick_y) : 0;
+    if (b == logged_buttons[i] && sx == logged_stick[i][0] && sy == logged_stick[i][1]) continue;
+    logged_buttons[i] = b; logged_stick[i][0] = sx; logged_stick[i][1] = sy;
     log("menu: %s, pad %d buttons %04X (stick %d %d)", who, i + 1, b, pads[i].stick_x, pads[i].stick_y);
   }
 }
@@ -417,7 +419,7 @@ void menu_frame(PadState pads[4]) {
       for (int i = 0; i < 4; ++i) {
         swallow[i] = raw[i].err == 0 ? raw[i].button : 0;
         swallow_triggers[i] = raw[i].err == 0 && (raw[i].trig_l > 30 || raw[i].trig_r > 30);
-        logged_buttons[i] = 0;
+        logged_buttons[i] = 0; logged_stick[i][0] = logged_stick[i][1] = 0;
       }
       log_until = retrace_count() + 600;
       log("menu: closed with buttons %04X %04X %04X %04X held: kept from the game until let go", swallow[0], swallow[1], swallow[2], swallow[3]);
