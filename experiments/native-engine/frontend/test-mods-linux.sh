@@ -112,8 +112,9 @@ for case in "$@"; do
         pid=$!
         (n=0; while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true; done) &
         wait_log "online menu: row 1" 120 && sleep 3
-        pad "L R START"; sleep 1.2; pad ""; sleep 1.5
-        tap DD; tap DD; tap A; sleep 0.5
+        # Start + D-pad Up + Z (melee-unlocked'"'"'s Practice chord; outside offline Training it opens the menu on its Training page):
+        # the walk through the categories from VIDEO depended on where the panel had its focus and timed out when it was not there.
+        pad "START DU Z"; sleep 0.3; pad ""; sleep 1.5
         focus "Practice CPU"; tap DR
         focus "Random numbers (items, turnips)"; tap DR
         focus "Random numbers: seed number"; tap DR; tap DR; tap DR

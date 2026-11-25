@@ -37,6 +37,7 @@
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
 # MU_APP_SETTINGS="playernicknames 1" ./test-app-linux.sh DISC online).
+# MU_APP_SKIN=1 (online case): the first app has a skin the online rule turns off: the "skins are off" note (screenshots).
 # MU_SANITIZE=address|thread runs the sanitizer build (build.sh with MU_SANITIZE; reports in san.* beside each console log);
 # MU_DEAD_FIRST=N (online case): the stand-in matches each app's first N searches with a peer that never answers, so each
 # of those connection attempts fails and the app searches again before the two apps are paired.
@@ -58,6 +59,13 @@ make_app() {
   [ "$script" = - ] || cp "$script" "$dir/"
   # MU_APP_SETTINGS="key value;key value": a settings.ini with these lines (the app writes its template around them).
   [ -z "${MU_APP_SETTINGS:-}" ] || printf '%s\n' "$MU_APP_SETTINGS" | tr ';' '\n' > "$dir/melee-nx-netplay/settings.ini"
+  # MU_APP_SKIN=1: user 1's app folder gets a Falco skin made from the disc (../tools/make_test_skin.py, joint moved 5 units), picked
+  # for Falco's standard costume: melee-unlocked's online rule turns it off, and the online screens show the panel's note.
+  if [ "${MU_APP_SKIN:-0}" = 1 ] && [ "$user" = 1 ]; then
+    mkdir -p "$dir/melee-nx-netplay/Cosmetics/Costumes"
+    python3 -I "$here/../tools/make_test_skin.py" "$disc/GALE01.iso" "$dir/melee-nx-netplay/Cosmetics/Costumes/PlFcNr - Moved bone.dat"
+    printf '# test\n/plfcnr.dat\tMoved bone\n' > "$dir/melee-nx-netplay/Cosmetics/selection.txt"
+  fi
   if [ "$user" != 0 ]; then
     printf '{"uid":"mock-test-%s","playKey":"mock-test-only","connectCode":"MOCK#00%s","displayName":"Mock %s"}\n' "$user" "$user" "$user" > "$dir/melee-nx-netplay/User/Slippi/user.json"
   fi
@@ -97,7 +105,7 @@ report() {
   local dir=$1
   echo "== $(basename "$dir")"
   [ -f "$dir/harness.log" ] && cat "$dir/harness.log"
-  grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40}
+  grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|skins off online|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40}
   echo "shots: $(ls "$dir/shots" 2>/dev/null | wc -l | tr -d ' ')"
   if [ -n "${MU_SANITIZE:-}" ]; then
     echo "sanitizer reports: $(find "$dir" -name 'san.*' | wc -l | tr -d ' ') files, $(find "$dir" -name 'san.*' -exec cat {} + 2>/dev/null | grep -cE '^(WARNING: ThreadSanitizer|==[0-9]+==ERROR: AddressSanitizer)') reports"
