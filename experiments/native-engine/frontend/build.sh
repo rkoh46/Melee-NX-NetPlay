@@ -7,6 +7,7 @@
 #   ./build.sh image    the Linux test image (mu-arm-gfx): Xvfb, Mesa's software Vulkan driver, X11 headers
 #   ./build.sh deps     Dawn and SDL3 for aarch64 Linux (test build only), from ref/dawn and ref/SDL-dusklight
 #   ./build.sh ffmpeg   FFmpeg for aarch64 Linux (test build only: menu video backgrounds), from build/native-engine/ffmpeg-src
+#   ./build.sh glslang  glslang for Linux and the console (RetroArch shader presets), from build/native-engine/glslang-src
 #   ./build.sh null     Linux, no graphics device: decoder and frame check   -> out/mu-native-gfx-null
 #   ./build.sh linux    Linux with Aurora on Vulkan (the picture test)       -> out/mu-native-gfx-linux
 #   ./build.sh nro      Horizon                                              -> out/mu-native-gfx.nro
@@ -421,6 +422,28 @@ build_ffmpeg() {
     ls /w/$W/ffmpeg-linux/lib"
 }
 
+# glslang for RetroArch shader presets (src/user_shader.cpp: slang GLSL to SPIR-V on the device), from the source ../fetch.sh
+# fetched (build/native-engine/glslang-src, release 15.1.0, SHA-256 pinned): static libraries for the Linux test build
+# ($W/glslang-linux) and the console ($W/glslang-nx, devkitA64 with this repository's Switch toolchain file). No optimizer
+# (SPIRV-Tools), no HLSL, no programs. Without them the builds simply have no shader presets.
+build_glslang() {
+  [ -f "$src/glslang-src/CMakeLists.txt" ] || { echo "run ../fetch.sh first (glslang source)" >&2; exit 1; }
+  local opts="-DCMAKE_BUILD_TYPE=Release -DENABLE_OPT=OFF -DENABLE_HLSL=OFF -DENABLE_GLSLANG_BINARIES=OFF -DGLSLANG_TESTS=OFF -DBUILD_TESTING=OFF -DENABLE_SPVREMAPPER=OFF -DBUILD_SHARED_LIBS=OFF -DGLSLANG_ENABLE_INSTALL=ON -DENABLE_PCH=OFF"
+  dock 2400 "$GFX_IMG" "
+    rm -rf $W/glslang-linux-build $W/glslang-linux
+    cmake -S build/native-engine/glslang-src -B $W/glslang-linux-build -G Ninja $opts -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DCMAKE_C_COMPILER=/usr/local/bin/gcc -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DCMAKE_INSTALL_PREFIX=/w/$W/glslang-linux > /dev/null
+    cmake --build $W/glslang-linux-build --parallel $jobs > $W/glslang-linux-build.log 2>&1 || { grep -E 'error' -A3 $W/glslang-linux-build.log | head -30; exit 1; }
+    cmake --install $W/glslang-linux-build > /dev/null && ls $W/glslang-linux/lib"
+  dock 2400 "$NX_IMG" "
+    export PATH=/opt/devkitpro/devkitA64/bin:\$PATH
+    rm -rf $W/glslang-nx-build $W/glslang-nx
+    cmake -S build/native-engine/glslang-src -B $W/glslang-nx-build -G Ninja $opts -DCMAKE_TOOLCHAIN_FILE=/w/switch/cmake/SwitchGCC.cmake \
+      -DMELEE_NX_SDK_DIR=/w/build/sdk -DCMAKE_INSTALL_PREFIX=/w/$W/glslang-nx > $W/glslang-nx-configure.log 2>&1 || { tail -20 $W/glslang-nx-configure.log; exit 1; }
+    cmake --build $W/glslang-nx-build --parallel $jobs > $W/glslang-nx-build.log 2>&1 || { grep -E 'error' -A3 $W/glslang-nx-build.log | head -30; exit 1; }
+    cmake --install $W/glslang-nx-build > /dev/null && ls $W/glslang-nx/lib"
+}
+
 build_null() {
   build_net_services_linux
   dock 900 "$LINUX_IMG" "
@@ -472,9 +495,10 @@ case "${1:-all}" in
   image) build_image ;;
   deps) build_deps ;;
   ffmpeg) build_ffmpeg ;;
+  glslang) build_glslang ;;
   null) build_null ;;
   linux) build_linux ;;
   nro) build_nro ;;
   all) sync_tree; build_null; build_nro ;;
-  *) echo "usage: build.sh [sync|image|deps|null|linux|nro]" >&2; exit 2 ;;
+  *) echo "usage: build.sh [sync|image|deps|ffmpeg|glslang|null|linux|nro]" >&2; exit 2 ;;
 esac

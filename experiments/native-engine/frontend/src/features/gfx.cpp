@@ -12,6 +12,7 @@
 #include "frontend.h"
 #include "gfx_live.h"
 #include "video_bg.h"
+#include "user_shader.h"   // RetroArch shader presets (src/user_shader.cpp, builds with glslang)
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +41,12 @@ float to_float(const std::string& v, float lo, float hi, float fallback) {
   const float f = std::strtof(v.c_str(), &end);
   return end && end != v.c_str() && std::isfinite(f) ? std::clamp(f, lo, hi) : fallback;
 }
+// RetroArch shader presets (upstream's VIDEO > Shader preset, settings.ini shaderpreset): a name under Shaders/, empty off.
+void set_shader_preset(const std::string& name) {
+  { std::lock_guard<std::mutex> lock(live().mutex); live().shader_preset = name; }
+  live().shader_generation.fetch_add(1, std::memory_order_relaxed);
+}
+std::string shader_preset() { std::lock_guard<std::mutex> lock(live().mutex); return live().shader_preset; }
 bool setting(const std::string& key, const std::string& value) {
   auto& l = live();
   if (key == "customtextures") { l.textures.store(value == "1"); bump_textures(); }
@@ -61,6 +68,7 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "flickerscan") l.flicker.store(value == "1");
   else if (key == "capture_burst_frames") l.capture_size.store(uint32_t(std::clamp(std::atoi(value.c_str()), 1, 600)));
   else if (key == "videobackgrounds") l.video_backgrounds.store(value != "0" && value != "");
+  else if (key == "shaderpreset") set_shader_preset(value == "-" || value == "0" ? std::string() : value);   // upstream's key
   // The Lab view (upstream's keys).
   else if (key == "labview") l.lab.store(value == "1");
   else if (key == "labskipscene") l.lab_skip_scene.store(value != "0");
@@ -206,6 +214,23 @@ void register_gfx() {
                   [] { return &fe::video_bg::status ? fe::video_bg::status(1) : std::string("Not in this build"); }, nullptr, nullptr, nullptr});
   add_menu_entry({"Menu videos", "  Learn the stage select's background again", nullptr, nullptr,
                   [] { if (&fe::video_bg::relearn) fe::video_bg::relearn(1); }, nullptr});
+  // RetroArch shader presets (upstream's VIDEO > Shader preset): None, then each preset or single shader in the Shaders folder.
+  add_menu_entry({"Shader presets", "Shader preset",
+                  [] { const std::string p = shader_preset(); return p.empty() ? std::string("None") : p; },
+                  [](int d) {
+                    if (!&fe::shaders::presets) return;
+                    std::vector<std::string> choices{std::string()};
+                    for (const std::string& p : fe::shaders::presets()) choices.push_back(p);
+                    const std::string now = shader_preset();
+                    size_t at = 0;
+                    for (size_t i = 0; i < choices.size(); ++i) if (choices[i] == now) at = i;
+                    set_shader_preset(choices[(at + choices.size() + (d < 0 ? -1 : 1)) % choices.size()]);
+                  }, nullptr,
+                  [](Write w) { const std::string p = shader_preset(); w("shaderpreset", p.empty() ? "-" : p); }});
+  add_menu_entry({"Shader presets", "  Status",
+                  [] { return &fe::shaders::status ? fe::shaders::status() : std::string("Not in this build"); }, nullptr, nullptr, nullptr});
+  add_menu_entry({"Shader presets", "  Look for new presets in the Shaders folder", nullptr, nullptr,
+                  [] { if (&fe::shaders::refresh_presets) fe::shaders::refresh_presets(); }, nullptr});
   // Diagnostics (upstream's Ctrl+F2 and --flicker-scan).
   add_menu_entry({"Diagnostics", "Capture frames (starts 3 s after the menu closes)",
                   [] { return std::to_string(live().capture_size.load()) + " frames"; },

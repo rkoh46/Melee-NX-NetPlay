@@ -17,6 +17,10 @@
 #   video     menu video backgrounds: made-up clips as css.mp4 and sss.mp4 (needs build.sh ffmpeg)
 #   border-png   border art from a PNG (Borders/sunset.png, made here) beside the 4:3 picture
 #   border-video  border art from a looping MP4 (Borders/loop.mp4, made here; needs build.sh ffmpeg): the bars change between shots
+#   shader    a RetroArch preset written here (Shaders/scanlines: two passes, an alias, a LUT picture, OriginalHistory1, parameters
+#             set by the preset; needs build.sh glslang): compiled, running, screenshots; then the same match without it, and the
+#             render thread's aurora_end_frame median of both (the present pass's cost on Mesa's software Vulkan driver)
+#   shader-bad  a preset naming a missing file and a shader that does not compile: the reasons logged, the game drawn as usual
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
@@ -179,6 +183,104 @@ for f in range(120):
     timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-cmp-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       a=$(ls /out/shots | sed -n 4p); b=$(ls /out/shots | sed -n 6p)
       echo "left bar, $a vs $b: $(compare -metric AE -crop 140x700+5+10 /out/shots/$a /out/shots/$b null: 2>&1) pixels differ"' || true
+    ;;
+  shader|shader-bad)
+    fresh "$dir"; sd="$dir/Shaders/scanlines"; mkdir -p "$sd"
+    # Two passes in RetroArch's slang format: a horizontal soften at the source's size (nearest), then scanlines at the picture's
+    # size with an aperture mask from a LUT picture, a little of the previous frame (OriginalHistory1) and the first pass read by
+    # its alias. Written for this test; no shader pack is downloaded.
+    cat > "$sd/soften.slang" <<'SLANG'
+#version 450
+layout(push_constant) uniform Push { vec4 SourceSize; vec4 OutputSize; float SOFTEN; } params;
+#pragma parameter SOFTEN "Horizontal soften" 0.25 0.0 1.0 0.05
+layout(std140, set = 0, binding = 0) uniform UBO { mat4 MVP; } global;
+#pragma name Soft
+#pragma stage vertex
+layout(location = 0) in vec4 Position;
+layout(location = 1) in vec2 TexCoord;
+layout(location = 0) out vec2 vTexCoord;
+void main() { gl_Position = global.MVP * Position; vTexCoord = TexCoord; }
+#pragma stage fragment
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
+layout(set = 0, binding = 2) uniform sampler2D Source;
+void main() {
+  vec2 dx = vec2(params.SourceSize.z, 0.0);
+  vec3 c = texture(Source, vTexCoord).rgb;
+  vec3 l = texture(Source, vTexCoord - dx).rgb;
+  vec3 r = texture(Source, vTexCoord + dx).rgb;
+  FragColor = vec4(mix(c, (l + c + r) / 3.0, params.SOFTEN), 1.0);
+}
+SLANG
+    cat > "$sd/scanlines.slang" <<'SLANG'
+#version 450
+layout(push_constant) uniform Push {
+  vec4 SourceSize; vec4 OutputSize; vec4 MaskTexSize; uint FrameCount;
+  float SCANLINE_STRENGTH; float MASK_STRENGTH; float PERSISTENCE; float LINES;
+} params;
+#pragma parameter SCANLINE_STRENGTH "Scanline strength" 0.4 0.0 1.0 0.05
+#pragma parameter MASK_STRENGTH "Mask strength" 0.3 0.0 1.0 0.05
+#pragma parameter PERSISTENCE "Phosphor persistence" 0.0 0.0 0.9 0.05
+#pragma parameter LINES "Scanlines" 480.0 120.0 1080.0 1.0
+layout(std140, set = 0, binding = 0) uniform UBO { mat4 MVP; } global;
+#pragma stage vertex
+layout(location = 0) in vec4 Position;
+layout(location = 1) in vec2 TexCoord;
+layout(location = 0) out vec2 vTexCoord;
+void main() { gl_Position = global.MVP * Position; vTexCoord = TexCoord; }
+#pragma stage fragment
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
+layout(set = 0, binding = 2) uniform sampler2D Soft;
+layout(set = 0, binding = 3) uniform sampler2D OriginalHistory1;
+layout(set = 0, binding = 4) uniform sampler2D MaskTex;
+void main() {
+  vec3 c = texture(Soft, vTexCoord).rgb;
+  c = max(c, texture(OriginalHistory1, vTexCoord).rgb * params.PERSISTENCE);
+  float line = fract(vTexCoord.y * params.LINES);
+  float beam = 1.0 - params.SCANLINE_STRENGTH * pow(abs(line - 0.5) * 2.0, 2.0);
+  vec3 mask = mix(vec3(1.0), texture(MaskTex, gl_FragCoord.xy * params.MaskTexSize.zw).rgb, params.MASK_STRENGTH);
+  FragColor = vec4(min(c * beam * mask * 1.2, vec3(1.0)), 1.0);
+}
+SLANG
+    cat > "$sd/scanlines.slangp" <<'PRESET'
+shaders = 2
+shader0 = soften.slang
+filter_linear0 = false
+scale_type0 = source
+scale0 = 1.0
+shader1 = scanlines.slang
+filter_linear1 = true
+scale_type1 = viewport
+textures = "MaskTex"
+MaskTex = mask.png
+MaskTex_linear = false
+MaskTex_wrap_mode = repeat
+SCANLINE_STRENGTH = 0.7
+MASK_STRENGTH = 0.35
+PERSISTENCE = 0.25
+LINES = 240.0
+PRESET
+    timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-mask-$$" --network none -v "$sd:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
+      convert -size 1x1 xc:'#ff5050' xc:'#50ff50' xc:'#5050ff' +append /out/mask.png
+    if [ "$c" = shader ]; then
+      printf '%s\n' "shaderpreset scanlines/scanlines.slangp" > "$dir/settings.ini"
+      run "$dir" 1300 ""
+      echo "== shader"; grep -hE "^shaders:" "$dir/console.log" | head -6
+      base="$root/shader-off"; fresh "$base"; : > "$base/settings.ini"; run "$base" 1300 ""
+      for d in "$dir" "$base"; do echo "$(basename "$d"): $(grep -h 'render thread:   of that, aurora_end_frame' "$d/console.log" | sed 's/.*: \([0-9]* frames\)/\1/' | cut -c1-120)"; done
+    else
+      # A preset that names a shader which is not there, then (second run) one whose shader does not compile.
+      printf '%s\n' "shaders = 1" "shader0 = missing.slang" > "$sd/missing.slangp"
+      sed 's/vec3 c = texture(Source, vTexCoord).rgb;/vec3 c = texture(Source, vTexCoord).rgbx;/' "$sd/soften.slang" > "$sd/broken.slang"
+      printf '%s\n' "shaderpreset scanlines/missing.slangp" > "$dir/settings.ini"
+      run "$dir" 500 ""
+      echo "== shader-bad (missing file)"; grep -hE "^shaders:" "$dir/console.log" | head -3
+      cp "$dir/console.log" "$dir/console-missing.log"; rm -f "$dir/shots/"*
+      printf '%s\n' "shaderpreset scanlines/broken.slang" > "$dir/settings.ini"
+      run "$dir" 500 ""
+      echo "== shader-bad (does not compile)"; grep -hE "^shaders:" "$dir/console.log" | cut -c1-300 | head -3
+    fi
     ;;
   fingerprint)
     # A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp): the Akaneia disc of MU_MODS_DIR must be

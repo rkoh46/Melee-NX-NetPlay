@@ -1,5 +1,6 @@
 # What's new: the home screen shows these lines when a new version starts for the first time (src/mu_home.cpp).
 # One line each, newest first; lines starting with # are left out.
+Graphics: RetroArch shader presets (.slangp in the Shaders folder), compiled on the console.
 Graphics: a looping video behind the character select too (VideoBackgrounds/css.mp4), and border art that plays an MP4.
 Graphics: Dolphin-format texture packs (TexturePacks folder) and texture dumps; screen-space ambient occlusion.
 Graphics: melee-unlocked's Lab view (silhouettes, stick figures, capsules) and the Stick Figures, Capsules and Minimal looks.
