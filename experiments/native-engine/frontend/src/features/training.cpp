@@ -76,8 +76,17 @@ uint32_t tool_bits() { return pc.tools; }
 bool tool(uint32_t bit) { return (pc.tools & bit) != 0; }
 void set_tool(uint32_t bit, bool on) { pc.tools = uint8_t(on ? (pc.tools | bit) : (pc.tools & ~bit)); }
 
+// The Lab dummy's own reactions (the game image's mu_lab.c dummy_behavior: DI, the action after hitstun, the tech), the option
+// word's MU_GAME_OPTION_LAB_DI / _REACT / _TECH fields. Upstream never sends them (its Practice CPU replaces them); here they are
+// settings.ini lab_di 0..3 (none, in, out, random), lab_react 0..3 (none, jump, shield, spot dodge), lab_tech 0..4 (its own, in
+// place, toward, away, random), offline Training only, under the Practice CPU when that is on (the game's order).
+std::atomic<int> lab_di{0}, lab_react{0}, lab_tech{0};
+
 bool setting(const std::string& key, const std::string& value) {
   const bool on = value == "1";
+  if (key == "lab_di") { lab_di = std::clamp(std::atoi(value.c_str()), 0, 3); return true; }
+  if (key == "lab_react") { lab_react = std::clamp(std::atoi(value.c_str()), 0, 3); return true; }
+  if (key == "lab_tech") { lab_tech = std::clamp(std::atoi(value.c_str()), 0, 4); return true; }
   if (key == "lab") set_tool(MU_PC_TOOL_DPAD, on);
   else if (key == "lab_bubbles") { set_tool(MU_PC_TOOL_HITBOXES, value == "1"); set_tool(MU_PC_TOOL_HITBOXES_ONLY, value == "2"); }
   else if (key == "lab_loop") set_tool(MU_PC_TOOL_LOOP, on);
@@ -470,6 +479,10 @@ uint32_t training_option_bits() {
   if (t & MU_PC_TOOL_HITBOXES_ONLY) te |= MU_GAME_OPTION_LAB_BUBBLES_ONLY;
   if (t & MU_PC_TOOL_OVERLAY) te |= MU_GAME_OPTION_LAB | MU_GAME_OPTION_LAB_OVERLAY;
   if (t & MU_PC_TOOL_LOOP) te |= MU_GAME_OPTION_LAB_LOOP;
+  te |= (uint32_t(lab_di.load()) << 19) & MU_GAME_OPTION_LAB_DI_MASK;
+  te |= (uint32_t(lab_react.load()) << 21) & MU_GAME_OPTION_LAB_REACT_MASK;
+  te |= (uint32_t(lab_tech.load()) << 23) & MU_GAME_OPTION_LAB_TECH_MASK;
+  if (te & (MU_GAME_OPTION_LAB_DI_MASK | MU_GAME_OPTION_LAB_REACT_MASK | MU_GAME_OPTION_LAB_TECH_MASK)) te |= MU_GAME_OPTION_LAB;
   return te;
 }
 bool training_go(int character, int costume, int cpu_character, int cpu_costume, bool from_online) {
@@ -547,6 +560,15 @@ void register_training() {
   add_menu_entry({"Training", "Go to Training (offline)", nullptr, nullptr, [] { go_requested = true; }});
   add_menu_entry({"Training", "Save states and recording on the D-pad", [] { return on_off(tool(MU_PC_TOOL_DPAD)); }, [](int) { flip(MU_PC_TOOL_DPAD); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("lab", tool(MU_PC_TOOL_DPAD) ? "1" : "0"); }});
+  add_menu_entry({"Training", "Lab dummy: DI", [] { static const char* n[] = {"None", "In", "Out", "Random"}; return std::string(n[lab_di.load()]); },
+                  [](int d) { lab_di = (lab_di + (d < 0 ? 3 : 1)) % 4; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab_di", std::to_string(lab_di.load())); }});
+  add_menu_entry({"Training", "Lab dummy: after hitstun", [] { static const char* n[] = {"Nothing", "Jump", "Shield", "Spot dodge"}; return std::string(n[lab_react.load()]); },
+                  [](int d) { lab_react = (lab_react + (d < 0 ? 3 : 1)) % 4; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab_react", std::to_string(lab_react.load())); }});
+  add_menu_entry({"Training", "Lab dummy: tech", [] { static const char* n[] = {"Its own", "In place", "Toward", "Away", "Random"}; return std::string(n[lab_tech.load()]); },
+                  [](int d) { lab_tech = (lab_tech + (d < 0 ? 4 : 1)) % 5; }, nullptr,
+                  [](fe::features::MenuEntry::Write w) { w("lab_tech", std::to_string(lab_tech.load())); }});
   add_menu_entry({"Training", "Loop the recording", [] { return on_off(tool(MU_PC_TOOL_LOOP)); }, [](int) { flip(MU_PC_TOOL_LOOP); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("lab_loop", tool(MU_PC_TOOL_LOOP) ? "1" : "0"); }});
   add_menu_entry({"Training", "Collision bubbles",

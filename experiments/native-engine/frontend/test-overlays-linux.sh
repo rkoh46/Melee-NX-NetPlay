@@ -8,6 +8,7 @@
 #             adapter rate line, combo counter, L-cancel flash (both)
 #   training  Go to Training (--feature-test training) with lab_overlay 1: the Training panel (actions, inputs) and the
 #             frame advantage of jabs on the dummy (command 0xF4)
+#   lab-dummy Training with the Lab dummy's DI (out), reaction (shield) and tech (random): the game's "[lab] dummy" lines
 #   latency   --auto-vs, latencytest 1: X + D-pad Down twice (black, then white), X + D-pad Up (the picture again)
 #   te        the 20XX TE save's profile (MU_MODS_DIR) with its input display bit set (te_options2 2000 in settings.ini.state):
 #             the input display in a VS match without inputoverlay
@@ -99,6 +100,22 @@ PY
     printf '%s\n' "lab 1" "lab_overlay 1" "arcade_combo_counter 1" "lcancel_flash_mode 6" "lcancel_success_flash 2" > "$dir/settings.ini"
     run "$dir" 2400 1 "--feature-test training"
     ;;
+  lab-dummy)
+    # The Lab dummy's own reactions (training.cpp lab_di / lab_react / lab_tech, the game's mu_lab.c): Training with the jabs and
+    # aerials of the training case, the dummy DI-ing out and shielding after hitstun; the game logs each hit's DI and reaction.
+    fresh "$dir"
+    python3 -I - "$dir/script.txt" <<'PY'
+import sys
+lines = ["@scene 1c 02", "100 sx=127", "136"]
+t = 160
+for i in range(16): lines += [f"{t} A", f"{t+3}"]; t += 24
+for i in range(6): lines += [f"{t} sx=127 A", f"{t+3}", f"{t+60}"]; t += 90      # forward smashes: hitstun, tumble
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    printf '%s\n' "lab_di 2" "lab_react 2" "lab_tech 4" > "$dir/settings.ini"
+    run "$dir" 2000 2 "--feature-test training"
+    grep -h "\[lab\] dummy" "$dir/console.log" | head -8
+    ;;
   latency)
     fresh "$dir"
     printf '%s\n' "@scene 02 02" "300 X" "310 X DD" "316 X" "320" "480 X" "490 X DD" "496 X" "500" "660 X" "670 X DU" "676 X" "680" > "$dir/script.txt"
@@ -108,8 +125,10 @@ PY
   te)
     fresh "$dir"; match_script "$dir/script.txt"
     printf '%s\n' "mod_profile te" > "$dir/settings.ini"
-    printf '%s\n' "te_options2 2000" > "$dir/settings.ini.state"
-    run "$dir" 2200 2 "--auto-vs"
+    # Input display (2000) and lock settings (40000) on; MU_TEST_TE_LOCK sends TE's settings menu command (0xF8) as the menu
+    # would: a change while locked is refused, taken once the lock is off (mods.cpp).
+    printf '%s\n' "te_options2 42000" > "$dir/settings.ini.state"
+    MU_RUN_ENV="-e MU_TEST_TE_LOCK=1" run "$dir" 2200 2 "--auto-vs"
     ;;
   adapter)
     # adapterrate 1 with a scripted GameCube adapter (upstream's MELEE_TEST_ADAPTER_SCRIPT, started with the run by
@@ -181,6 +200,6 @@ PY
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   echo "== $case"
-  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|gc adapter|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
+  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|gc adapter|TE lock|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
   echo "shots: $(ls "$dir/shots" | wc -l | tr -d ' ')"
 done
