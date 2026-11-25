@@ -13,4 +13,5 @@ bool set(const std::string& code);      // false: unknown (English kept)
 std::string current();
 const Language* find(const std::string& code);
 std::string tx(const std::string& english);   // the current language's wording, or the English given
+std::string by_key(const std::string& key);   // the current language's line for one of upstream's keys ("" for English)
 }  // namespace fe::mu_lang

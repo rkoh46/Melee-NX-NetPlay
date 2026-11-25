@@ -148,6 +148,19 @@ sync_tree() {
     cmp -s "$gen/phobsrc/port/runtime/$f" "$gen/phob/$(basename "$f")" || cp "$gen/phobsrc/port/runtime/$f" "$gen/phob/$(basename "$f")"
   done
   rm -rf "$gen/phobsrc"
+  # melee-unlocked's peer lobby (the home screen's Multiplayer Lobby, src/lobby.cpp): launcher_lobby_p2p.cpp/.h and the English
+  # launcher text, LF, with patches/0142 (Slippi Direct only), in a folder of their own so that the lobby's includes find
+  # src/lobby_shim (POSIX sockets, its launcher_lang.h stand-in), not the fetched tree's launcher_lang.h. Its DHT (jech/dht, MIT)
+  # and Monocypher (BSD-2-Clause or CC0) are compiled from the fetched tree's port/third_party (CMakeLists.txt).
+  rm -rf "$gen/lobbysrc"; mkdir -p "$gen/lobbysrc/port/app" "$gen/lobby"
+  for f in launcher_lobby_p2p.cpp launcher_lobby_p2p.h launcher_lang_en.inl; do
+    perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/app/$f" > "$gen/lobbysrc/port/app/$f"
+  done
+  patch -s -p1 -d "$gen/lobbysrc" < "$here/patches/0142-lobby-hosted-transport-only.patch"
+  for f in launcher_lobby_p2p.cpp launcher_lobby_p2p.h launcher_lang_en.inl; do
+    cmp -s "$gen/lobbysrc/port/app/$f" "$gen/lobby/$f" || cp "$gen/lobbysrc/port/app/$f" "$gen/lobby/$f"
+  done
+  rm -rf "$gen/lobbysrc"
   # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
   rsync -rlpc --delete "$stage/mu/" "$work/mu/"
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"

@@ -10,9 +10,11 @@
 //   Settings       opens melee-unlocked's settings panel (mu_panel.cpp), as its launcher opens the game's F1 panel
 //   Replay Viewer  the replays (src/features/replay_library.cpp's list and per-game stats), Watch and Delete
 //   Mods           the mod profiles (settings.ini mod_profile)
+//   Multiplayer Lobby  its serverless peer lobby (src/lobby.cpp, src/mu_home_lobby.inl): roster, chat, friends, profile, match
+//                  requests; an accepted match starts the game on Slippi Direct against that player
 // Also its languages (mu_lang.cpp), What's new, the colour wheel, the rail picture, the Replay Viewer's search, queue, folders,
 // compression and trash, and "Save crash report" (diagnostics.cpp) in place of Send logs. Left out: Build (no ISO verification or
-// shader build on the console), Multiplayer Lobby and everything of YouGame, Choose version. The scale follows the screen: 1.5 at 720p handheld, 2.25 at 1080p
+// shader build on the console), everything of YouGame, Choose version. The scale follows the screen: 1.5 at 720p handheld, 2.25 at 1080p
 // docked, with the rail and the gradient running to the screen's edges.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
@@ -21,6 +23,7 @@
 #include "feature_calls.h"
 #include "mu_mods.h"
 #include "mu_lang.h"
+#include "lobby.h"
 
 #include "host.h"
 #include "metal_frontend.h"
@@ -40,6 +43,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -92,8 +96,9 @@ ImU32 col(COLORREF c, float alpha = 1.0f) { return IM_COL32(GetRValue(c), GetGVa
 // The launcher's accent presets (its theme picker's wheel, as a short list on a controller).
 constexpr COLORREF kAccents[6] = {RGB(142, 84, 239), RGB(58, 132, 240), RGB(46, 170, 110), RGB(229, 150, 40), RGB(222, 72, 72), RGB(236, 72, 153)};
 
-enum Page { PAGE_PLAY, PAGE_SETTINGS, PAGE_REPLAYS, PAGE_MODS, PAGE_COUNT };
-constexpr const char* kNav[PAGE_COUNT] = {"Play", "Settings", "Replay Viewer", "Mods"};
+// The launcher's page order (its Build page is left out): Play, Settings, Multiplayer Lobby, Replay Viewer, Mods.
+enum Page { PAGE_PLAY, PAGE_SETTINGS, PAGE_LOBBY, PAGE_REPLAYS, PAGE_MODS, PAGE_COUNT };
+constexpr const char* kNav[PAGE_COUNT] = {"Play", "Settings", "Multiplayer Lobby", "Replay Viewer", "Mods"};
 
 struct Fonts { ImFont* body; ImFont* bold; };
 
@@ -221,6 +226,9 @@ struct Home {
   // The SD card browser (the Replays page's "Folder..." and "Open replay..."): folders and, for a file, .slp/.slpz.
   bool browse_open = false, browse_files = false; std::string browse_dir; std::vector<std::string> browse_list; int browse_sel = 0, browse_scroll = 0;
   bool theme_open = false; int theme_row = 0; double theme_h = 268, theme_s = .65, theme_v = .93; COLORREF theme_before = 0;
+  // Multiplayer Lobby (mu_home_lobby.inl): the tab, the picked player and friend, the request that already took the focus
+  int lobby_tab = 0, lobby_player = 0, lobby_scroll = 0, lobby_friend = 0;
+  std::string lobby_seen_request, lobby_focus_said, lobby_name, lobby_code;
 };
 
 std::string read_account(const std::string& user_dir, bool* ok) {
@@ -457,6 +465,8 @@ void paint_play(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
   if (crash_on) button(d, L, f, 392, buttons_y, 150, 32, "Save crash report", false, focused == PI_CRASH, false);
   text(d, f.body, L.u(11), L.p(CX, buttons_y), L.p(CX + 170, buttons_y + 32), C_FAINT, "A  Select     B  Pages");
 }
+
+#include "mu_home_lobby.inl"
 
 // The Replays page's buttons: two rows (Left/Right go through them, Up/Down pick the replay).
 enum ReplayButton { RB_WATCH, RB_ASPLAYED, RB_QUEUE, RB_QUEUE_WATCH, RB_DELETE, RB_SEARCH, RB_FOLDER, RB_OPEN, RB_COMPRESS, RB_UNDO, RB_COUNT };
@@ -988,11 +998,14 @@ void home_job(void* frontend_v, void* user) {
       if (h.rail) {
         if (e.up) h.focus = (h.focus + PAGE_COUNT - 1) % PAGE_COUNT;
         if (e.down) h.focus = (h.focus + 1) % PAGE_COUNT;
-        if (e.up || e.down) { if (h.focus != PAGE_SETTINGS) h.page = h.focus; }
+        if (e.up || e.down) { if (h.focus != PAGE_SETTINGS) h.page = h.focus; say("home: rail %s", kNav[h.focus]); }
         if (e.a || e.right) {
           if (h.focus == PAGE_SETTINGS) { mu_ui::panel_open_from_launcher(); say("home: Settings"); }
           else { h.page = h.focus; h.rail = false; h.focus = h.page == PAGE_PLAY ? 1 : 0; }
         }
+      } else if (h.page == PAGE_LOBBY) {
+        const bool took_left = lobby_input(h, e);
+        if ((e.left && !took_left) || e.b) { h.rail = true; h.focus = h.page; }
       } else {
         int count = 1;
         if (h.page == PAGE_PLAY) count = int(play_items(h).size());
@@ -1026,6 +1039,15 @@ void home_job(void* frontend_v, void* user) {
     }
     mu_ui::panel_service(false);
     if (mu_ui::panel_take_quit()) { h.result = AppStart::Quit; h.done = true; }
+    // An accepted lobby match: the home screen closes and the game starts it (lobby.cpp hands it over).
+    {
+      lobby::Match m;
+      if (!h.done && lobby::take_match(&m)) {
+        lobby::hand_to_game(m);
+        say("home: lobby match against %s (%s): the game starts", m.name.c_str(), m.code.c_str());
+        h.done = true; h.result = AppStart::Play;
+      }
+    }
     // A finished update: installed (the app closes) or not (the old version stays).
     {
       bool finished = false, failed = false; std::string version;
@@ -1062,6 +1084,7 @@ void home_job(void* frontend_v, void* user) {
       if (h.page == PAGE_PLAY) paint_play(d, L, f, h);
       else if (h.page == PAGE_REPLAYS) paint_replays(d, L, f, h);
       else if (h.page == PAGE_MODS) paint_mods(d, L, f, h);
+      else if (h.page == PAGE_LOBBY) paint_lobby(d, L, f, h);
       if (h.browse_open) paint_browser(ImGui::GetForegroundDrawList(), L, f, h);
       if (h.lang_open) paint_lang(ImGui::GetForegroundDrawList(), L, f, h);
       if (h.theme_open) paint_theme(ImGui::GetForegroundDrawList(), L, f, h);
@@ -1210,7 +1233,13 @@ AppStart mu_home_run(const std::string& user_dir, bool update_check) {
       }).detach();
     }
   }
-  say("home: melee-unlocked's launcher (Play, Settings, Replay Viewer, Mods)%s", h.signed_in ? "" : "; no Slippi account on this console");
+  // The Multiplayer Lobby's thread (idle until Go Online): the Lobby folder, the account's name and code, ready to play.
+  account_parts(user_dir, &h.lobby_name, &h.lobby_code);
+  {
+    struct stat st{};
+    lobby::start(options.base_dir + "/Lobby", h.lobby_name, h.lobby_code, h.signed_in && stat(options.iso.c_str(), &st) == 0);
+  }
+  say("home: melee-unlocked's launcher (Play, Settings, Multiplayer Lobby, Replay Viewer, Mods)%s", h.signed_in ? "" : "; no Slippi account on this console");
   if (!screens_run(home_job, &h)) return h.signed_in ? AppStart::Play : AppStart::PlayOffline;
   return h.result;
 }

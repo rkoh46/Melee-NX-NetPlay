@@ -8,7 +8,7 @@
 #   (The home screen and the settings panel are melee-unlocked's, src/mu_home.cpp and src/mu_panel.cpp; the cases drive them through
 #   the test pad file, MELEE_PAD_FILE, and follow the panel's focus by its "settings: focus" log lines.)
 #   boot     no arguments, a made-up user.json: the home screen, A (PLAY): the game boots into its menus (Slippi's Online Play page)
-#   home     the home screen's pages (Play, Replay Viewer, Mods), the panel from its Settings page, PLAY
+#   home     the home screen's pages (Play, Multiplayer Lobby, Replay Viewer, Mods), the panel from its Settings page, PLAY
 #   panel    the panel in the game: each of its eight categories (screenshots)
 #   menu     the panel (L + R + Start): AUDIO Volume 100 -> 70, Music volume 100 -> 80, OVERLAYS Performance HUD on, the Practice
 #            chord opens GAME on Training: "Inputs and frame advantage" on (saved as lab_overlay 1); a second start reads them back
@@ -367,8 +367,8 @@ for case in "$@"; do
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
       wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home-play
-        tap B; tap DD; tap DD; sleep 3; shot home-replays; tap DD; sleep 1; shot home-mods
-        tap DU; tap DU; tap A; sleep 3; shot home-settings; tap A; sleep 2; shot home-settings-video
+        tap B; tap DD; tap DD; sleep 3; shot home-lobby; tap DD; sleep 3; shot home-replays; tap DD; sleep 1; shot home-mods
+        tap DU; tap DU; tap DU; tap A; sleep 3; shot home-settings; tap A; sleep 2; shot home-settings-video
         tap B; tap B; sleep 2; shot home-after-settings
         tap DU; tap A; sleep 1; shot home-play-focus; tap A; }
       wait_log /out/console.log "play: options" 60 && sleep 12 && shot game
@@ -462,7 +462,7 @@ for case in "$@"; do
       tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.7; }
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "home: drawn" 120 && { sleep 2; tap B; tap DD; tap DD; tap A; sleep 3; shot replaylib-list
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; tap B; tap DD; tap DD; tap DD; tap A; sleep 3; shot replaylib-list
         for i in 1 2 3 4 5; do tap DR; done; tap A; sleep 3; shot replaylib-search; tap A; sleep 3
         tap DR; tap DR; tap DR; tap A; sleep 5; shot replaylib-compressed
         tap DL; tap DL; tap DL; tap DL; tap A; tap A; sleep 2; shot replaylib-deleted
@@ -478,7 +478,7 @@ for case in "$@"; do
       tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.7; }
       cd /out && (/b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log) &
       app=$!
-      wait_log /out/console2.log "home: drawn" 120 && { sleep 2; tap B; tap DD; tap DD; tap A; sleep 3
+      wait_log /out/console2.log "home: drawn" 120 && { sleep 2; tap B; tap DD; tap DD; tap DD; tap A; sleep 3
         tap DR; tap A; tap DR; tap DD; sleep 1; tap A; tap DU; sleep 1; tap A; sleep 1; shot replaylib-queued; tap DR; tap A; }
       wait_log /out/console2.log "as it was played" 200 && { sleep 6; shot replaylib-asplayed; }
       wait $app'

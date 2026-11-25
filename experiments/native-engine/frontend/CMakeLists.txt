@@ -350,6 +350,25 @@ if(NOT MU_FE_VARIANT STREQUAL "null")
     target_include_directories(mu_app_services SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
     target_include_directories(mu_app_services PRIVATE "${REPO}/switch/src")
   endif()
+  # The home screen's Multiplayer Lobby (src/lobby.cpp): melee-unlocked's peer lobby (gen/lobby/launcher_lobby_p2p.cpp, build.sh
+  # sync with patches/0142) on src/lobby_shim (POSIX sockets, its launcher_lang.h stand-in), its DHT (jech/dht, MIT) and Monocypher
+  # (BSD-2-Clause or CC0-1.0) from the fetched tree's port/third_party. The build string is melee-unlocked's version and the Source
+  # Port, as its Linux launcher announces it.
+  file(STRINGS "${REPO}/build/native-engine/mu/VERSION" _mu_version LIMIT_COUNT 1)
+  add_library(mu_lobby OBJECT "${FE}/lobby.cpp" "${FE}/lobby_shim/lobby_shim.cpp" "${GEN}/lobby/launcher_lobby_p2p.cpp"
+    "${MU}/port/third_party/dht/dht.c" "${MU}/port/third_party/monocypher/monocypher.c" "${MU}/port/third_party/monocypher/monocypher-ed25519.c")
+  set_target_properties(mu_lobby PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
+  target_include_directories(mu_lobby BEFORE PRIVATE "${FE}/lobby_shim" "${GEN}/lobby")
+  target_include_directories(mu_lobby PRIVATE "${FE}" "${FE}/features" "${RUN}" "${MU}/port/runtime/abi" "${MU}/port/third_party/dht"
+    "${MU}/port/third_party/monocypher" "${REPO}/port/third_party")
+  target_compile_definitions(mu_lobby PRIVATE MU_LOBBY_HOSTED_ONLY MU_LOBBY_BUILD="${_mu_version}:source")
+  target_compile_options(mu_lobby PRIVATE -O2 -g -Wall -fno-strict-aliasing)
+  set_source_files_properties("${MU}/port/third_party/dht/dht.c" "${MU}/port/third_party/monocypher/monocypher.c"
+    "${MU}/port/third_party/monocypher/monocypher-ed25519.c" PROPERTIES COMPILE_OPTIONS "-w")
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_lobby SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+    target_include_directories(mu_lobby PRIVATE "${REPO}/switch/src")
+  endif()
 endif()
 
 # The free DSP coefficient table (Dolphin's free DSP ROM table v0.2.1, GPL-2.0-or-later; melee-unlocked ships it as
@@ -445,6 +464,9 @@ function(mu_program target netplay_object suffix)
     endif()
     if(TARGET mu_app_services)
       target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_app_services>)   # the app's update and sign-in screens
+    endif()
+    if(TARGET mu_lobby)
+      target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_lobby>)   # the home screen's Multiplayer Lobby
     endif()
   endif()
   target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_present>)
@@ -554,7 +576,7 @@ else()
 endif()
 if(MU_FE_SANITIZE)
   set(_san_flags -fsanitize=${MU_FE_SANITIZE} -fno-omit-frame-pointer)
-  foreach(_t mu_host mu_gx mu_present mu_features mu_jukebox mu_gecko mu_phob_menu mu_app_services mu_native_gfx mu_native_gfx_services)
+  foreach(_t mu_host mu_gx mu_present mu_features mu_jukebox mu_gecko mu_phob_menu mu_app_services mu_lobby mu_native_gfx mu_native_gfx_services)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:${_san_flags}>)
     endif()
