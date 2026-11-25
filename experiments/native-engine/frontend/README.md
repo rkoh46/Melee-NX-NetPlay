@@ -803,6 +803,8 @@ Onett's from the playlist folder `onetto+onetto2/`).
   `./test-overlays-linux.sh DISC lab-dummy`.
 - **Music and the replay viewer**: the jukebox's song stops while the viewer is paused or jumping. Test:
   `./test-replays-linux.sh DISC music` (SDL's disk driver records the output).
+- **CISO and GCZ discs** (`src/disc_ciso_gcz.cpp`, app.cpp): converted once into GALE01.iso at start, like RVZ and WIA. Test:
+  `../tools/ciso_gcz_check.sh`.
 - **Developer aid**: `MELEE_SYNC_SMOOTH=1` (net-0014, upstream's) starts time sync's speed correction at 2 ms.
 - **Tests added**: `test-app-linux.sh` `box` (box mode on an adapter port), `dolphin` (a Dolphin profile imported onto an SDL
   virtual gamepad, `MU_TEST_VIRTUAL_PAD=1`), `MU_APP_SKIN=1 ... online` (the skins-off-online note; `../tools/make_test_skin.py`);

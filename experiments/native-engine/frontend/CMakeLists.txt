@@ -149,7 +149,7 @@ target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle" "${REPO}/nat
 target_include_directories(mu_gx PRIVATE "${GEN}")   # app/game_menu.h: the build-time copy with patches/0104
 target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 # The app (app.cpp: folders, launcher.ini, controllers, HUD; app_menu.cpp: the in-game menu) and the feature hooks' calls.
-target_sources(mu_gx PRIVATE "${FE}/app.cpp" "${FE}/software_keyboard.cpp")
+target_sources(mu_gx PRIVATE "${FE}/app.cpp" "${FE}/software_keyboard.cpp" "${FE}/disc_ciso_gcz.cpp")   # CISO and GCZ discs (zlib)
 target_compile_definitions(mu_gx PRIVATE MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
 if(MU_FE_VARIANT STREQUAL "null")
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=0)

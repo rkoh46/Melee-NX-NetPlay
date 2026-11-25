@@ -12,6 +12,7 @@
 // (names, rules, records, unlocks) carries over; the first session copies the folder once to
 // User/GC/CardA-before-0.4 so going back to 0.3.x is always possible.
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "disc_ciso_gcz.h"
 #include "frontend.h"
 
 #include "host.h"                // shim: PadState, the HUD queries
@@ -503,8 +504,49 @@ void window_test_rumble(const std::string& guid) {
 #include "disc_rvz.h"
 #endif
 namespace fe {
+// CISO and GCZ (src/disc_ciso_gcz.cpp; melee-unlocked only detects them): `iso=` naming one, or GALE01.ciso / GALE01.gcz beside the
+// expected GALE01.iso, is written once as GALE01.iso in that folder. True when *iso now names a plain image or nothing was to do.
+bool app_disc_ciso_gcz(std::string* iso) {
+  const auto exists = [](const std::string& p) { if (FILE* f = std::fopen(p.c_str(), "rb")) { std::fclose(f); return true; } return false; };
+  const std::string given = *iso;
+  const size_t slash = given.rfind('/');
+  const std::string folder = slash == std::string::npos ? std::string(".") : given.substr(0, slash);
+  std::string source;
+  if (exists(given)) { if (disc_ciso_gcz::detect(given) != disc_ciso_gcz::Format::None) source = given; else return true; }
+  else {
+    const std::string stem = given.size() > 4 && given.compare(given.size() - 4, 4, ".iso") == 0 ? given.substr(0, given.size() - 4) : given;
+    for (const char* ext : {".ciso", ".gcz", ".CISO", ".GCZ"}) if (exists(stem + ext) && disc_ciso_gcz::detect(stem + ext) != disc_ciso_gcz::Format::None) { source = stem + ext; break; }
+    if (source.empty()) return true;
+  }
+  const std::string target = source == given ? folder + "/GALE01.iso" : given;
+  if (exists(target)) { *iso = target; return true; }
+  const bool ciso = disc_ciso_gcz::detect(source) == disc_ciso_gcz::Format::Ciso;
+  say("app: converting %s (%s) into %s", source.c_str(), ciso ? "CISO" : "GCZ", target.c_str());
+  app_message_screen("CONVERTING YOUR DISC", {"Your disc image is a " + std::string(ciso ? "CISO" : "GCZ") + " file. The app now writes the plain image it plays from:",
+                     target, "", "This happens once and takes a few minutes on the SD card; the screen stays dark meanwhile.", "The compressed file is left as it was."});
+  std::string error;
+  int last_tenth = -1;
+  const bool ok = disc_ciso_gcz::convert(source, target, [&](uint64_t done, uint64_t total) {
+    const int tenth = total ? int(done * 10 / total) : 0;
+    if (tenth != last_tenth) { last_tenth = tenth; say("app: converting the disc: %d%%", tenth * 10); }
+    return true;
+  }, &error);
+  char id[7] = {};
+  if (ok) if (FILE* f = std::fopen(target.c_str(), "rb")) { if (std::fread(id, 1, 6, f) != 6) id[0] = 0; std::fclose(f); }
+  if (!ok || std::strncmp(id, "GALE01", 6) != 0) {
+    if (ok) { std::remove(target.c_str()); error = std::string("the image is ") + id + ", not Super Smash Bros. Melee (GALE01)"; }
+    say("app: %s not converted: %s", source.c_str(), error.c_str());
+    app_message_screen("DISC IMAGE NOT USABLE", {source, error, "", "Use a clean Melee NTSC 1.02 image (ISO, RVZ, WIA, CISO or GCZ), then start the app again."});
+    return false;
+  }
+  say("app: %s written from %s", target.c_str(), source.c_str());
+  *iso = target;
+  return true;
+}
+
 bool app_disc_convert(std::string* iso) {
   const auto exists = [](const std::string& p) { if (FILE* f = std::fopen(p.c_str(), "rb")) { std::fclose(f); return true; } return false; };
+  if (!app_disc_ciso_gcz(iso)) return false;
 #if MU_FE_RVZ
   const auto lower_ext = [](const std::string& p) {
     const size_t dot = p.rfind('.');
