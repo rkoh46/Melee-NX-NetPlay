@@ -185,7 +185,8 @@ int main(int argc, char** argv) {
     if (!r.ok) { std::printf("cache: %s: %s\n", m.id.c_str(), r.error.c_str()); return false; }
     return replace_file(path + ".part", path) && sha256_file(path) == m.sha256;
   };
-  if (const CatalogMod* mm = by_id(mods, "meleemaker")) {
+  // The resume check fetches Melee Maker; skipped when the mods named on the command line leave it out.
+  if (const CatalogMod* mm = (only.empty() || std::find(only.begin(), only.end(), "meleemaker") != only.end()) ? by_id(mods, "meleemaker") : nullptr) {
     const std::string path = join(cache, mm->asset_pattern);
     if (!file_exists(path)) {
       const std::string part = path + ".part";
@@ -281,6 +282,13 @@ int main(int argc, char** argv) {
     CHECK(mod.output_sha256.empty() || mod.output_sha256 == installed_sha);
     CHECK(file_size(built) == mod.disc_bytes || !mod.disc_bytes);
     results[mod.id] = verdict + "; " + std::to_string(int(secs)) + " s";
+    // MU_MOD_INSTALL_KEEP=<folder>: the built disc is kept there as <id>.iso (a hard link, same volume) for play-mode tests.
+    if (const char* keep = std::getenv("MU_MOD_INSTALL_KEEP")) {
+      const std::string kept = join(keep, mod.id + ".iso");
+      unlink(kept.c_str());
+      if (link(built.c_str(), kept.c_str()) == 0) std::printf("  kept as %s\n", kept.c_str());
+      else std::printf("  could not keep the disc as %s\n", kept.c_str());
+    }
     CHECK(m.remove(mod.id));
     CHECK(!file_exists(built) && m.status(mod.id).state == State::NotInstalled);
     remove_tree(root);
