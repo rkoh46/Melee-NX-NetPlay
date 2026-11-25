@@ -78,7 +78,7 @@ run() {
       pad() { printf "%s\n" "$1" > /out/pad.txt; }
       # The test pad file (MELEE_PAD_FILE) drives the home screen and the settings panel: tap BUTTONS; focus LABEL [BUTTON] taps
       # (D-pad down by default) until the panel names LABEL as the focused row ("settings: focus" in the log).
-      tap() { pad "$1"; sleep ${2:-0.2}; pad ""; sleep ${3:-0.45}; }
+      tap() { pad "$1"; sleep ${2:-0.12}; pad ""; sleep ${3:-0.5}; }
       focus() { for i in $(seq 140); do [ "$(grep -a "settings: focus" ${LOG:-/out/console.log} | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1" >> /out/harness.log; return 1; }
       '"$body" || echo "test-app-linux: container ended with $?"
 }
