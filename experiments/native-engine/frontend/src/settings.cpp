@@ -38,6 +38,7 @@ struct Settings {
   int language = 0;                       // 0 the save's, 1 Japanese, 2 English
   bool vanilla = false;                   // ours: the retail game without the always-on code set
   bool vanilla_only = false;              // upstream's --vanilla-only session: retail gameplay, its own memory card, no mods
+  bool lag_test_next = false;             // upstream's lagtestnext: the next start is the Lossless adapter lag test (that start only)
   // Picture
   bool true_widescreen = false;   // truewidescreen: the renderer widens the picture to 16:9 (upstream's True widescreen at 16:9)
   bool widescreen = false, player_tags = false, hide_ko_explosions = false, hide_hud_emblems = false, freeze_fd = false;
@@ -174,6 +175,7 @@ void set(const std::string& key, const std::string& value) {
   else if (key == "training_hud") s.training_hud = value != "0";
   else if (key == "vanilla") s.vanilla = on;
   else if (key == "vanilla_only") s.vanilla_only = on;
+  else if (key == "lagtestnext") s.lag_test_next = on;
   else if (key == "slippi_menus") s.slippi_menus = on;
   else if (key == "onlinedelay") { if (n >= 1 && n <= 9) s.online_delay = n; }
   else if (key == "onlinedelayauto") s.online_delay_auto = on;
@@ -238,6 +240,7 @@ std::string get(const std::string& key) {
   if (key == "training_hud") return bit(s.training_hud);
   if (key == "vanilla") return bit(s.vanilla);
   if (key == "vanilla_only") return bit(s.vanilla_only);
+  if (key == "lagtestnext") return bit(s.lag_test_next);
   if (key == "slippi_menus") return bit(s.slippi_menus);
   if (key == "onlinedelay") return num(s.online_delay);
   if (key == "onlinedelayauto") return bit(s.online_delay_auto);
@@ -353,6 +356,12 @@ uint32_t word_audio() {
 bool settings_vanilla() { return settings.vanilla; }
 bool settings_vanilla_only() { return settings.vanilla_only; }
 void settings_force_vanilla_only() { settings.vanilla_only = true; }
+// The Lossless adapter lag test arms one start only (upstream consume_lag_test_launch): true once, and settings.ini says 0 again.
+bool settings_lag_test_take() {
+  if (!settings.lag_test_next) return false;
+  settings_change("lagtestnext", "0");
+  return true;
+}
 void settings_online(bool on) { online.store(on, std::memory_order_relaxed); }
 void settings_deactivate() { active = false; }
 void settings_net_prefs(bool* direct_pause, int port_colour[2], uint32_t* shield_online, std::string skip[3]) {

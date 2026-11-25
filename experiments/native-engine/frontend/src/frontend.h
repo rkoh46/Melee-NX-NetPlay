@@ -73,6 +73,7 @@ void settings_load(const std::string& path);
 bool settings_vanilla();
 bool settings_vanilla_only();            // settings.ini vanilla_only 1 or --vanilla-only: retail gameplay, own card, no mods
 void settings_force_vanilla_only();      // --vanilla-only
+bool settings_lag_test_take();           // settings.ini lagtestnext 1: this start is the Lossless adapter lag test (cleared for the next)
 void settings_online(bool on);       // the option words follow the online rules while this is on
 void settings_deactivate();          // the host's own words again (the netplay runs that boot straight into a match)
 int settings_online_delay();         // frames; 0: automatic

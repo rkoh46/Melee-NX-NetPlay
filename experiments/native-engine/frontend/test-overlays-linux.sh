@@ -11,6 +11,8 @@
 #   latency   --auto-vs, latencytest 1: X + D-pad Down twice (black, then white), X + D-pad Up (the picture again)
 #   te        the 20XX TE save's profile (MU_MODS_DIR) with its input display bit set (te_options2 2000 in settings.ini.state):
 #             the input display in a VS match without inputoverlay
+#   lagtest   lagtestnext 1: the Lossless adapter lag test start (boot to the character select with the test's rules, a
+#             10-second rumble on every port when it loads), the switch cleared for the next start
 #   te-flash  the 20XX TE save's profile (MU_MODS_DIR) with lcancel_flash_mode 4 (TE: both) and lcancel_success_flash 2: the game's
 #             own TE flash from TE's word 2 bits, set by the overlays module
 #   picture   --auto-vs, brightness, contrast, vibrance, sharpening, the home television CRT look, 73:60, grid border art
@@ -106,6 +108,14 @@ PY
     printf '%s\n' "te_options2 2000" > "$dir/settings.ini.state"
     run "$dir" 2200 2 "--auto-vs"
     ;;
+  lagtest)
+    fresh "$dir"
+    # The lag test boots to the character select (the lag test's rules: time, 99 stocks, Dream Land only on random) and rumbles
+    # every port for 10 s when it loads; the adapter's own input sequence takes it from there (not scripted here).
+    printf '%s\n' "lagtestnext 1" > "$dir/settings.ini"
+    run "$dir" 900 2 ""
+    echo "settings.ini after the start: $(grep lagtestnext "$dir/settings.ini")"
+    ;;
   te-flash)
     fresh "$dir"; match_script "$dir/script.txt"
     printf '%s\n' "mod_profile te" "lcancel_flash_mode 4" "lcancel_success_flash 2" > "$dir/settings.ini"
@@ -144,6 +154,6 @@ PY
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   echo "== $case"
-  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
+  grep -hE "^overlay|^overlays|^training|^lcancel|TE L-cancel|lagtest|lag test|rumble|^play: (options|match|stopped)|exit code|STOPPED|rror" "$dir/console.log" | cut -c1-220 | tail -25
   echo "shots: $(ls "$dir/shots" | wc -l | tr -d ' ')"
 done

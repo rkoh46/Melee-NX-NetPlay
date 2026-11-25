@@ -263,6 +263,7 @@ bool place_row(const std::string& label, int* cat, std::string* title) {
     {"Console low-pass on voices (next start)", 1, "Music and sound"}, {"Use custom music (next start)", 1, "Music and sound"},
     // melee-unlocked's VIDEO page has the Arcade look section
     {"Show hitboxes", 0, "Arcade look"}, {"Projectile hitboxes", 0, "Arcade look"}, {"Hitboxes behind fighters", 0, "Arcade look"},
+    {"Lossless adapter lag test (next start only)", 0, "Advanced"},
     {"2D camera", 0, "Arcade look"}, {"Grid behind the stage", 0, "Arcade look"}, {"Combo counter (offline)", 0, "Arcade look"}};
   for (const P& p : table) if (label == p.label) { *cat = p.cat; *title = p.title; return true; }
   return false;
