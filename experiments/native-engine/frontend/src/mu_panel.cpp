@@ -96,6 +96,10 @@ extern "C" const uint8_t mu_ui_bailey[], mu_ui_bailey_end[], mu_ui_mark[], mu_ui
 #include "gd_assets.inc"
 #undef MU_GD_ASSET
 
+namespace fe {
+void egg_watch_pads(const host::PadState pads[4]);   // egg.cpp: melee-unlocked's character select easter egg
+void egg_draw(float x0, float y0, float x1, float y1, double time);
+}
 namespace fe::features {
 __attribute__((weak)) bool practice_menu_chord(int port);   // features/proai.cpp: the Practice menu
 __attribute__((weak)) uint32_t cosmetics_off_online(uint32_t* stages);   // features/cosmetics.cpp: skins served standard online
@@ -265,7 +269,8 @@ void place(const std::string& page, int* cat, std::string* title) {
     {"Picture", 0, "Picture"}, {"Game options", 2, "Game"}, {"Picture and HUD", 2, "HUD"}, {"Community codes", 2, "Community codes"},
     {"Computer players", 2, "Computer players"}, {"Game", 2, "Input"}, {"Online", 2, "Online"}, {"Training", 2, "Training"},
     {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Mods", 7, "Game mods"}, {"Controller setup", 3, "Controller setup"},
-    {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}};
+    {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"},
+    {"Skins", 7, "Choose skins"}};
   for (const P& p : table) if (page == p.page) { *cat = p.cat; *title = p.title; return; }
   *cat = 2; *title = page;
 }
@@ -1446,7 +1451,15 @@ void panel_draw(int window_w, int window_h) {
   const bool shown = open || g_state.panel_slide_x > -720.0f;
   if (shown) io.ConfigFlags |= ImGuiConfigFlags_NoMouse; else io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
   io.ConfigNavCursorVisibleAlways = shown;
-  if (!open) { draw_reminder(); draw_skin_online_notice(); }
+  if (!open) {
+    draw_reminder(); draw_skin_online_notice();
+    // The easter egg over the game picture (4:3 in the middle of the screen, or the whole width with widescreen).
+    if (g_in_game_feed && !g_in_match.load()) {
+      const ImVec2 d = io.DisplaySize;
+      const float gw = std::min(d.x, d.y * 4.0f / 3.0f);
+      egg_draw((d.x - gw) * 0.5f, 0, (d.x + gw) * 0.5f, d.y, ImGui::GetTime());
+    }
+  }
   if (!open && g_state.panel_slide_x <= -720.0f && !g_ui_open && g_state.panel_anim_initialized) return;
   // melee-unlocked's style and fonts for the panel only; ImGui's own default for everything drawn after it.
   const ImGuiStyle saved = ImGui::GetStyle();
@@ -1557,6 +1570,22 @@ void ui_sound_mix(int16_t* rl, uint32_t frames, uint32_t rate) {
     for (int c = 0; c < 2; ++c) rl[i * 2 + c] = int16_t(std::clamp(rl[i * 2 + c] + v, -32768.0, 32767.0));
   }
 }
+Art picture_file(const std::string& path) {
+  Art art;
+  FILE* f = std::fopen(path.c_str(), "rb");
+  if (!f) return art;
+  std::vector<uint8_t> bytes;
+  uint8_t buf[65536]; size_t n;
+  while ((n = std::fread(buf, 1, sizeof buf, f)) > 0 && bytes.size() < (32u << 20)) bytes.insert(bytes.end(), buf, buf + n);
+  std::fclose(f);
+  if (bytes.size() > 2 && bytes[0] == 'B' && bytes[1] == 'M') return decode_bmp(bytes.data(), bytes.data() + bytes.size());
+  int w = 0, h = 0;
+  std::vector<uint8_t> rgba;
+  if (!decode_png(bytes.data(), bytes.size(), &w, &h, rgba)) return art;
+  art.texture = reinterpret_cast<void*>(aurora_imgui_add_texture(uint32_t(w), uint32_t(h), rgba.data()));
+  art.w = w; art.h = h;
+  return art;
+}
 void* gd_texture(const std::string& name) {
   // gd_melee/kit/<file>.png -> the embedded copy (gen/mu_ui/gd_assets.inc), decoded once and uploaded.
   struct Asset { const char* name; const uint8_t* begin; const uint8_t* end; };
@@ -1618,6 +1647,7 @@ bool menu_touch(float, float) { return false; }
 // play_io.cpp's menu_frame calls this with the game's controllers (simulation thread): the open combo, the panel's
 // queued changes, the remap's capture, and neutral controllers for the game while the panel is open.
 void app_menu_frame(PadState pads[4]) {
+  fe::egg_watch_pads(pads);   // the easter egg's code: read only, before anything here changes the pads
   {
     std::lock_guard<std::mutex> lock(fe::g_mutex);
     if (fe::g_open_at_frame >= 0 && int(retrace_count()) >= fe::g_open_at_frame) {

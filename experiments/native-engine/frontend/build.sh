@@ -177,6 +177,18 @@ sync_tree() {
     echo "MU_GD_ASSET($n)" >> "$gen/mu_ui/gd_assets.inc.new"
   done
   if cmp -s "$gen/mu_ui/gd_assets.inc.new" "$gen/mu_ui/gd_assets.inc"; then rm -f "$gen/mu_ui/gd_assets.inc.new"; else mv "$gen/mu_ui/gd_assets.inc.new" "$gen/mu_ui/gd_assets.inc"; fi
+  # What's new (the home screen's notes, src/mu_home.cpp): whats-new.txt, one C string a line.
+  python3 -I - "$here/whats-new.txt" "$gen/mu_ui/whats_new.inc" <<'PY'
+import json, sys
+lines = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8") if not l.startswith("#")]
+text = "".join(json.dumps(l) + ",\n" for l in lines if l.strip())
+try:
+    old = open(sys.argv[2], encoding="utf-8").read()
+except OSError:
+    old = None
+if old != text:
+    open(sys.argv[2], "w", encoding="utf-8").write(text)
+PY
   # The launcher's translations (lang/*.txt, GPL-2.0-or-later) for the home screen's language picker (src/mu_lang.cpp).
   mkdir -p "$gen/mu_ui/lang"
   : > "$gen/mu_ui/lang_files.inc.new"
@@ -185,6 +197,15 @@ sync_tree() {
     echo "MU_LANG_FILE($id, \"$n\")" >> "$gen/mu_ui/lang_files.inc.new"
   done
   if cmp -s "$gen/mu_ui/lang_files.inc.new" "$gen/mu_ui/lang_files.inc"; then rm -f "$gen/mu_ui/lang_files.inc.new"; else mv "$gen/mu_ui/lang_files.inc.new" "$gen/mu_ui/lang_files.inc"; fi
+  # The character select easter egg (src/egg.cpp): walter_egg.cpp, its header and its picture, as fetched.
+  mkdir -p "$gen/mu_ui/egg"
+  rm -f "$gen/mu_ui/egg/user_texture.h"
+  for f in walter_egg.cpp walter_egg.h walter_egg_picture.h; do
+    # Its two includes of upstream's test hooks and renderer options name the stand-ins in src/egg_shim instead.
+    sed -e 's|#include "test_env.h"|#include "egg_test_env.h"|' -e 's|#include "render_options.h"|#include "egg_render_options.h"|' -e 's|#include "user_texture.h"|#include "egg_user_texture.h"|' \
+      "$src/mu/port/runtime/gx/$f" > "$gen/mu_ui/egg/$f.new"
+    if cmp -s "$gen/mu_ui/egg/$f.new" "$gen/mu_ui/egg/$f"; then rm -f "$gen/mu_ui/egg/$f.new"; else mv "$gen/mu_ui/egg/$f.new" "$gen/mu_ui/egg/$f"; fi
+  done
   # The NRO's icon: melee-unlocked's own (port/app/launcher.ico, its largest picture), as a 256x256 JPEG (build_nro).
   mu_icon
   # Skins (src/features/cosmetics.cpp): melee-unlocked's skeleton and drawing checks and its costume families, taken from

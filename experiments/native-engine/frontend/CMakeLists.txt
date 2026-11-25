@@ -165,6 +165,9 @@ else()
   target_sources(mu_gx PRIVATE "${FE}/app_menu.cpp" "${FE}/overlay_draw.cpp" "${FE}/mu_panel.cpp" "${GEN}/app/overlay_imgui.cpp"
     "${APPSRC}/input_config.cpp" "${APPSRC}/metal_frontend.cpp")
   set_source_files_properties("${FE}/mu_panel.cpp" PROPERTIES INCLUDE_DIRECTORIES "${GEN}/mu_ui")
+  # melee-unlocked's character select easter egg, from the fetched tree (gen/mu_ui/egg) over two small stand-ins (src/egg_shim).
+  target_sources(mu_gx PRIVATE "${FE}/egg.cpp")
+  set_source_files_properties("${FE}/egg.cpp" PROPERTIES INCLUDE_DIRECTORIES "${FE}/egg_shim;${GEN}/mu_ui/egg")
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the
@@ -266,11 +269,11 @@ endif()
 # computer (self_update*.cpp) and the Slippi sign-in (switch_signin.cpp with patches/0105, slippi_login.cpp, HTTPS
 # through libcurl). The netplay object has its own copies of the last two, local to it.
 if(NOT MU_FE_VARIANT STREQUAL "null")
-  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${FE}/mu_home.cpp" "${FE}/mu_lang.cpp" "${GEN}/app/switch_signin.cpp"
+  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${FE}/mu_home.cpp" "${FE}/mu_lang.cpp" "${FE}/diagnostics.cpp" "${GEN}/app/switch_signin.cpp"
     "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp"
     "${FE}/modinstall/mi_fetch_curl.cpp")   # the mod installer's downloads (mods_service.cpp finds it through a weak reference)
   target_include_directories(mu_app_services PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${APPSRC}"
-    "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi" "${GEN}/mu_ui")
+    "${REPO}/port/runtime/hle" "${REPO}/port/third_party" "${MU}/port/linux" "${MU}/port/runtime/abi" "${GEN}/mu_ui" "${MU}/port/app")
   target_compile_definitions(mu_app_services PRIVATE MU_FE_AURORA=1 MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
   target_compile_options(mu_app_services PRIVATE -O2 -g -Wall -fno-strict-aliasing)
   target_link_libraries(mu_app_services PRIVATE aurora::core aurora::gx aurora::pad SDL3::SDL3-static)

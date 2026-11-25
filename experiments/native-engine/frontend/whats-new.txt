@@ -1,0 +1,9 @@
+# What's new: the home screen shows these lines when a new version starts for the first time (src/mu_home.cpp).
+# One line each, newest first; lines starting with # are left out.
+Settings: all of melee-unlocked's menu styles (Customize > Menu style), palettes, transparency and a custom accent.
+Settings: search every page with the console's keyboard; menu sounds; the "Settings" reminder.
+Launcher: melee-unlocked's languages, the launcher colour wheel, your own rail picture (rail-image.png).
+Replays: search, a watch queue, another folder, any replay file, compression to .slpz, deleted replays kept in a trash folder.
+Replays: the network and timing graph, and "as it was played".
+Mods: skin counts and Choose skins on the cards; the catalog refreshed online.
+Diagnostics: a crash report saved to the SD card, trace marks, frame capture.

@@ -43,6 +43,11 @@ void panel_open_from_launcher();
 void note_session(bool fighting, bool online);
 // Menu sounds (upstream's menusounds): play_io.cpp mixes the panel's tick into the game's 32 kHz output, R/L pairs.
 bool ui_sound_pending();
+// A picture file (PNG 8-bit RGB/RGBA, or BMP) uploaded for ImGui: the home screen's rail picture. Empty Art when unreadable.
+Art picture_file(const std::string& path);
+// diagnostics.cpp: melee-unlocked's crash report zip on the SD card (its privacy scrubbing), from the home screen's Play page.
+__attribute__((weak)) bool crash_report_available();
+__attribute__((weak)) bool crash_report_save(std::string* where, std::string* error);
 void ui_sound_mix(int16_t* rl, uint32_t frames, uint32_t rate);
 }  // namespace fe::mu_ui
 

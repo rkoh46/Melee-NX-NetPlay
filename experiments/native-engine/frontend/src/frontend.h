@@ -122,6 +122,7 @@ std::string app_ini(const std::string& key, const std::string& fallback);
 // software_keyboard.cpp: the console's keyboard applet (blocks until OK or cancel; call it off the render thread in a match).
 // `text` is the initial text and, on true, the words typed. Off the console: the MU_TEST_KEYBOARD test answers.
 bool software_keyboard(const char* header, const char* guide, std::string& text);
+void diagnostics_start();   // diagnostics.cpp (the app with a picture): Logs/crash.txt when the program is stopped by a signal
 void app_ini_set(const std::string& key, const std::string& value);   // and writes launcher.ini
 void app_backup_card();                        // the first session of this app copies the memory card once
 // Simulation thread (lane 0, the game's poll) or the input-suggestion thread (lane 1), under play_io's input lock:

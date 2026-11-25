@@ -25,6 +25,10 @@
 #            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
 #   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
 #            settings search with the software keyboard's test answer
+#   launcher the home screen's What's new, Language (Deutsch), launcher colour wheel and a rail picture (screenshots)
+#   replaylib the home screen's Replay Viewer: search, the session trace graph, compress all, delete to .trash and undo, the
+#            folder browser; then As played and the watch queue (needs the record and online runs, see the case)
+#   egg      the character select easter egg (Bailey and Walter), screenshots
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
@@ -269,6 +273,79 @@ for case in "$@"; do
         kill $app 2>/dev/null; wait $app 2>/dev/null
       done'
     grep -hE "settings: (opened|search|focus|VIDEO|categories)|keyboard:" "$dir"/console-*.log | cut -c1-160 | head -60
+    ;;
+  launcher)
+    # The home screen's Play page extras: What's new (launcher.ini notesseen from an older version: it opens by itself), the
+    # Language button (Deutsch picked), the launcher colour's wheel (hue moved, applied: accent=#...), a rail picture of the
+    # player's own (rail-image.png in the app folder). Screenshots shots/launcher-*.png.
+    make_app "$dir" 1 600 - notesseen=0.0.1
+    cp "$work/gen/mu_ui/mu_icon.png" "$dir/melee-nx-netplay/rail-image.png"
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.6; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot launcher-notes; tap A
+        tap DD; tap DD; tap DD; tap A; sleep 1; shot launcher-language; tap DD; tap DD; tap DD; tap DD; tap A; sleep 1.5; shot launcher-deutsch
+        tap DD; tap A; sleep 1; tap DR; tap DR; tap DR; tap DR; tap DR; tap DR; tap DD; tap DL; tap DL; sleep 1; shot launcher-wheel; tap A; sleep 1; shot launcher-colour
+        tap DU; tap DU; tap DU; tap DU; tap A; }
+      wait $app'
+    grep -E "home: |launcher.ini" "$dir/console.log" | cut -c1-160
+    echo "launcher.ini: $(grep -E "^(language|accent|notesseen)=" "$dir/melee-nx-netplay/launcher.ini" | tr '\n' ' ')"
+    ;;
+  replaylib)
+    # The home screen's Replay Viewer (melee-unlocked's library): needs run-replays/replay.slp (test-replays-linux.sh record) and an
+    # online match's replay with its session trace (MU_APP_SETTINGS="session_trace 2" ./test-app-linux.sh DISC online). First start:
+    # the list; Search (the software keyboard's test answers: the online game's date, then nothing to clear it) with the session
+    # trace graph; Compress all (.slpz); Delete (to .trash) and Undo; the folder browser. Second start: "As played" on, the recorded
+    # replay and then the online one queued, Watch queue: the first plays to its end, the online one follows, shown as it was played.
+    online="$root/online/a/melee-nx-netplay/Replays"
+    [ -f "$repo/build/native-engine-gfx/run-replays/replay.slp" ] && ls "$online"/*.trace >/dev/null 2>&1 || { echo "replaylib needs run-replays/replay.slp and an online run with session_trace 2" >&2; exit 1; }
+    make_app "$dir" 1 9000 -
+    R="$dir/melee-nx-netplay/Replays"; mkdir -p "$R"
+    cp "$repo/build/native-engine-gfx/run-replays/replay.slp" "$R/Game_20261124T120000.slp"
+    cp "$repo/build/native-engine-gfx/run-replays/replay.slp" "$R/Game_20261124T110000.slp"
+    cp "$online"/*.slp "$online"/*.trace "$R/"
+    touch -t 202611240000 "$R"/*
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_TEST_KEYBOARD="20261125|"; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.7; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; tap B; tap DD; tap DD; tap A; sleep 3; shot replaylib-list
+        for i in 1 2 3 4 5; do tap DR; done; tap A; sleep 3; shot replaylib-search; tap A; sleep 3
+        tap DR; tap DR; tap DR; tap A; sleep 5; shot replaylib-compressed
+        tap DL; tap DL; tap DL; tap DL; tap A; tap A; sleep 2; shot replaylib-deleted
+        for i in 1 2 3 4 5; do tap DR; done; tap A; sleep 2; shot replaylib-undone
+        tap DL; tap DL; tap DL; tap A; sleep 1.5; shot replaylib-folder; tap B
+        kill $app; }
+      wait $app'
+    echo "folder after the first start:"; ls "$R" "$R/.trash" 2>/dev/null | tr '\n' ' '; echo
+    # Second start: a fresh folder, the online replay and one other, As played on, both queued.
+    rm -rf "$R"; mkdir -p "$R"
+    cp "$online"/*.slp "$online"/*.trace "$R/"; cp "$repo/build/native-engine-gfx/run-replays/replay.slp" "$R/Game_20261124T120000.slp"
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt LOG=/out/console2.log; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.7; }
+      cd /out && (/b/$BIN > /out/console2.log 2>&1; echo "exit code $?" >> /out/console2.log) &
+      app=$!
+      wait_log /out/console2.log "home: drawn" 120 && { sleep 2; tap B; tap DD; tap DD; tap A; sleep 3
+        tap DR; tap A; tap DR; tap DD; sleep 1; tap A; tap DU; sleep 1; tap A; sleep 1; shot replaylib-queued; tap DR; tap A; }
+      wait_log /out/console2.log "as it was played" 200 && { sleep 6; shot replaylib-asplayed; }
+      wait $app'
+    grep -hE "home: |library: |replay: (showing|as played|no session|the watch queue|playback finished|the session trace)|keyboard:" "$dir"/console*.log | cut -c1-180 | head -60
+    ;;
+  egg)
+    # melee-unlocked's character select easter egg: Unranked (Slippi's character select, scene 8), then Up Up Down Down Left Right
+    # Left Right B A (Bailey) and the same with A B (Walter); screenshots of the faces bouncing.
+    make_app "$dir" 1 2400 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      tap() { pad "$1"; sleep ${2:-0.1}; pad ""; sleep 0.15; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3; tap A
+      wait_log /out/console.log "scene 8/0" 30 && { sleep 3
+        for b in DU DU DD DD DL DR DL DR B A; do tap $b; done; sleep 2; shot egg-bailey
+        for b in DU DU DD DD DL DR DL DR A B; do tap $b; done; sleep 3; shot egg-walter; sleep 2; shot egg-later; }
+      wait $app'
+    grep -E "walter egg|scene 8" "$dir/console.log" | head
     ;;
   explore)
     # Diagnosis: walks every category of the panel row by row (the log's "settings: focus" lines name each row in order).
