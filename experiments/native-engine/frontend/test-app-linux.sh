@@ -14,7 +14,7 @@
 #            chord opens GAME on Training: "Inputs and frame advantage" on (saved as lab_overlay 1); a second start reads them back
 #   handover the panel with the D-pad, closed with B held for 12 retraces, then A in the game: the closing B never reaches the game
 #            (it stays on Online Play), the later A does (Unranked opens Slippi's character select, scene 8)
-#   signin   no user.json: the home screen's Sign in opens the sign-in screen; B (Play offline) back to the home screen; PLAY: offline
+#   signin   no user.json: the home screen's Sign in (past PLAY and the version line's What's new) opens the sign-in screen; B (Play offline) back to the home screen; PLAY: offline
 #   update   a fake build computer on 127.0.0.1 (python http.server) publishes the version after VERSION: offered on the home screen's
 #            Play page, "Update and restart", the download, the check, the swap of melee-nx-netplay.nro (a dummy), the notice, A: the app
 #            closes; then the same version: nothing offered, PLAY
@@ -28,6 +28,8 @@
 #   launcher the home screen's What's new, Language (Deutsch), launcher colour wheel and a rail picture (screenshots)
 #   replaylib the home screen's Replay Viewer: search, the session trace graph, compress all, delete to .trash and undo, the
 #            folder browser; then As played and the watch queue (needs the record and online runs, see the case)
+#   notices  the "Settings" reminder in the menus (screenshot) and the panel's menu sounds (their log lines)
+#   crashreport  "Save crash report" on the home screen: the zip and its companion in Logs/, the account's name and code absent
 #   egg      the character select easter egg (Bailey and Walter), screenshots
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
@@ -261,7 +263,7 @@ for case in "$@"; do
         if [ $style = 0 ]; then tap A; sleep 2; shot style-0-search; fi
         tap DD; tap DD; sleep 0.8; shot style-$style-down
         tap B; sleep 1; tap START; sleep 1
-        kill $app 2>/dev/null; wait $app 2>/dev/null
+        pkill -f "/b/$BIN" 2>/dev/null; wait $app 2>/dev/null; sleep 1
       done
       for legacy in 6 7; do
         sed -i -e "/^legacymenu/d" -e "/^home=/d" -e "/^frames=/d" -e "/^overlaystyle=/d" /out/melee-nx-netplay/launcher.ini
@@ -270,7 +272,7 @@ for case in "$@"; do
         cd /out && (/b/$BIN > $LOG 2>&1; echo "exit code $?" >> $LOG) &
         app=$!
         wait_log $LOG "home: drawn" 120 && { sleep 2; tap B; tap DD; tap A; sleep 2.5; shot style-$legacy-home; tap DD; tap DD; sleep 1; shot style-$legacy-down; }
-        kill $app 2>/dev/null; wait $app 2>/dev/null
+        pkill -f "/b/$BIN" 2>/dev/null; wait $app 2>/dev/null; sleep 1
       done'
     grep -hE "settings: (opened|search|focus|VIDEO|categories)|keyboard:" "$dir"/console-*.log | cut -c1-160 | head -60
     ;;
@@ -316,7 +318,7 @@ for case in "$@"; do
         tap DL; tap DL; tap DL; tap DL; tap A; tap A; sleep 2; shot replaylib-deleted
         for i in 1 2 3 4 5; do tap DR; done; tap A; sleep 2; shot replaylib-undone
         tap DL; tap DL; tap DL; tap A; sleep 1.5; shot replaylib-folder; tap B
-        kill $app; }
+        pkill -f "/b/$BIN"; }
       wait $app'
     echo "folder after the first start:"; ls "$R" "$R/.trash" 2>/dev/null | tr '\n' ' '; echo
     # Second start: a fresh folder, the online replay and one other, As played on, both queued.
@@ -331,6 +333,35 @@ for case in "$@"; do
       wait_log /out/console2.log "as it was played" 200 && { sleep 6; shot replaylib-asplayed; }
       wait $app'
     grep -hE "home: |library: |replay: (showing|as played|no session|the watch queue|playback finished|the session trace)|keyboard:" "$dir"/console*.log | cut -c1-180 | head -60
+    ;;
+  notices)
+    # The "Settings" reminder (settingsreminder=1) in the menus, and the panel's menu sounds (menusounds=1): open, a move, a page, close.
+    make_app "$dir" 1 1800 - home=0 settingsreminder=1 menusounds=1
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.8; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && { sleep 3; shot reminder
+        pad "L R START"; sleep 1.2; pad ""; sleep 1.5; tap DD; tap A; sleep 1; tap B; tap START; sleep 1; }
+      wait $app'
+    grep -E "settings: (reminder|menu sound)" "$dir/console.log" | head
+    ;;
+  crashreport)
+    # The home screen's "Save crash report": melee-unlocked's zip (privacy-scrubbed logs) and its .md companion in Logs/. A first start
+    # leaves a log behind; the second start saves the report from it. Then: the zip's parts, and none of the account's name or code.
+    make_app "$dir" 1 300 - home=0
+    run "$dir" 'cd /out && /b/$BIN > /out/console0.log 2>&1; echo "exit code $?" >> /out/console0.log'
+    sed -i.bak "/^home=/d" "$dir/melee-nx-netplay/launcher.ini"
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.7; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; tap DD; tap DD; tap DD; tap A; sleep 2; shot crash-saved; tap A; tap DU; tap DU; tap DU; tap A; }
+      wait $app
+      cd /out/melee-nx-netplay/Logs && unzip -l melee_crash_report.zip > /out/zip-list.txt 2>&1; unzip -p melee_crash_report.zip > /out/zip-all.txt 2>&1 || true'
+    grep -E "crash report" "$dir/console.log" | cut -c1-220
+    cat "$dir/zip-list.txt"
+    echo "account name or code in the zip: $(grep -c -E "Mock 1|MOCK#001|mock-test" "$dir/zip-all.txt") lines"
     ;;
   egg)
     # melee-unlocked's character select easter egg: Unranked (Slippi's character select, scene 8), then Up Up Down Down Left Right
@@ -371,9 +402,9 @@ PY
     run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home-no-account; tap DD; tap A; }
+      wait_log /out/console.log "home: drawn" 120 && { sleep 2; shot home-no-account; tap DD; tap DD; tap A; }
       wait_log /out/console.log "home: Sign in" 30 && { sleep 3; shot signin; tap B; }
-      wait_log /out/console.log "sign-in: playing offline" 30 && { sleep 2; tap DU; tap A; }
+      wait_log /out/console.log "sign-in: playing offline" 30 && { sleep 2; tap DU; tap DU; tap A; }
       wait_log /out/console.log "home: PLAY" 30 && rm -f /out/pad.txt
       sleep 14; shot game-offline
       wait $app'
@@ -391,7 +422,7 @@ PY
       sleep 1
       cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
       app=$!
-      wait_log /out/console.log "update: offered on the Play page" 60 && { sleep 3; shot prompt; tap DD; tap A; }
+      wait_log /out/console.log "update: offered on the Play page" 60 && { sleep 3; shot prompt; tap DD; tap DD; tap A; }
       wait_log /out/console.log "the new version is" 60 && { sleep 2; shot installed; tap A; }
       wait $app
       # The same version published: no update offered, PLAY starts the game.

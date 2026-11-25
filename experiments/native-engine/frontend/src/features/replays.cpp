@@ -497,6 +497,7 @@ bool open_replay(const std::string& given) {
   }
   pb = Playback{};
   pb.path = path;
+  pb.last_buttons = 0xFFFF;       // a button still held from the screen that chose the replay (its Watch's A) is not a press for the viewer
   library_replay_opened(given);   // its session trace, for "as it was played" (replay_library.cpp)
   for (int w = 0; w < 3; ++w) pb.words[w] = read_word(bytes, w);
   const std::string profile = read_mod_profile(bytes);
