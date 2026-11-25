@@ -1,7 +1,7 @@
 // melee-unlocked's in-game settings panel on the Switch, in place of the app's own menu (game_menu.cpp, no longer built).
 //
-// The look is melee-unlocked's, drawn by its own code: its ImGui panel in the "Clean side" appearance (menu style 0, its
-// default), from the fetched tree at build time (scripts/mu_ui_extract.py -> gen/mu_ui): pc_settings_visuals.inl (the
+// The look is melee-unlocked's, drawn by its own code: its ImGui panel in each of its menu styles (Clean side, its default;
+// Icon tiles, GD Melee, Radial, Wide tabs, Simple; the legacy Classic and Old menus), from the fetched tree at build time (scripts/mu_ui_extract.py -> gen/mu_ui): pc_settings_visuals.inl (the
 // rows, toggles, combos, sliders, section headers, footer chips, Quit game button), the Clean category list and title
 // shards, the slide-in motion, the page entrance and smooth scroll of pc_settings.cpp, its ImGui style, the controller
 // feed of settings_imgui_input.h and the focus bookkeeping of settings_page_navigation.h. The same eight categories

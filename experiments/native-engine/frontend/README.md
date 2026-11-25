@@ -738,17 +738,29 @@ allows. Nothing of it is committed: `build.sh sync` runs `scripts/mu_ui_extract.
 panel's code verbatim into `gen/mu_ui` (`pc_settings_visuals.inl`, `settings_page_navigation.h`, `settings_imgui_input.h`,
 `settings_search.h`, the GD Melee motion and text tables, and by first and last line the Clean side functions and blocks of
 `pc_settings.cpp`: category icons, title shards, category list, slide-in motion, page header, page entrance, smooth scroll,
-the ImGui style), the launcher's palette and layout constants and its accent theme, its fonts (Source Sans 3 Black and Bold,
-OFL) and its artwork (`bailey_cut.bmp`, `melee_mark.bmp`), and converts `melee_unlocked.ico` into the NRO's icon.
+the ImGui style, and each menu style's home and navigation: settings_dashboard_home, settings_gd_home and settings_gd_chrome,
+settings_radial_nav, settings_wide_home, settings_nav_strip, settings_nav_tile; radial_navigation.h), the launcher's palette and
+layout constants and its accent theme, its fonts (Source Sans 3 Black and Bold, OFL), its artwork (`bailey_cut.bmp`,
+`melee_mark.bmp`), the GD Melee kit's pictures and font pages (PNG, decoded at first use), the launcher's `lang/*.txt`, the
+easter egg's `walter_egg.cpp` (gen/mu_ui/egg, over two stand-ins in src/egg_shim), and converts `melee_unlocked.ico` into the
+NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's new.
 
-- **In the game** (`src/mu_panel.cpp`): the panel in its default Clean side style. L + R + Start (half a second) or
+- **Menu styles** (feat/ui3): CUSTOMIZE > Menu style picks Clean side (the default), Icon tiles, GD Melee, Radial, Wide tabs or
+  Simple, each drawn by upstream's code and settings_frame's steps for it; four palettes each, Window transparency, a custom
+  accent (hue, saturation, brightness), and the two legacy menus (Legacy New, Legacy Old) from the home screen's Settings with
+  "Enable Legacy Menu". launcher.ini keys with upstream's names: `overlaystyle`, `overlaypalette0..6`, `settingstransparency`,
+  `menucustom`, `menuhue`, `menusat`, `menuval`, `legacymenu`, `legacymenustyle`, `menusounds`, `settingsreminder`,
+  `skin_online_notice`. Every page starts with "Search all settings": the console's software keyboard (src/software_keyboard.cpp;
+  off the console the test answers of `MU_TEST_KEYBOARD="words|more|-"`) feeds upstream's search. Menu sounds are mixed into the
+  game's output (play_io.cpp). The easter egg (src/egg.cpp) draws over any character select.
+- **In the game** (`src/mu_panel.cpp`): the panel in the chosen style. L + R + Start (half a second) or
   Start + D-pad Down + Z opens it; D-pad or stick moves, A selects, B goes back a page, Start closes; Quit game asks first.
   Categories VIDEO, AUDIO, GAME, CONTROLS, OVERLAYS, CUSTOMIZE, GECKO CODES, MODS: the app's rows are placed where melee-unlocked
   has them (its section names), each drawn by its own widgets (toggle, combo, slider; a value the app's pages step is a
   `< value >` field), and melee-unlocked's rows the Switch lacks are listed greyed under "Not on the Switch". Every change is
   queued and applied on the simulation thread at the next controller read; the game gets neutral controllers while the panel
-  is open and nothing held when it closes (play_io.cpp's hand-over). The search box (needs a keyboard), the other five menu
-  styles and the mouse are left out. `menu_open_extra(title)` opens the category holding that page, and the focus walks down to
+  is open and nothing held when it closes (play_io.cpp's hand-over). The mouse is left out (the search is the software
+  keyboard's, the styles above). `menu_open_extra(title)` opens the category holding that page, and the focus walks down to
   it as a player's D-pad would. Practice menu: a "Practice menu" row on GAME > Training when features/proai.cpp is linked.
   Log lines: `settings: opened on ...`, `settings: <CATEGORY>`, `settings: focus <row>` (the tests follow these).
 - **Before the game** (`src/mu_home.cpp`): the launcher's rail (mark, Play, Settings, Replay Viewer, Mods, Bailey) and content
@@ -758,7 +770,14 @@ OFL) and its artwork (`bailey_cut.bmp`, `melee_mark.bmp`), and converts `melee_u
   Settings opens the panel over it. Replay Viewer: the replays with the picked game's stats, Watch (the game starts with it,
   offline), Delete. Mods: melee-unlocked's catalog cards over the mod installer (Get / Update / Cancel / Play it at the next
   start / Remove, where to download a file yourself) and the profile the next start loads. launcher.ini `home=0` skips it
-  (test aid); `mu_palette` and `mu_accent` keep the two colours.
+  (test aid); `mu_palette` and `mu_accent` keep the two colours (`overlaypalette0` and `accent=#RRGGBB` take over once set).
+  feat/ui3: the Language button (upstream's nine languages, launcher.ini `language`; CJK through the console's shared fonts), What's
+  new (`notesseen`), the colour wheel, `rail-image.png`/`.bmp` in the app folder, "Save crash report" (Logs/melee_crash_report.zip and
+  .md, scrubbed as upstream does, never sent). Replay Viewer: Watch, As played, the watch queue, Delete (to Replays/.trash) and Undo,
+  Search, Folder... and Open replay... (an SD card browser), Compress all (.slpz), the session trace graph. Mods: each card's skin
+  count and Choose skins; the catalog refreshed from upstream's raw URL at each start (`MU_NO_CATALOG_REFRESH=1` skips it).
+  Test aids: `MELEE_TRACE_SLIPPI_CMDS=1` (play mode logs each menu command), `MELEE_NET_LAG_MS`, `MELEE_NET_JITTER_MS`,
+  `MELEE_NET_LOSS_PCT` (patches/net-0011). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 

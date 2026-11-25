@@ -6,4 +6,4 @@ Launcher: melee-unlocked's languages, the launcher colour wheel, your own rail p
 Replays: search, a watch queue, another folder, any replay file, compression to .slpz, deleted replays kept in a trash folder.
 Replays: the network and timing graph, and "as it was played".
 Mods: skin counts and Choose skins on the cards; the catalog refreshed online.
-Diagnostics: a crash report saved to the SD card, trace marks, frame capture.
+Diagnostics: "Save crash report" writes a scrubbed report to the SD card (nothing is sent). And the character select has a secret.

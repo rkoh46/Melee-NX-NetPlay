@@ -10,8 +10,9 @@
 //   Settings       opens melee-unlocked's settings panel (mu_panel.cpp), as its launcher opens the game's F1 panel
 //   Replay Viewer  the replays (src/features/replay_library.cpp's list and per-game stats), Watch and Delete
 //   Mods           the mod profiles (settings.ini mod_profile)
-// Left out: Build (no ISO verification or shader build on the console), Multiplayer Lobby and everything of YouGame,
-// Choose version, the language picker and Send logs. The scale follows the screen: 1.5 at 720p handheld, 2.25 at 1080p
+// Also its languages (mu_lang.cpp), What's new, the colour wheel, the rail picture, the Replay Viewer's search, queue, folders,
+// compression and trash, and "Save crash report" (diagnostics.cpp) in place of Send logs. Left out: Build (no ISO verification or
+// shader build on the console), Multiplayer Lobby and everything of YouGame, Choose version. The scale follows the screen: 1.5 at 720p handheld, 2.25 at 1080p
 // docked, with the rail and the gradient running to the screen's edges.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
