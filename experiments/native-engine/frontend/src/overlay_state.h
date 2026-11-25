@@ -29,7 +29,7 @@ struct Config {
   float brightness = 1.0f, contrast = 1.0f, vibrance = 1.0f, sharpness = 0.0f;
   int crt = 0;                                  // crt_filter: 0 off, 1 studio monitor, 2 home television
   float crt_curve = 1.0f;                       // crt_curve 0..3
-  std::string border;                           // borderart: empty none, "grid", or a .bmp file in <folder>/Borders
+  std::string border;                           // borderart: empty none, "grid", or a picture (.bmp, .png, .jpg, .webp) or video (.mp4) in <folder>/Borders
   int border_edge = 1;                          // borderedge: 1 the picture casts a soft shadow on the art
   int scale = 0;                                // scale: internal resolution, 0 Auto (the display), 1..4 times 640x480
   int ssaa = 1;                                 // ssaa (upstream's key): 1 off, 2..4 = 4x, 9x, 16x supersampling of that resolution

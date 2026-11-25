@@ -16,6 +16,7 @@
 #   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
 #   video     menu video backgrounds: made-up clips as css.mp4 and sss.mp4 (needs build.sh ffmpeg)
 #   border-png   border art from a PNG (Borders/sunset.png, made here) beside the 4:3 picture
+#   border-video  border art from a looping MP4 (Borders/loop.mp4, made here; needs build.sh ffmpeg): the bars change between shots
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
@@ -155,6 +156,29 @@ for f in range(90):
     printf '%s\n' "borderart sunset.png" "borderedge 1" "aspect 2" > "$dir/settings.ini"
     run "$dir" 1100 ""
     echo "== border-png"; grep -hE "border art" "$dir/console.log" | head -3
+    ;;
+  border-video)
+    # Border art as a looping video (upstream's Border: an .mp4 in Borders plays in the bars): a made-up clip of moving colour bands.
+    fresh "$dir"; mkdir -p "$dir/Borders"
+    timeout 600 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-loop-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      python3 -I -c "
+w, h = 320, 180
+out = open(\"/tmp/loop.rgb\", \"wb\")
+for f in range(120):
+    row = bytearray()
+    for y in range(h):
+        for x in range(w):
+            band = ((x + f * 4) // 20) % 3
+            row += bytes((255, 60, 30) if band == 0 else (30, 200, 80) if band == 1 else (40, 90, 255))
+    out.write(bytes(row))
+" && /f/bin/ffmpeg -loglevel error -f rawvideo -pix_fmt rgb24 -s 320x180 -r 30 -i /tmp/loop.rgb -c:v mpeg4 -q:v 3 -pix_fmt yuv420p /out/Borders/loop.mp4; ls -la /out/Borders'
+    printf '%s\n' "borderart loop.mp4" "aspect 2" > "$dir/settings.ini"
+    run "$dir" 900 ""
+    echo "== border-video"; grep -hE "border art" "$dir/console.log" | head -4
+    # The left bar in two shots a few seconds apart: a playing video makes them differ.
+    timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-cmp-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      a=$(ls /out/shots | sed -n 4p); b=$(ls /out/shots | sed -n 6p)
+      echo "left bar, $a vs $b: $(compare -metric AE -crop 140x700+5+10 /out/shots/$a /out/shots/$b null: 2>&1) pixels differ"' || true
     ;;
   fingerprint)
     # A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp): the Akaneia disc of MU_MODS_DIR must be

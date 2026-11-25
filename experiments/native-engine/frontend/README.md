@@ -294,7 +294,7 @@ on). Play mode and the app; settings.ini keys (upstream's names), also on the me
 | `ssaa 1..4` | supersampling: that resolution rendered N times per axis and scaled down (off, 4x, 9x, 16x); live |
 | `brightness`, `contrast` 0.5..1.5, `vibrance` 0..2, `sharpness` 0..1 | Aurora's present pass (patches/0109); live |
 | `crt_filter 0/1/2`, `crt_curve 0..3` | off, studio monitor, home television (curved); live |
-| `borderart grid` or `FILE.bmp`, `borderedge 0/1` | art in the side bars (`<folder>/Borders`, the app's folder in the app), soft shadow at the picture's edge |
+| `borderart grid` or a picture (`.bmp`, `.png`, `.jpg`, `.webp`) or looping video (`.mp4`), `borderedge 0/1` | art in the side bars (`<folder>/Borders`, the app's folder in the app), soft shadow at the picture's edge |
 
 The Picture page's **Quality preset** row sets internal resolution, sharpening and launcher.ini `msaa`/`anisotropy` (those
 two at the next start): Low, Medium, High (the default), Ultra, or shows Custom.
@@ -797,6 +797,7 @@ shared state `src/gfx_live.h`.
 | `patches/0129-gx-lab-view-skips-the-scene.patch` | the bridge skips the world's draws under a covering Lab view |
 | `patches/0130-gx-video-backgrounds.patch` | gx_aurora.cpp: the scene for `src/video_bg.cpp`, the stage select's learned background texture shown as the video |
 | `patches/0131-gx-css-video-layer.patch` | gx_aurora.cpp and the bridge: the character select's video drawn through the GX library before the first textured draw after the backdrop; the bridge's before-draw hook, after which the next draw is emitted with its whole state |
+| `patches/0133-aurora-imgui-texture-update.patch` | `aurora_imgui_update_texture`: new pixels for an ImGui texture at the same size (the border art's video) |
 | `patches/0132-aurora-gx-shadow-register-ids.patch` | Aurora's GX library: its shadow registers get their BP register numbers at start-up (GXInit, which set them, is never called here; without them GXSetTevOrder and the like wrote register 0x00) |
 | `src/lab.cpp`, `src/lab_shim/` | melee-unlocked's lab_view.cpp compiled from the fetched tree over small stand-ins; the game image's look snapshot; the silhouette packs' download (services program, SHA-256 checked) |
 | `src/video_bg.cpp`, `src/video_bg.h` | the menu video backgrounds over melee-unlocked's learning rules and its linux_media.cpp (FFmpeg) |
@@ -809,7 +810,7 @@ by `../fetch.sh` from FFmpeg's own repository, LGPL-2.1-or-later as configured t
 videos.
 
 ```sh
-./test-gfx-linux.sh DISC textures textures-same ssao capture flicker lab-stick lab-capsules lab-minimal lab-blobs video
+./test-gfx-linux.sh DISC textures textures-same ssao capture flicker lab-stick lab-capsules lab-minimal lab-blobs video border-png border-video
 MU_LAB_ZIP=/path/to/MeleeUnlocked-Lab.zip ./test-gfx-linux.sh DISC lab lab-download   # melee-unlocked's content release zip
 MU_MODS_DIR=/path/to/mods ./test-gfx-linux.sh DISC fingerprint                          # the Akaneia disc: "recognized as Akaneia 1.0.1"
 ./test-app-linux.sh DISC rvz                                                             # the RVZ conversion's progress screen
@@ -817,7 +818,7 @@ MU_MODS_DIR=/path/to/mods ./test-gfx-linux.sh DISC fingerprint                  
 
 On the console: put a pack folder in `sdmc:/switch/melee-nx-netplay/TexturePacks/`, switch VIDEO > Texture packs > Custom
 textures on and check a match; turn VIDEO > Lab view on in a match (the first time it downloads the silhouettes, about 85 MB, in the
-app); put an MP4 (at most 1280x720) as `VideoBackgrounds/sss.mp4` and another as `css.mp4`, switch Menu video backgrounds on, and visit the
+app); put an MP4 in `Borders/` and choose it on Picture > Border art (4:3 shape, the bars play it); put an MP4 (at most 1280x720) as `VideoBackgrounds/sss.mp4` and another as `css.mp4`, switch Menu video backgrounds on, and visit the
 character select and the stage select for a few seconds; VIDEO > Advanced > Capture frames, close the menu, and look in `capture/`. Frame times with each on are what to note:
 none of these has been measured on the console's GPU.
 

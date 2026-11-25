@@ -284,12 +284,47 @@ class Manager {
   std::mutex mutex_;
   int active_ = -1;
 };
+// Border art as a looping video (upstream's Border class: an .mp4 in the Borders folder plays in the bars beside the picture).
+// Decoded with the menu videos' decoder, no matte; it runs only while the bars are drawn (overlay_draw.cpp asks for a frame every
+// frame they show) and pauses a second after they stop asking.
+class Border {
+ public:
+  ~Border() { decoder_.reset(); }
+  std::shared_ptr<const Frame> frame(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (path != path_ || !decoder_) {
+      decoder_.reset();   // stops the old one's thread
+      path_ = path;
+      decoder_ = std::make_unique<Decoder>();
+      decoder_->start(path, false);
+      say("border art: playing %s", path.c_str());
+    }
+    asked_ = Clock::now();
+    decoder_->set_active(true);
+    return decoder_->frame();
+  }
+  std::string error() { std::lock_guard<std::mutex> lock(mutex_); return decoder_ ? decoder_->error() : std::string(); }
+  void tick() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (decoder_ && Clock::now() - asked_ > std::chrono::seconds(1)) decoder_->set_active(false);
+  }
+  void stop() { std::lock_guard<std::mutex> lock(mutex_); decoder_.reset(); path_.clear(); }
+ private:
+  std::mutex mutex_;
+  std::string path_;
+  std::unique_ptr<Decoder> decoder_;
+  Clock::time_point asked_{};
+};
+Border* g_border = nullptr;
+std::once_flag g_border_once;
+Border& border() { std::call_once(g_border_once, [] { g_border = new Border(); }); return *g_border; }
 Manager* g_manager = nullptr;
 std::once_flag g_once;
 Manager& manager() { std::call_once(g_once, [] { g_manager = new Manager(); }); return *g_manager; }
 }  // namespace
 
 void begin_frame(uint8_t major, uint8_t minor) {
+  if (g_border) g_border->tick();   // a border video nobody draws pauses
   if (!g_manager && !fe::gfx::live().video_backgrounds.load(std::memory_order_relaxed)) return;   // never on: nothing is made
   manager().begin(major, minor);
 }
@@ -301,7 +336,9 @@ bool fullscreen_layer_before(unsigned leading_untextured, bool next_textured) {
 }
 std::string status(int slot) { return g_manager ? manager().status(slot) : std::string(fe::gfx::live().video_backgrounds.load() ? "Starts with the game" : "Off"); }
 void relearn(int slot) { manager().relearn(slot); }
-void shutdown() { if (g_manager) g_manager->stop(); }
+void shutdown() { if (g_manager) g_manager->stop(); if (g_border) g_border->stop(); }
+std::shared_ptr<const Frame> border_frame(const std::string& path) { return border().frame(path); }
+std::string border_error() { return g_border ? g_border->error() : std::string(); }
 bool load_picture(const std::string& path, uint32_t max_w, uint32_t max_h, uint32_t* width, uint32_t* height, std::vector<uint8_t>& rgba) {
   std::vector<uint8_t> bgra;
   if (!linux_media::load_picture(path, max_w, max_h, width, height, bgra) || bgra.size() < size_t(*width) * *height * 4) return false;
