@@ -11,6 +11,7 @@
 #   latency   --auto-vs, latencytest 1: X + D-pad Down twice (black, then white), X + D-pad Up (the picture again)
 #   te        the 20XX TE save's profile (MU_MODS_DIR) with its input display bit set (te_options2 2000 in settings.ini.state):
 #             the input display in a VS match without inputoverlay
+#   lagtest-match  the lag test into its Dream Land match (Fox picked, random stage), then X held (white) and A held (black)
 #   adapter   adapterrate 1 with a scripted adapter (MELEE_TEST_ADAPTER_SCRIPT): the measured report rate on the overlay
 #   lagtest   lagtestnext 1: the Lossless adapter lag test start (boot to the character select with the test's rules, a
 #             10-second rumble on every port when it loads), the switch cleared for the next start
@@ -126,6 +127,16 @@ PY
     printf '%s\n' "lagtestnext 1" > "$dir/settings.ini"
     run "$dir" 900 2 ""
     echo "settings.ini after the start: $(grep lagtestnext "$dir/settings.ini")"
+    ;;
+  lagtest-match)
+    # The lag test end to end, with this script playing the adapter's part: on the character select (P1's hand put on Fox by the
+    # game's test aid MELEE_TEST_CSS_CHAR) A and Start, the stage select's random pick (Dream Land, the only stage on random),
+    # then in the match X held (the background white) and A held (black), as the adapter does while its light sensor times it.
+    fresh "$dir"
+    printf '%s\n' "lagtestnext 1" > "$dir/settings.ini"
+    printf '%s\n' "@scene 02 00" "90 A" "96" "120 sy=127" "144 sx=127" "149" "180 A" "186" "200 sx=127 sy=-127" "208 sy=-127" "210" "230 A" "236" "300 START" "306" "@scene 02 01" "60 START" "66" "120 A" "126" \
+      "@scene 02 02" "240 X" "420" "480 A" "660" > "$dir/script.txt"
+    MU_RUN_ENV="-e MELEE_TEST_CSS_CHAR=2" run "$dir" 1500 1 ""
     ;;
   te-flash)
     fresh "$dir"; match_script "$dir/script.txt"
