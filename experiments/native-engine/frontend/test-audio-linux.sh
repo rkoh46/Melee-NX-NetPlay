@@ -123,4 +123,5 @@ PY
   [ -f "$dir/settings.ini.state" ] && grep -h "te_menu_music" "$dir/settings.ini.state"
   [ -f "$dir/audio-auto.txt" ] && { echo "audio-auto.txt:"; cat "$dir/audio-auto.txt"; }
   [ -f "$dir/MusicPacks/Tracks.txt" ] && echo "MusicPacks/Tracks.txt: $(wc -l < "$dir/MusicPacks/Tracks.txt") lines"
+  true
 done
