@@ -127,7 +127,7 @@ PY
     # added; (2) that replay played with UCF 0.8 (MU_TEST_REPLAY_UCF=8) while the playback's own events are written as a new file
     # (MU_TEST_RERECORD) whose code list carries Slippi's UCF 0.8 codes instead of 0.84's (scripts/ucf08_codes.txt); (3) the new
     # file played back untouched: the playback must say it was recorded with UCF 0.8 and the fidelity check 0 differ; (4) the same
-    # file played with UCF 0.84 instead, which must differ (runs held just off the horizontal: 0.84's 1.0 cardinals, which 0.8 has not).
+    # file played with UCF 0.84 instead, which must differ (runs held within 6 of the horizontal: 0.84's 1.0 cardinals, which 0.8 has not).
     base="$dir/record"; fresh "$base"
     python3 -I - "$base/script.txt" <<'PY'
 import sys
@@ -141,7 +141,7 @@ for i in range(24):                                         # dash, then back th
     t += 30
 for i in range(12):                                         # runs held just off the horizontal (0.84's 1.0 cardinals, not in 0.8)
     side = 1 if i % 2 == 0 else -1
-    lines += [f"{t} sx={127 * side} sy={(12, -9, 15)[i % 3]}", f"{t+40}"]
+    lines += [f"{t} sx={127 * side} sy={(4, -5, 3)[i % 3]}", f"{t+40}"]   # within 6 of the axis: 0.84 snaps it to 1.0
     t += 50
 for i in range(16):                                         # shield, then the stick down at different angles (shield drop)
     x = (0, 30, -30, 55)[i % 4]
