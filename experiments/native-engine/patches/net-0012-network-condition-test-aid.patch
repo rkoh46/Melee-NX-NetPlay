@@ -1,4 +1,4 @@
-Network condition simulator for tests (patches/net-0011), as melee-unlocked's hle/slippi_net.cpp has it: MELEE_NET_LOSS_PCT=P drops
+Network condition simulator for tests (patches/net-0012), as melee-unlocked's hle/slippi_net.cpp has it: MELEE_NET_LOSS_PCT=P drops
 P % of received datagrams before ENet reads them; MELEE_NET_LAG_MS=N and MELEE_NET_JITTER_MS=J hold each received match packet
 N + 0..J ms, in order. Unset, nothing changes. Applied by ../net_sources.sh after net-0010.
 SPDX-License-Identifier: GPL-2.0-or-later
@@ -18,7 +18,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
      host::log("slippi: incoming ENet connect from %x:%u on local port %u (%zu bytes, %d so far)", host->receivedAddress.host,
                host->receivedAddress.port, host->address.port, n, seen);
 +}
-+// patches/net-0011, tests only (melee-unlocked's network condition simulator, hle/slippi_net.cpp): MELEE_NET_LOSS_PCT=P drops P %
++// patches/net-0012, tests only (melee-unlocked's network condition simulator, hle/slippi_net.cpp): MELEE_NET_LOSS_PCT=P drops P %
 +// of the datagrams that arrive (before ENet reads them, so reliable data is sent again as on a real lossy link);
 +// MELEE_NET_LAG_MS=N and MELEE_NET_JITTER_MS=J hold every received match packet N + 0..J ms before it is handled, never
 +// overtaking the one before it. Unset, as they always are for a player, nothing changes.
@@ -39,7 +39,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
  }
  static int ENET_CALLBACK intercept_callback(ENetHost* host, ENetEvent* event) {
    if (host->receivedDataLength == 1 && host->receivedData[0] == 0) { event->type = (ENetEventType)42; return 1; }
-+  if (test_drop_datagram()) return 1;   // patches/net-0011: taken (dropped)
++  if (test_drop_datagram()) return 1;   // patches/net-0012: taken (dropped)
    note_incoming_connect(host);
    static const bool drop_connects = std::getenv("MELEE_NET_DROP_CONNECT") != nullptr;
    return drop_connects ? drop_connect_callback(host, event) : 0;
@@ -47,7 +47,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
      }
    }
  
-+  // patches/net-0011: the held packets of MELEE_NET_LAG_MS / MELEE_NET_JITTER_MS (tests only).
++  // patches/net-0012: the held packets of MELEE_NET_LAG_MS / MELEE_NET_JITTER_MS (tests only).
 +  static const uint64_t test_lag_ms = [] {
 +    const char* s = std::getenv("MELEE_NET_LAG_MS");
 +    const long v = s ? std::atol(s) : 0;
@@ -86,7 +86,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
      if (net <= 0) continue;
      switch (ev.type) {
        case ENET_EVENT_TYPE_RECEIVE: {
-+        if (test_lag_ms || test_jitter_ms) {   // patches/net-0011 (tests only)
++        if (test_lag_ms || test_jitter_ms) {   // patches/net-0012 (tests only)
 +          uint64_t extra = 0;
 +          if (test_jitter_ms) { test_jitter_state ^= test_jitter_state << 13; test_jitter_state ^= test_jitter_state >> 7; test_jitter_state ^= test_jitter_state << 17; extra = test_jitter_state % (test_jitter_ms + 1); }
 +          uint64_t due = time_ms() + test_lag_ms + extra;

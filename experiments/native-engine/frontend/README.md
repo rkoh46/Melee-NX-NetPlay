@@ -777,7 +777,7 @@ NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's n
   Search, Folder... and Open replay... (an SD card browser), Compress all (.slpz), the session trace graph. Mods: each card's skin
   count and Choose skins; the catalog refreshed from upstream's raw URL at each start (`MU_NO_CATALOG_REFRESH=1` skips it).
   Test aids: `MELEE_TRACE_SLIPPI_CMDS=1` (play mode logs each menu command), `MELEE_NET_LAG_MS`, `MELEE_NET_JITTER_MS`,
-  `MELEE_NET_LOSS_PCT` (patches/net-0011). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
+  `MELEE_NET_LOSS_PCT` (patches/net-0012). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 
