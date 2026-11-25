@@ -10,6 +10,8 @@
 #   MU_NET_INI=FILE              a settings.ini for both sides (a direct run takes the delay and the feature modules' keys)
 #   MU_NET_ARGS_A, MU_NET_ARGS_B  extra arguments for one side only (e.g. --net-clock-skew 0.4: time sync's frame-rate nudge)
 #   MU_NET_SUGGESTIONS=0|1        input suggestions off or on (default: on); MU_SUGGEST_TRACE=1 logs the first ones
+#   MU_NET_ENV_A, MU_NET_ENV_B    environment for one side only, e.g. the netplay object's network condition simulator (patches/
+#                                 net-0012): MU_NET_ENV_A="MELEE_NET_LAG_MS=40 MELEE_NET_JITTER_MS=15" MU_NET_ENV_B="MELEE_NET_LOSS_PCT=5"
 # Output: build/native-engine-gfx/run-net/{a,b}/ (console.log, digest-net-confirmed.csv) and shots/.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -30,7 +32,7 @@ for side, period, stick in (("a", 47, 80), ("b", 61, -80)):
 PY
 timeout "${MU_TEST_LIMIT:-600}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-test}-net-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$run:/out" -v "$here/../tools:/t:ro" \
   -e FRAMES="$frames" -e EXTRA="$*" -e DELAY="${MU_NET_DELAY:-0}" -e JITTER="${MU_NET_JITTER:-0}" -e SDL_AUDIODRIVER=dummy \
-  -e MU_NET_ARGS_A -e MU_NET_ARGS_B -e MU_NET_CONTROLLERS -e MU_SUGGEST_LEAD_MS -e MU_NET_SUGGESTIONS -e MU_SUGGEST_TRACE "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+  -e MU_NET_ARGS_A -e MU_NET_ARGS_B -e MU_NET_ENV_A -e MU_NET_ENV_B -e MU_NET_CONTROLLERS -e MU_SUGGEST_LEAD_MS -e MU_NET_SUGGESTIONS -e MU_SUGGEST_TRACE "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
     Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
     export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
     for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
@@ -39,8 +41,8 @@ timeout "${MU_TEST_LIMIT:-600}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-te
       python3 /t/udp_delay_relay.py 51001 52001 51002 52002 "$DELAY" "$JITTER" & relay=$!
       peer_of_a=52002; peer_of_b=52001
     else peer_of_a=51002; peer_of_b=51001; fi
-    cd /out/a && /b/mu-native-gfx-linux $common --out /out/a --play-script /out/a/pads.txt --net 0:51001:127.0.0.1:$peer_of_a ${MU_NET_ARGS_A:-} >/out/a/console.log 2>&1 & a=$!
-    cd /out/b && /b/mu-native-gfx-linux $common --out /out/b --play-script /out/b/pads.txt --net 1:51002:127.0.0.1:$peer_of_b ${MU_NET_ARGS_B:-} >/out/b/console.log 2>&1 & b=$!
+    cd /out/a && env ${MU_NET_ENV_A:-} /b/mu-native-gfx-linux $common --out /out/a --play-script /out/a/pads.txt --net 0:51001:127.0.0.1:$peer_of_a ${MU_NET_ARGS_A:-} >/out/a/console.log 2>&1 & a=$!
+    cd /out/b && env ${MU_NET_ENV_B:-} /b/mu-native-gfx-linux $common --out /out/b --play-script /out/b/pads.txt --net 1:51002:127.0.0.1:$peer_of_b ${MU_NET_ARGS_B:-} >/out/b/console.log 2>&1 & b=$!
     n=0
     while kill -0 $a 2>/dev/null || kill -0 $b 2>/dev/null; do
       sleep 5; n=$((n+1))
@@ -52,6 +54,6 @@ timeout "${MU_TEST_LIMIT:-600}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-te
 python3 -I "$here/../tools/compare_net_digests.py" "$run/a/digest-net-confirmed.csv" "$run/b/digest-net-confirmed.csv" | sed 's/^/confirmed states: /'
 for side in a b; do
   echo "== $side"
-  grep -E "^net|^play:|time sync|picture: sound:|selftest|DIVERGED|desync|Desync|rollback|input suggestions|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "^\[net\] slippi: \(netplay\|ping\)\|net: slow frame \([4-9]\|1[0-9]\)" | tail -30 | cut -c1-330
+  grep -E "^net|^play:|MELEE_NET_|time sync|picture: sound:|selftest|DIVERGED|desync|Desync|rollback|input suggestions|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "^\[net\] slippi: \(netplay\|ping\)\|net: slow frame \([4-9]\|1[0-9]\)" | tail -30 | cut -c1-330
   grep -E "picture: (simulation thread: work \(|simulation thread: then|match frames with|slow frame [1-3]:|netplay:|decoder thread: all work: [0-9]+ frames, avg)" "$run/$side/console.log" | head -9 | cut -c1-420
 done
