@@ -784,7 +784,7 @@ shared state `src/gfx_live.h`.
 | `customtextures 1`, `texpackoff NAME\|NAME`, `dumptextures 1` | Dolphin-format texture packs from `Load/Textures/GALE01` and `TexturePacks` (each folder a pack), dumps as PNG into `Dump/Textures/GALE01` (VIDEO > Texture packs) |
 | `ssao 0..1` | screen-space ambient occlusion in the present pass (VIDEO > Picture) |
 | `labview 1`, `look_lab_fighters 0..3`, `look_lab_stage 0..3`, `lab_colour_p1..p4 RRGGBB`, `labskipscene 0/1` | melee-unlocked's Lab view; `look 12`, `13`, `14` are Stick Figures, Capsules and Minimal (VIDEO > Lab view, Looks) |
-| `videobackgrounds 1` | `VideoBackgrounds/sss.mp4` in place of the stage select's background (VIDEO > Menu video backgrounds) |
+| `videobackgrounds 1` | `VideoBackgrounds/sss.mp4` in place of the stage select's background, `VideoBackgrounds/css.mp4` as a full-screen layer behind the character select's foreground (VIDEO > Menu video backgrounds) |
 | `capture_burst_frames N`, `flickerscan 1` | the capture burst's length (VIDEO > Advanced, "Capture frames": 3 s after the menu closes, into `capture/burst-N/`) and the one-frame glitch detector (`flicker/`, the log's `flicker:` lines) |
 
 | Path | What it is |
@@ -796,6 +796,8 @@ shared state `src/gfx_live.h`.
 | `patches/0128-gx-texture-pack-palettes.patch` | gx_aurora.cpp: paletted textures it decodes itself tied to their Dolphin name, and dumped under it |
 | `patches/0129-gx-lab-view-skips-the-scene.patch` | the bridge skips the world's draws under a covering Lab view |
 | `patches/0130-gx-video-backgrounds.patch` | gx_aurora.cpp: the scene for `src/video_bg.cpp`, the stage select's learned background texture shown as the video |
+| `patches/0131-gx-css-video-layer.patch` | gx_aurora.cpp and the bridge: the character select's video drawn through the GX library before the first textured draw after the backdrop; the bridge's before-draw hook, after which the next draw is emitted with its whole state |
+| `patches/0132-aurora-gx-shadow-register-ids.patch` | Aurora's GX library: its shadow registers get their BP register numbers at start-up (GXInit, which set them, is never called here; without them GXSetTevOrder and the like wrote register 0x00) |
 | `src/lab.cpp`, `src/lab_shim/` | melee-unlocked's lab_view.cpp compiled from the fetched tree over small stand-ins; the game image's look snapshot; the silhouette packs' download (services program, SHA-256 checked) |
 | `src/video_bg.cpp`, `src/video_bg.h` | the menu video backgrounds over melee-unlocked's learning rules and its linux_media.cpp (FFmpeg) |
 | `src/modlooks.cpp`, `src/looks_fetch_curl.cpp`, `test-modlooks-linux.sh` | Get mod looks (ported from the macOS build): Diet Melee and Animelee built from the player's disc as mod profiles; the Diet and Crystal presets use them (mods.cpp) |
@@ -815,8 +817,8 @@ MU_MODS_DIR=/path/to/mods ./test-gfx-linux.sh DISC fingerprint                  
 
 On the console: put a pack folder in `sdmc:/switch/melee-nx-netplay/TexturePacks/`, switch VIDEO > Texture packs > Custom
 textures on and check a match; turn VIDEO > Lab view on in a match (the first time it downloads the silhouettes, about 85 MB, in the
-app); put an MP4 (at most 1280x720) as `VideoBackgrounds/sss.mp4`, switch Menu video backgrounds on, and visit the stage select for a
-few seconds; VIDEO > Advanced > Capture frames, close the menu, and look in `capture/`. Frame times with each on are what to note:
+app); put an MP4 (at most 1280x720) as `VideoBackgrounds/sss.mp4` and another as `css.mp4`, switch Menu video backgrounds on, and visit the
+character select and the stage select for a few seconds; VIDEO > Advanced > Capture frames, close the menu, and look in `capture/`. Frame times with each on are what to note:
 none of these has been measured on the console's GPU.
 
 ## melee-unlocked's interface

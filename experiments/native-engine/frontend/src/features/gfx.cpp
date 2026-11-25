@@ -196,7 +196,7 @@ void register_gfx() {
   add_menu_entry({"Lab view", "  Fighter silhouettes",
                   [] { return &fe::gfx::lab_status ? fe::gfx::lab_status() : std::string("-"); }, nullptr,
                   [] { if (&fe::gfx::lab_download) fe::gfx::lab_download(); }, nullptr});
-  // Looping menu video backgrounds (upstream's VIDEO > Menu video backgrounds): VideoBackgrounds/sss.mp4 (css.mp4: not yet).
+  // Looping menu video backgrounds (upstream's VIDEO > Menu video backgrounds): VideoBackgrounds/css.mp4 and sss.mp4.
   add_menu_entry({"Menu videos", "Menu video backgrounds", [] { return on_off(live().video_backgrounds.load()); },
                   [](int) { live().video_backgrounds.store(!live().video_backgrounds.load()); }, nullptr,
                   [](Write w) { w("videobackgrounds", live().video_backgrounds.load() ? "1" : "0"); }});

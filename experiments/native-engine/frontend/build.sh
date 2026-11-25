@@ -163,6 +163,7 @@ sync_tree() {
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0128-gx-texture-pack-palettes.patch"   # texture packs and dumps for paletted textures (src/gfx_render.cpp)
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0129-gx-lab-view-skips-the-scene.patch"   # the 3D scene under a covering Lab view (src/lab.cpp)
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0130-gx-video-backgrounds.patch"   # looping menu video backgrounds (src/video_bg.cpp)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0131-gx-css-video-layer.patch"   # the character select's video as a full-screen layer
   for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds

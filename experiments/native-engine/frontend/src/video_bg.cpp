@@ -4,9 +4,9 @@
 // tree), its stage select matte (video_background_style.h), the learned target kept in sss.target. Decoding is upstream's Linux
 // path, linux_media.cpp's VideoReader (FFmpeg; devkitPro's FFmpeg on the console), on a thread of its own, paced to the video's
 // own timestamps and only while its screen is up. Render thread: gx_aurora.cpp (frontend/patches/0130) calls begin_frame and
-// the texture lookup. The character select's video (upstream draws css.mp4 as a full-screen layer after the 3D backdrop's
-// untextured draws) is not here: a quad drawn through Aurora's GX library between the frame's own draws rasterised but sampled
-// no texture in this renderer, so css.mp4 is left alone rather than covering the backdrop with black.
+// the texture lookup. The character select's video, css.mp4, has no texture to stand in for (upstream: its backdrop is a long run
+// of untextured draws), so it is drawn as upstream draws it, a full-screen layer before the first textured draw after them
+// (frontend/patches/0131, fullscreen_frame and fullscreen_layer_before); patches/0132 lets that layer's GX library calls through.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "video_bg.h"
 #include "gfx_live.h"
@@ -183,7 +183,7 @@ class Manager {
         s.has_video = stat(s.video_path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
         s.checked = Clock::now();
       }
-      if (!enabled || i == 0) s.has_video = false;   // the character select's layer: not in this renderer (see the top)
+      if (!enabled) s.has_video = false;
       if (s.has_video && !s.started) { s.started = true; s.decoder.start(s.video_path, i == 1); say("video backgrounds: found %s.mp4", s.stem); }
       s.decoder.set_active(s.has_video && i == active_);
     }
@@ -231,10 +231,10 @@ class Manager {
     std::lock_guard<std::mutex> lock(mutex_);
     Slot& s = slots_[i];
     if (!fe::gfx::live().video_backgrounds.load()) return "Off";
-    if (i == 0) return "Not on the Switch yet";
     if (!s.has_video) return std::string("No ") + s.stem + ".mp4";
     const std::string e = s.decoder.error();
     if (!e.empty()) return e;
+    if (i == 0) return s.decoder.frame() ? "Ready: full-screen video layer" : "Ready";
     if (!learning::uses_texture_target(i)) return "Ready";
     if (s.learning_failed) return "Could not learn the background";
     if (s.target.empty()) return active_ == i ? "Learning the background..." : "Visit the screen to learn it";
@@ -296,6 +296,9 @@ void begin_frame(uint8_t major, uint8_t minor) {
 bool wants_texture_names() { return g_manager && manager().wants_names(); }
 std::shared_ptr<const Frame> lookup(const std::string& name, uint32_t width, uint32_t height) { return g_manager ? manager().lookup(name, width, height) : nullptr; }
 std::shared_ptr<const Frame> fullscreen_frame() { return g_manager ? manager().fullscreen() : nullptr; }
+bool fullscreen_layer_before(unsigned leading_untextured, bool next_textured) {
+  return learning::should_insert_fullscreen_layer(0, leading_untextured, next_textured);
+}
 std::string status(int slot) { return g_manager ? manager().status(slot) : std::string(fe::gfx::live().video_backgrounds.load() ? "Starts with the game" : "Off"); }
 void relearn(int slot) { manager().relearn(slot); }
 void shutdown() { if (g_manager) g_manager->stop(); }

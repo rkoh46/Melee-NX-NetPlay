@@ -14,7 +14,7 @@
 #             Capsules and Minimal presets; blobs in the player's own colours on a hidden stage)
 #   lab       the Lab view's silhouettes, melee-unlocked's fighter packs in place (MU_LAB_ZIP: its content release's zip)
 #   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
-#   video     menu video backgrounds: a made-up clip as sss.mp4 (needs build.sh ffmpeg)
+#   video     menu video backgrounds: made-up clips as css.mp4 and sss.mp4 (needs build.sh ffmpeg)
 #   border-png   border art from a PNG (Borders/sunset.png, made here) beside the 4:3 picture
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
@@ -32,7 +32,7 @@ cases=("$@"); [ "${#cases[@]}" -eq 0 ] || [ "${cases[0]}" = all ] && cases=(text
 run() {
   local dir=$1 frames=$2 env=$3 extra=${4:---auto-vs}
   local mods=(); [ -n "${MODS:-}" ] && mods=(-v "$MODS:/out/mods:ro")
-  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "mnx-gfx2-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} $env \
+  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} $env ${MU_TEST_ENV:-} \
     -e FRAMES="$frames" -e EXTRA="$extra" -e BIN="${BIN:-mu-native-gfx-linux}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
@@ -61,7 +61,7 @@ for c in "${cases[@]}"; do
     echo "dumped: $n PNG files"
     # A pack made from the dumps: every texture with its colours inverted (alpha kept), under the dump's own names.
     mkdir -p "$dir/TexturePacks/inverted"
-    timeout 600 docker run --rm --name "mnx-gfx2-pack-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    timeout 600 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-pack-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       cd /out/dump/Dump/Textures/GALE01 && ls | head -4000 | while read f; do convert "$f" -channel RGB -negate +channel "/out/TexturePacks/inverted/$f"; done'
     echo "pack: $(ls "$dir/TexturePacks/inverted" | wc -l | tr -d ' ') files"
     printf '%s\n' "customtextures 1" > "$dir/settings.ini"
@@ -125,9 +125,9 @@ for c in "${cases[@]}"; do
   video)
     # Looping menu video backgrounds: two made-up clips (a moving colour pattern, MPEG-4 in MP4, made by build.sh ffmpeg's ffmpeg
     # from frames this script writes) as VideoBackgrounds/css.mp4 and sss.mp4; --auto-vs passes the stage select (its background
-    # learned, then the clip in its place). css.mp4 is left alone (the character select's layer is not in this renderer).
+    # learned, then the clip in its place); css.mp4 is drawn as a full-screen layer behind the character select's foreground.
     fresh "$dir"; mkdir -p "$dir/VideoBackgrounds"; printf '%s\n' "videobackgrounds 1" > "$dir/settings.ini"
-    timeout 600 docker run --rm --name "mnx-gfx2-clips-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    timeout 600 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-clips-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       for clip in css:0 sss:1; do name=${clip%%:*}; tint=${clip##*:}
         python3 -I -c "
 import sys
@@ -150,7 +150,7 @@ for f in range(90):
     # Border art in PNG (upstream's picture formats through FFmpeg's decoder; .bmp was the only one before): a made-up picture
     # in Borders/, the 4:3 picture's side bars show it.
     fresh "$dir"; mkdir -p "$dir/Borders"
-    timeout 300 docker run --rm --name "mnx-gfx2-png-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
+    timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-png-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
       convert -size 640x360 gradient:orange-purple -fill white -draw "circle 80,180 80,120" -draw "circle 560,180 560,120" /out/Borders/sunset.png
     printf '%s\n' "borderart sunset.png" "borderedge 1" "aspect 2" > "$dir/settings.ini"
     run "$dir" 1100 ""

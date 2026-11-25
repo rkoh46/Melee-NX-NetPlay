@@ -1,0 +1,70 @@
+The GX library's shadow registers carry their BP register numbers without GXInit (Melee-NX-NetPlay 0.4.9): this program feeds Aurora's FIFO itself and never calls GXInit, so GXSetTevOrder, GXSetTevColorIn and the other shadowed setters wrote BP register 0x00 and a draw made through the GX library (the character select's video layer, patches/0131) kept the previous draw's TEV stages and sampled no texture.
+--- a/lib/dolphin/gx/GXManage.cpp
++++ b/lib/dolphin/gx/GXManage.cpp
+@@ -12,27 +12,13 @@
+ static GXFifoObj sFifoObj;
+ constexpr u32 kDrawDoneCommand = static_cast<u32>(GX_BP_REG_DRAWDONE) << 24 | 2;
+ 
+-extern "C" {
+-GXFifoObj* GXInit(void* base, u32 size) {
+-  GXRenderModeObj* rmode;
+-  f32 identity_mtx[3][4];
+-  GXColor clear = {64, 64, 64, 255};
+-  GXColor black = {0, 0, 0, 0};
+-  GXColor white = {255, 255, 255, 255};
++// Melee-NX-NetPlay frontend/patches/0132: the register numbers in the SDK's shadow registers. GXInit writes them, but a program
++// that feeds Aurora's FIFO itself never calls GXInit (it would reset the FIFO and emit state), and the shadows stayed zero: every
++// GXSetTevOrder, GXSetTevColorIn, GXSetTevAlphaIn, GXSetZMode, GXSetBlendMode... then wrote BP register 0x00 (the gen mode)
++// instead of its own, so a draw made through the GX library kept the previous draw's TEV stages and sampled no texture. Set here
++// once at start-up, without touching the FIFO; GXInit still sets them the same way.
++static void init_shadow_register_ids() {
+   u32 i;
+-
+-  std::memset(&sGXData, 0, sizeof(sGXData));
+-  __gx = &sGXData;
+-  __gx->inDispList = 0;
+-  __gx->dlSaveContext = 1;
+-  __gx->tcsManEnab = 0;
+-  __gx->vNum = 0;
+-
+-  // Initialize FIFO subsystem
+-  GXInitFifoBase(&sFifoObj, base, size);
+-  GXSetCPUFifo(&sFifoObj);
+-  GXSetGPFifo(&sFifoObj);
+-
+   // Initialize shadow registers: genMode, bpMask, lpSize
+   __gx->genMode = 0;
+   SET_REG_FIELD(0, __gx->genMode, 8, 24, 0x00);
+@@ -73,7 +59,32 @@
+   SET_REG_FIELD(0, __gx->cpTex, 2, 7, 0);
+   SET_REG_FIELD(0, __gx->IndTexScale0, 8, 24, 0x25);
+   SET_REG_FIELD(0, __gx->IndTexScale1, 8, 24, 0x26);
++}
++static const bool sShadowRegisterIds = (init_shadow_register_ids(), true);
+ 
++extern "C" {
++GXFifoObj* GXInit(void* base, u32 size) {
++  GXRenderModeObj* rmode;
++  f32 identity_mtx[3][4];
++  GXColor clear = {64, 64, 64, 255};
++  GXColor black = {0, 0, 0, 0};
++  GXColor white = {255, 255, 255, 255};
++  u32 i;
++
++  std::memset(&sGXData, 0, sizeof(sGXData));
++  __gx = &sGXData;
++  __gx->inDispList = 0;
++  __gx->dlSaveContext = 1;
++  __gx->tcsManEnab = 0;
++  __gx->vNum = 0;
++
++  // Initialize FIFO subsystem
++  GXInitFifoBase(&sFifoObj, base, size);
++  GXSetCPUFifo(&sFifoObj);
++  GXSetGPFifo(&sFifoObj);
++
++  init_shadow_register_ids();
++
+   __gx->dirtyState = 0;
+   __gx->dirtyVAT = 0;
+ 
