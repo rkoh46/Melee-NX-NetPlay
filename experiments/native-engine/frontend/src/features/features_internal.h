@@ -21,7 +21,8 @@ void register_replay_library();      // replay_library.cpp, from register_replay
 void register_search();
 void register_proai();               // proai.cpp: Fight a pro (command 0xEA) and the Practice menu's simulation-thread half
 void register_cosmetics();            // cosmetics.cpp: skins (commands 0xF9, 0xFB-0xFD), the online costume rule
-void register_looks();               // looks.cpp: look presets, Lightweight, Visual effects (the renderer: patches/0115)
+void register_looks();
+void register_egg();                 // egg_command.cpp: the character select frame command (0xDA) for the easter egg               // looks.cpp: look presets, Lightweight, Visual effects (the renderer: patches/0115)
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -83,6 +84,16 @@ void spectator_end_game(bool dolphin_closed);
 
 // netoverlay.cpp: the replay writer wrote a match (its thread): that match's session trace goes beside it
 void net_trace_replay_saved(const std::string& slp_path);
+// netoverlay.cpp: a session trace record of a replay shown "as it was played" (replay_library.cpp) into the overlay's ring; the
+// panel then shows it during the replay.
+void net_trace_show_replay_record(const void* record);   // a net_trace::Record
+// replay_library.cpp: the watch queue's next replay ("" when it is over), "as it was played" for a frame of a replay that plays
+// (the simulation thread, replays.cpp's viewer, before the frame runs: it holds the picture as the session did), and the
+// compression of earlier sessions' replays at the start (compressreplays 1).
+std::string library_queue_next();
+void library_replay_opened(const std::string& path);
+void library_replay_frame(int32_t frame, bool paced);
+bool replays_compress_on();
 
 // mods.cpp (play mode's mod layer; the modules may ask it)
 }  // namespace fe::features

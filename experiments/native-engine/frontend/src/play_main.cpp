@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <dirent.h>
@@ -63,7 +64,9 @@ bool word_read[kWords] = {};
 template <int N> uint32_t word_reader() { const uint32_t v = word_original[N] ? word_original[N]() : 0; word_seen[N] = v; word_read[N] = true; return v; }
 
 // Once per retrace after the frame, on the simulation thread.
+uint32_t trace_retrace = 0;   // the command trace's retrace column
 void observer(const MuStatePod& state, const linux_host::Counters& counters, void*) {
+  trace_retrace = counters.retraces;
   const auto now = Clock::now();
   const bool fighting = state.match_frame && state.match_frame != last_match_frame;
   last_match_frame = state.match_frame;
@@ -135,7 +138,7 @@ void observer(const MuStatePod& state, const linux_host::Counters& counters, voi
 int32_t (*net_command)(uint8_t, const uint8_t*, uint32_t, uint8_t*, uint32_t, uint32_t*) = nullptr;
 void (*resim_original)(int32_t) = nullptr;
 extern "C" __attribute__((weak)) int32_t mu_frontend_command(uint8_t, const uint8_t*, uint32_t, uint8_t*, uint32_t, uint32_t*);
-int32_t command(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {
+int32_t command_inner(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {
   if (response_size) *response_size = 0;
   if (mu_frontend_command) { const int32_t mine = mu_frontend_command(c, payload, size, response, capacity, response_size); if (mine != INT32_MIN) return mine; }
   if (!net_command) return -1;
@@ -162,6 +165,38 @@ int32_t command(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* respo
   features::call_exchange(c, payload, size, response, response_size ? *response_size : 0, result, in_resim);   // read only (session trace)
   const uint64_t t2 = now_ns();
   if (store) { sim_cost[1] += t1 - t0; sim_cost[0] += t2 - t1; } else sim_cost[2] += t2 - t0;
+  return result;
+}
+// MELEE_TRACE_SLIPPI_CMDS=1 (a test aid, upstream hle/slippi_online.cpp's command trace): one line per menu or online command
+// with its payload and reply (FNV-1a of the reply), runs of identical lines collapsed into one with a count; the per-frame
+// streams (0xB0-0xB2) and the pick previews are left out. Read only: nothing the game gets changes.
+bool trace_cmds() { static const bool on = [] { const char* v = std::getenv("MELEE_TRACE_SLIPPI_CMDS"); return v && v[0] == '1'; }(); return on; }
+struct CmdTrace { std::string key; uint32_t count = 0, first_retrace = 0; uint64_t seq = 0; } cmd_trace;
+uint64_t cmd_seq = 0;
+void flush_cmd_trace() {
+  if (cmd_trace.count > 1) say("slippi-cmd: seq %llu retrace %u %s (x%u)", (unsigned long long)cmd_trace.seq, cmd_trace.first_retrace, cmd_trace.key.c_str(), cmd_trace.count);
+}
+int32_t command(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t* response, uint32_t capacity, uint32_t* response_size) {
+  const int32_t result = command_inner(c, payload, size, response, capacity, response_size);
+  if (!trace_cmds() || c == 0xB0 || c == 0xB1 || c == 0xB2 || c == 0xED) return result;
+  char buf[16];
+  std::string key;
+  std::snprintf(buf, sizeof buf, "cmd %02X len %u", c, size); key += buf;
+  key += " payload ";
+  const uint32_t shown = payload ? std::min<uint32_t>(size, 64) : 0;
+  for (uint32_t i = 0; i < shown; ++i) { std::snprintf(buf, sizeof buf, "%02X", payload[i]); key += buf; }
+  if (shown < size) key += "..";
+  const uint32_t got = result == 0 && response && response_size ? *response_size : 0;
+  uint32_t h = 2166136261u;
+  for (uint32_t i = 0; i < got; ++i) { h ^= response[i]; h *= 16777619u; }
+  char tail[64];
+  std::snprintf(tail, sizeof tail, " reply %u fnv %08X%s", got, result == 0 ? h : 0u, result == 0 ? "" : " unhandled");
+  key += tail;
+  ++cmd_seq;
+  if (cmd_trace.count && key == cmd_trace.key) { ++cmd_trace.count; return result; }
+  flush_cmd_trace();
+  cmd_trace = {key, 1, trace_retrace, cmd_seq};
+  say("slippi-cmd: seq %llu retrace %u %s", (unsigned long long)cmd_seq, cmd_trace.first_retrace, key.c_str());
   return result;
 }
 void resim_phase(int32_t entering) {

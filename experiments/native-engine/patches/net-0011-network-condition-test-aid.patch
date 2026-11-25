@@ -1,0 +1,100 @@
+Network condition simulator for tests (patches/net-0011), as melee-unlocked's hle/slippi_net.cpp has it: MELEE_NET_LOSS_PCT=P drops
+P % of received datagrams before ENet reads them; MELEE_NET_LAG_MS=N and MELEE_NET_JITTER_MS=J hold each received match packet
+N + 0..J ms, in order. Unset, nothing changes. Applied by ../net_sources.sh after net-0010.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -26,6 +26,7 @@
+ #include <nlohmann/json.hpp>
+ #include "json_safe.h"
+ #include <algorithm>
++#include <deque>
+ #include <chrono>
+ #include <climits>
+ #include <cstdio>
+@@ -94,9 +95,29 @@
+   if (++seen <= 20)
+     host::log("slippi: incoming ENet connect from %x:%u on local port %u (%zu bytes, %d so far)", host->receivedAddress.host,
+               host->receivedAddress.port, host->address.port, n, seen);
++}
++// patches/net-0011, tests only (melee-unlocked's network condition simulator, hle/slippi_net.cpp): MELEE_NET_LOSS_PCT=P drops P %
++// of the datagrams that arrive (before ENet reads them, so reliable data is sent again as on a real lossy link);
++// MELEE_NET_LAG_MS=N and MELEE_NET_JITTER_MS=J hold every received match packet N + 0..J ms before it is handled, never
++// overtaking the one before it. Unset, as they always are for a player, nothing changes.
++static uint32_t test_loss_pct() {
++  static const uint32_t pct = [] {
++    const char* s = std::getenv("MELEE_NET_LOSS_PCT");
++    const long v = s ? std::atol(s) : 0;
++    if (v > 0 && v < 100) host::log("slippi: MELEE_NET_LOSS_PCT: dropping %ld%% of received datagrams (testing)", v);
++    return v > 0 && v < 100 ? (uint32_t)v : 0u;
++  }();
++  return pct;
++}
++static bool test_drop_datagram() {
++  if (!test_loss_pct()) return false;
++  static thread_local uint64_t state = 0x2545F4914F6CDD1Dull ^ (uint64_t)time_us();
++  state ^= state << 13; state ^= state >> 7; state ^= state << 17;
++  return (state % 100) < test_loss_pct();
+ }
+ static int ENET_CALLBACK intercept_callback(ENetHost* host, ENetEvent* event) {
+   if (host->receivedDataLength == 1 && host->receivedData[0] == 0) { event->type = (ENetEventType)42; return 1; }
++  if (test_drop_datagram()) return 1;   // patches/net-0011: taken (dropped)
+   note_incoming_connect(host);
+   static const bool drop_connects = std::getenv("MELEE_NET_DROP_CONNECT") != nullptr;
+   return drop_connects ? drop_connect_callback(host, event) : 0;
+@@ -806,8 +827,29 @@
+     }
+   }
+ 
++  // patches/net-0011: the held packets of MELEE_NET_LAG_MS / MELEE_NET_JITTER_MS (tests only).
++  static const uint64_t test_lag_ms = [] {
++    const char* s = std::getenv("MELEE_NET_LAG_MS");
++    const long v = s ? std::atol(s) : 0;
++    if (v > 0) host::log("slippi: MELEE_NET_LAG_MS: holding received packets %ld ms (testing)", v);
++    return v > 0 ? (uint64_t)v : 0;
++  }();
++  static const uint64_t test_jitter_ms = [] {
++    const char* s = std::getenv("MELEE_NET_JITTER_MS");
++    const long v = s ? std::atol(s) : 0;
++    if (v > 0) host::log("slippi: MELEE_NET_JITTER_MS: up to %ld ms more per packet (testing)", v);
++    return v > 0 ? (uint64_t)v : 0;
++  }();
++  uint64_t test_jitter_state = 0x9E3779B97F4A7C15ull ^ (uint64_t)time_ms();
++  struct TestHeld { uint64_t due; std::vector<uint8_t> data; ENetPeer* peer; };
++  std::deque<TestHeld> test_held;
+   while (do_loop_.load()) {
+     if (status_.load(std::memory_order_acquire) == ConnectStatus::DISCONNECTED) break;
++    while (!test_held.empty() && test_held.front().due <= time_ms()) {
++      Packet rpac(test_held.front().data.data(), test_held.front().data.size());
++      OnData(rpac, test_held.front().peer);
++      test_held.pop_front();
++    }
+     const bool waiting_on_player_drop = ProcessPlayerDrops();
+     for (auto& conn : active_connections_) {
+       for (auto& peer : conn.second) {
+@@ -819,7 +861,7 @@
+     ENetEvent ev;
+     const uint64_t service_t0 = time_us();
+     // Every player can be halted waiting on a dropped player, in which case no packet arrives to wake this thread.
+-    int net = enet_host_service(client_, &ev, waiting_on_player_drop ? 10 : 250);
++    int net = enet_host_service(client_, &ev, !test_held.empty() ? 1 : waiting_on_player_drop ? 10 : 250);
+     net_diag::on_service(time_us() - service_t0);
+     UpdateConnectRoundTrip();
+     for (;;) {
+@@ -849,6 +891,15 @@
+     if (net <= 0) continue;
+     switch (ev.type) {
+       case ENET_EVENT_TYPE_RECEIVE: {
++        if (test_lag_ms || test_jitter_ms) {   // patches/net-0011 (tests only)
++          uint64_t extra = 0;
++          if (test_jitter_ms) { test_jitter_state ^= test_jitter_state << 13; test_jitter_state ^= test_jitter_state >> 7; test_jitter_state ^= test_jitter_state << 17; extra = test_jitter_state % (test_jitter_ms + 1); }
++          uint64_t due = time_ms() + test_lag_ms + extra;
++          if (!test_held.empty() && due < test_held.back().due) due = test_held.back().due;
++          test_held.push_back({due, std::vector<uint8_t>(ev.packet->data, ev.packet->data + ev.packet->dataLength), ev.peer});
++          enet_packet_destroy(ev.packet);
++          break;
++        }
+         Packet rpac(ev.packet->data, ev.packet->dataLength);
+         OnData(rpac, ev.peer);
+         enet_packet_destroy(ev.packet);
