@@ -1,0 +1,567 @@
+diff -ru a/port/runtime/gx/gx_aurora.cpp b/port/runtime/gx/gx_aurora.cpp
+--- a/port/runtime/gx/gx_aurora.cpp	2026-11-24 15:27:45
++++ b/port/runtime/gx/gx_aurora.cpp	2026-11-24 15:33:20
+@@ -26,9 +26,11 @@
+ #include <thread>
+ #include <tuple>
+ #include <vector>
++#include "looks_live.h"   // frontend/src: the looks (patches/0116)
+ 
+ namespace gx {
+ namespace aurora_bridge { void set_matrix_overrides(const DrawMatrices* overrides); }   // patches/0106
++namespace aurora_bridge { uint8_t look_mark(size_t draw); }   // patches/0116: the draw's look surface for its textures
+ namespace {
+ namespace fifo = aurora::gx::fifo;
+ using aurora_bridge::CoverageError;
+@@ -173,16 +175,17 @@
+     aurora::gfx::synchronize();
+     textures.clear(); copy_tokens.clear(); copy_history.clear();
+   }
+-  TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source) {
++  TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source, uint8_t mark = 0) {
+     const bool checker_mode = copy_source && (g_debug & kDebugCopyChecker) && t.width == 256 && t.height == 256;
+     const void* source = checker_mode ? checker_image() : copy_source ? copy_source : t.data->image.data();
+     const uint32_t format = (checker_mode || (copy_source && copies_as_rgba8())) ? 6u : t.format;   // 6 = GX_TF_RGBA8
++    if (copy_source || checker_mode) mark = 0;   // looks treat uploaded textures, not EFB copies
+     // Paletted textures (CI4/CI8/CI14) are decoded here with Aurora's own converter and handed over as RGBA8:
+     // given the indices and a TLUT, Aurora's draw-time palette path on the console drew nothing for CI8
+     // (every character-select icon and portrait, the stage tiles), while the same converter run on the
+     // same bytes decodes them correctly. Debug bit 1024 restores the native path for comparison.
+     const bool decode_palette = (format == 8 || format == 9 || format == 10) && !(g_debug & kDebugPaletteNative);
+-    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format | (decode_palette ? 0x100u : 0u), t.mode0, t.mode1,
++    const TextureKey key{reinterpret_cast<uintptr_t>(source), t.width, t.height, format | (decode_palette ? 0x100u : 0u) | (uint32_t(mark) << 12), t.mode0, t.mode1,
+                          t.tlut_format, t.mip_levels, unit};
+     auto [it, inserted] = textures.try_emplace(key);
+     auto& obj = it->second;
+@@ -192,6 +195,30 @@
+     const auto wrap_s = static_cast<GXTexWrapMode>(bits(t.mode0, 0, 2));
+     const auto wrap_t = static_cast<GXTexWrapMode>(bits(t.mode0, 2, 2));
+     const auto mips = t.mip_levels > 1 ? GX_TRUE : GX_FALSE;
++    // Looks (patches/0116, looks_live.h): the texture's level 0 decoded, treated for the draw's surface (flat colour,
++    // white, posterize, 64 x 64) and uploaded as RGBA8 in its place, as melee-unlocked uploads a treated copy.
++    if (mark & 7) {
++      const auto surface = static_cast<fe::looks::Surface>(mark & 7);
++      const uint32_t level0 = texture_level_bytes(t.width, t.height, format);
++      aurora::gfx::ConvertedTexture decoded;
++      if (format == 8 || format == 9 || format == 10)
++        decoded = aurora::gfx::convert_texture_palette(format, t.width, t.height, 1, {t.data->image.data(), level0}, static_cast<GXTlutFmt>(t.tlut_format),
++                                                       uint16_t(format == 8 ? 16 : format == 9 ? 256 : 16384), {t.data->palette.data(), t.data->palette.size()});
++      else if (format <= 6 || format == 14)
++        decoded = aurora::gfx::convert_texture(format, t.width, t.height, 1, {t.data->image.data(), level0});
++      std::vector<uint8_t> px(decoded.data.data(), decoded.data.data() + std::min<size_t>(decoded.data.size(), size_t(t.width) * t.height * 4));
++      uint32_t w = t.width, h = t.height;
++      if (fe::looks::treat(surface, px, w, h)) {
++        obj.converted.swap(px);
++        GXInitTexObj(&obj.texture, obj.converted.data(), uint16_t(w), uint16_t(h), GX_TF_RGBA8_PC, wrap_s, wrap_t, GX_FALSE);
++        const uint64_t hsh = t.data->hash ^ (uint64_t(t.width) << 48) ^ (uint64_t(t.height) << 32) ^ (uint64_t(t.format) << 24) ^ (uint64_t(mark) * 0x9E3779B97F4A7C15ull);
++        __GXSetTexObjIdentity(&obj.texture, uint32_t(hsh) ^ uint32_t(hsh >> 32), 1);
++        const bool nearest = (mark & 8) != 0;
++        GXInitTexObjLOD(&obj.texture, nearest ? GX_NEAR : GX_LINEAR, nearest ? GX_NEAR : GX_LINEAR, 0.f, 0.f, 0.f, GX_FALSE, GX_FALSE, GX_ANISO_1);
++        fe::looks::live().treated_textures.fetch_add(1, std::memory_order_relaxed);
++        return obj;
++      }
++    }
+     obj.has_palette = format == 8 || format == 9 || format == 10;
+     if (decode_palette) {
+       const uint16_t entries = format == 8 ? 16 : format == 9 ? 256 : 16384;
+@@ -421,7 +448,7 @@
+           if (!t.used) continue;
+           const auto found = (g_debug & kDebugCopyFromRam) ? copy_tokens.end() : copy_tokens.find(t.addr);
+           if (found != copy_tokens.end()) found->second->last_used = counters.frames;
+-          auto& obj = texture(t, unit, found == copy_tokens.end() ? nullptr : found->second.get());
++          auto& obj = texture(t, unit, found == copy_tokens.end() ? nullptr : found->second.get(), aurora_bridge::look_mark(cmd.index));
+           if (obj.has_palette) GXLoadTlut(&obj.palette, unit);
+           GXLoadTexObj(&obj.texture, static_cast<GXTexMapID>(unit));
+         }
+@@ -437,7 +464,7 @@
+         const auto& c = frame.copies[cmd.index];
+         bp(BP_ZMODE, c.zmode); bp(BP_BLENDMODE, c.blendmode);
+         bp(BP_CONSTANTALPHA, c.dstalpha); bp(BP_ZCOMPARE, c.zcontrol);
+-        GXSetCopyClear(clear_color(c.clear_color), c.clear_z);
++        GXSetCopyClear(clear_color(fe::looks::clear_colour(frame_in_match(input), c.clear_color)), c.clear_z);   // the look's background (patches/0116)
+         if (!c.to_xfb && !(g_debug & kDebugSkipCopies)) {
+           auto& token = copy_tokens[c.dest_addr];
+           if (!token) token = std::make_unique<CopyToken>();
+diff -ru a/port/runtime/gx/gx_aurora_bridge.cpp b/port/runtime/gx/gx_aurora_bridge.cpp
+--- a/port/runtime/gx/gx_aurora_bridge.cpp	2026-11-24 15:27:45
++++ b/port/runtime/gx/gx_aurora_bridge.cpp	2026-11-24 15:37:43
+@@ -9,6 +9,8 @@
+ #include <bit>
+ #include <cmath>
+ #include <limits>
++#include <chrono>
++#include "looks_live.h"   // frontend/src: the looks (patches/0116)
+ 
+ namespace gx::aurora_bridge {
+ // Sub-frame presentation (experiments/native-engine/frontend/patches/0106): per-draw position and normal
+@@ -429,8 +431,308 @@
+     if (c.dstalpha & 0x100) warn(frame, where, "destination-alpha copy override is not fidelity-validated");
+   }
+ }
++
++// ---------------- looks (frontend/patches/0116, frontend/src/looks_live.h) ----------------
++// melee-unlocked's look rules (gx_core.h lightweight_* and skip_for_effects, gx_retro.h look_surface, gx_shader.cpp's
++// look tints), applied here to each draw before Aurora sees it. Display only.
++namespace look {
++using fe::looks::Surface;
++constexpr uint8_t kEffectOwner = 0xFE, kModelEffectOwner = 0xFC, kGameplayOwner = 0xFD;
++constexpr float kBackgroundDepth = 60.0f;
++struct Filter {
++  bool on = false, in_match = false, have_fighters = false, backdrop_off = false;
++  int level = 0, effects = 0;
++  uint32_t projection[6] = {};
++  float fighter_far = 0;
++  uint8_t fighter = 0, stage = 0, menus = 0, colours = 0;
++  bool unfiltered = false;
++};
++inline uint8_t stage_map(const DrawCall& d) { return uint8_t(d.viewport_x); }   // patches/0116 decoder: the 0xF7 tag
++inline bool world(const Filter& e, const DrawState& st) {
++  return e.in_match && st.xf_regs[0x26] == 0 && std::memcmp(e.projection, &st.xf_regs[0x20], sizeof e.projection) == 0;
++}
++// The per-draw marks gx_aurora.cpp reads for the textures (same thread, same frame): bits 0-2 the surface, bit 3
++// nearest-texel sampling.
++thread_local std::vector<uint8_t> g_marks;
++// The background rule's answers, decided once per game frame (a frame presented again reuses them).
++thread_local std::vector<int8_t> g_skip; thread_local uint64_t g_skip_sequence = ~0ull; thread_local int g_skip_key = -1;
++
++// The draw's vertex positions in view space (x, y, z per vertex), from the raw stream and its arrays or the decoded
++// vertices. False when the format is not one this reads (the draw is then kept).
++bool view_positions(const Frame& f, const DrawCall& d, const DrawState& st, std::vector<float>& out) {
++  out.clear();
++  const auto xform = [&](uint32_t row, const float p[3]) {
++    if (row + 2 >= 64) return false;
++    const float* m = &st.posMatrices[row * 4];
++    for (int r = 0; r < 3; ++r) {
++      const float c = m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3];
++      if (!std::isfinite(c)) return false;
++      out.push_back(c);
++    }
++    return true;
++  };
++  if (!d.raw_size) {
++    if (d.first_vertex + size_t(d.vertex_count) > f.vertices.size()) return false;
++    for (uint32_t i = 0; i < d.vertex_count; ++i) {
++      const Vertex& v = f.vertices[d.first_vertex + i];
++      const uint32_t row = (d.components & VB_HAS_POSMTXIDX) ? v.posmtx & 63 : st.matrix_index_a & 63;
++      if (!xform(row, v.pos)) return false;
++    }
++    return true;
++  }
++  const uint32_t vcd = d.vcd_lo, mode = (vcd >> 9) & 3, vat = d.vat[0];
++  if (!mode || !d.vertex_count) return false;
++  const unsigned comps = (vat & 1) ? 3 : 2, fmt = (vat >> 1) & 7, frac = (vat >> 4) & 31;
++  static const unsigned size_of[5] = {1, 1, 2, 2, 4};
++  if (fmt > 4) return false;
++  const unsigned matrices = (vcd & 1) + unsigned(__builtin_popcount((vcd >> 1) & 0xFF));
++  const uint32_t stride = d.raw_size / d.vertex_count;
++  const uint8_t* raw = f.raw_vertices.data() + d.raw_offset;
++  const float scale = 1.0f / float(1u << frac);
++  const auto value = [&](const uint8_t* q) -> float {
++    switch (fmt) {
++      case 0: return q[0] * scale;
++      case 1: return int8_t(q[0]) * scale;
++      case 2: return uint16_t(q[0] << 8 | q[1]) * scale;
++      case 3: return int16_t(q[0] << 8 | q[1]) * scale;
++      default: { uint32_t u = uint32_t(q[0]) << 24 | uint32_t(q[1]) << 16 | uint32_t(q[2]) << 8 | q[3]; float x; std::memcpy(&x, &u, 4); return x; }
++    }
++  };
++  const auto& arr = d.arrays[0];
++  for (uint32_t i = 0; i < d.vertex_count; ++i) {
++    const uint8_t* v = raw + size_t(i) * stride;
++    const uint32_t row = (vcd & 1) ? v[0] & 63 : st.matrix_index_a & 63;
++    const uint8_t* q = v + matrices;
++    if (mode >= 2) {
++      const uint32_t index = mode == 2 ? q[0] : uint32_t(q[0] << 8 | q[1]);
++      if (!arr.data || !arr.stride) return false;
++      const size_t at = size_t(index) * arr.stride;
++      if (at + comps * size_of[fmt] > arr.data->size()) return false;
++      q = arr.data->data() + at;
++    }
++    float p[3] = {value(q), value(q + size_of[fmt]), comps == 3 ? value(q + 2 * size_of[fmt]) : 0.0f};
++    if (!xform(row, p)) return false;
++  }
++  return true;
++}
++
++// lightweight_filter_build: the world camera (a fighter's projection) and the play plane's depth.
++Filter build(const Frame& f) {
++  Filter e;
++  const fe::looks::Live& l = fe::looks::live();
++  e.level = fe::looks::load(l.lightweight); e.effects = fe::looks::load(l.effects);
++  e.fighter = fe::looks::load(l.fighter); e.stage = fe::looks::load(l.stage); e.menus = fe::looks::load(l.menus);
++  e.colours = fe::looks::load(l.colours); e.unfiltered = l.unfiltered.load(std::memory_order_relaxed);
++  e.backdrop_off = e.level >= 2 || fe::looks::load(l.arcade_backdrop) != 0;
++  if (e.level >= 3) e.effects = std::max(e.effects, 2);
++  e.on = fe::looks::active() || e.menus;
++  if (!e.on || !frame_in_match(f)) return e;
++  // A pass over the frame's state: the first perspective draw of a skinned fighter model gives the world camera
++  // (frame_scene_draw), then the farthest such model the play plane's depth.
++  static thread_local std::unique_ptr<DrawState> scratch(new DrawState());
++  DrawState& st = *scratch;
++  const DrawCall* first = nullptr; bool have = false;
++  struct Model { uint32_t projection[6]; float z; };
++  static thread_local std::vector<Model> models; models.clear();
++  for (const auto& cmd : f.commands) {
++    if (cmd.kind != FrameCommand::Draw) continue;
++    const DrawCall& d = f.draws[cmd.index];
++    apply_state(st, d, f);
++    if (st.xf_regs[0x26] != 0) continue;
++    if (!first) { first = &d; std::memcpy(e.projection, &st.xf_regs[0x20], sizeof e.projection); }
++    if (!d.skinned) continue;
++    if (!have && d.owner_player < 6) { have = true; std::memcpy(e.projection, &st.xf_regs[0x20], sizeof e.projection); }
++    const uint32_t row = st.matrix_index_a & 63;
++    if (row + 2 >= 64) continue;
++    Model m; std::memcpy(m.projection, &st.xf_regs[0x20], sizeof m.projection); m.z = st.posMatrices[(row + 2) * 4 + 3];
++    if (std::isfinite(m.z)) models.push_back(m);
++  }
++  if (!first) return e;
++  e.in_match = true;
++  for (const auto& m : models) {
++    if (std::memcmp(m.projection, e.projection, sizeof e.projection) != 0) continue;
++    if (!e.have_fighters || m.z > e.fighter_far) e.fighter_far = m.z;
++    e.have_fighters = true;
++  }
++  return e;
++}
++
++// lightweight_background: a stage piece wholly behind the play plane, a dome around the camera, or scenery the game names.
++bool background(const Filter& e, const Frame& f, const DrawCall& d, const DrawState& st) {
++  const uint8_t tag = stage_map(d);
++  if (e.have_fighters && tag != 0xFF && (tag & 0x80)) return true;
++  if (!e.have_fighters || d.owner_player != 0xFF || d.skinned) return false;
++  static thread_local std::vector<float> p;
++  if (!view_positions(f, d, st, p) || p.empty()) return false;
++  const bool band = e.level >= 5;
++  const bool tight = tag != 0xFF && (tag & 0x40);
++  const float limit = e.fighter_far - (tight ? 8.0f : band ? 20.0f : kBackgroundDepth);
++  const float front = e.fighter_far + 30.0f;
++  float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
++  const size_t n = p.size() / 3;
++  for (size_t i = 0; i < n; ++i)
++    for (int r = 0; r < 3; ++r) { lo[r] = std::min(lo[r], p[i * 3 + r]); hi[r] = std::max(hi[r], p[i * 3 + r]); }
++  if (lo[0] < 0 && hi[0] > 0 && lo[1] < 0 && hi[1] > 0 && lo[2] < 0 && hi[2] > 0) return true;   // around the camera
++  bool seen = false;
++  for (size_t i = 0; i < n; ++i) {
++    const float x = p[i * 3], y = p[i * 3 + 1], z = p[i * 3 + 2];
++    if (z >= 0 || std::abs(x) > -z * 1.5f || std::abs(y) > -z * 1.5f) continue;   // out of view
++    seen = true;
++    if (z >= limit && (!band || z <= front)) return false;   // something visible is on the play plane
++  }
++  if (seen) return true;
++  if (hi[2] < limit || (band && lo[2] > front)) return true;
++  return hi[0] - lo[0] > 3000.0f || hi[1] - lo[1] > 3000.0f || hi[2] - lo[2] > 3000.0f;
++}
++// DrawCall::frustum_backdrop upstream: one quad with an identity model-view filling the camera's view (a sky plane).
++bool frustum_backdrop(const Frame& f, const DrawCall& d, const DrawState& st) {
++  if (d.primitive != 0x80 || d.vertex_count != 4 || st.xf_regs[0x26] != 0 || (d.components & VB_HAS_POSMTXIDX) || (st.bp.zmode() & 0x10)) return false;
++  const uint32_t row = st.matrix_index_a & 63;
++  if (row + 3 > 64) return false;
++  static const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
++  for (int i = 0; i < 12; ++i) if (std::fabs(st.posMatrices[row * 4 + i] - identity[i]) > 1e-5f) return false;
++  static thread_local std::vector<float> v;
++  if (!view_positions(f, d, st, v) || v.size() != 12) return false;
++  float proj[4]; std::memcpy(proj, &st.xf_regs[0x20], sizeof proj);
++  for (int i = 0; i < 4; ++i) {
++    const float x0 = v[i * 3], y0 = v[i * 3 + 1], z0 = v[i * 3 + 2];
++    if (!(z0 < 0.0f)) return false;
++    const float x = (proj[0] * x0 + proj[1] * z0) / -z0, y = (proj[2] * y0 + proj[3] * z0) / -z0;
++    if (std::fabs(std::fabs(x) - 1.0f) > 0.01f || std::fabs(std::fabs(y) - 1.0f) > 0.01f) return false;
++  }
++  return true;
++}
++// skip_for_effects (Visual effects).
++bool effect(const Filter& e, const DrawCall& d, const DrawState& st) {
++  if (d.owner_player == kGameplayOwner || d.owner_player < 6) return false;
++  if (e.effects <= 0 || !(st.bp.blendmode() & 1) || !world(e, st)) return false;
++  const uint32_t zmode = st.bp.zmode();
++  if (zmode & 0x10) return false;
++  const bool additive = ((st.bp.blendmode() >> 5) & 7) == 1;
++  if (d.owner_player == kModelEffectOwner) return e.effects >= 3 && additive;
++  if (additive || (e.effects >= 2 && !(zmode & 1))) return true;
++  return e.effects >= 3 && d.owner_player == kEffectOwner;
++}
++// ---- True widescreen (melee-unlocked gx_shader.cpp build_projection, set_true_widescreen) ----
++// At 16:9 the x row of a widened projection is scaled by 219/320 ((73/60) * (320/219) = 16/9). Widened: the world's
++// perspective cameras. Not widened, as upstream: render-to-texture views (small viewports: Fountain of Dreams' 80x60
++// reflection), the screen flash and its wipes (a fov-60 4:3 camera whose 640x480 quad fills the authored frustum),
++// corner-pinned perspective layers, backdrop planes that fill the frustum (Poke Floats' sky), and the orthographic
++// 2D and shadow layer; except the P1/P2 tag layer, an orthographic 640x480 camera with each tag at its fighter's
++// pixel, which is widened by the same factor so a tag stays over its fighter.
++constexpr float kWiden = 219.0f / 320.0f;
++inline const float* proj(const DrawState& st) { return reinterpret_cast<const float*>(&st.xf_regs[0x20]); }
++bool authored_fullscreen(const float* p) {
++  if (p[1] != 0.0f || p[3] != 0.0f || p[0] <= 0.0f || p[2] <= 0.0f) return false;
++  if (std::fabs(p[2] - 1.7320508f) > 0.001f) return false;
++  return std::fabs(p[2] / p[0] - 4.0f / 3.0f) < 0.001f;
++}
++bool authored_screen_pinned(const float* p) {
++  if (p[0] <= 0.0f || p[2] <= 0.0f) return false;
++  if (std::fabs(std::fabs(p[1]) - 1.0f) > 0.001f || std::fabs(std::fabs(p[3]) - 1.0f) > 0.001f) return false;
++  return std::fabs(p[2] / p[0] - 4.0f / 3.0f) < 0.001f;
++}
++bool nametag_layer(const float* p) {
++  return std::fabs(p[0] - 2.0f / 640.0f) < 1e-6f && std::fabs(p[1] + 1.0f) < 1e-4f && std::fabs(p[2] - 2.0f / 480.0f) < 1e-6f &&
++         std::fabs(p[3] - 1.0f) < 1e-4f && std::fabs(p[4] + 1.0f / 32767.9f) < 2e-6f;
++}
++bool frustum_backdrop(const Frame& f, const DrawCall& d, const DrawState& st);
++bool widen(const Frame& f, const DrawCall& d, const DrawState& st) {
++  const float* p = proj(st);
++  if (st.xf_regs[0x26] != 0) return nametag_layer(p);
++  const float* vp = reinterpret_cast<const float*>(&st.xf_regs[0x1A]);
++  if (!(std::fabs(vp[0]) >= 320.0f && std::fabs(vp[1]) >= 240.0f)) return false;
++  return !authored_fullscreen(p) && !authored_screen_pinned(p) && !frustum_backdrop(f, d, st);
++}
++struct Decision { bool skip = false, wire = false, tint = false; float rgb[3] = {}; uint8_t mark = 0; };
++Decision decide(const Filter& e, const Frame& f, size_t index, const DrawCall& d, const DrawState& st) {
++  Decision out;
++  if (!e.on) return out;
++  const bool in_world = world(e, st);
++  if (e.in_match && effect(e, d, st)) { out.skip = true; return out; }
++  if (in_world && e.backdrop_off) {
++    if (d.owner_player == 0xFF && !d.skinned && fe::looks::load(fe::looks::live().arcade_backdrop) && frustum_backdrop(f, d, st)) { out.skip = true; return out; }
++    if (index < g_skip.size()) {
++      int8_t& slot = g_skip[index];
++      if (slot < 0) slot = background(e, f, d, st) ? 1 : 0;
++      if (slot) { out.skip = true; return out; }
++    }
++  }
++  const bool owned_effect = d.owner_player == kGameplayOwner || d.owner_player == kModelEffectOwner;
++  // look_surface: fighters (skinned models of the world camera), the stage (the rest of it), menus (everything else).
++  Surface s = Surface::Textured;
++  if (!owned_effect) {
++    if (in_world) s = Surface(d.skinned ? e.fighter : e.stage);
++    else s = Surface(e.menus);
++  }
++  // Lightweight 3 and up: no textures on world draws (one white texel), except blended draws that write no depth.
++  const bool blended_nodepth = (st.bp.blendmode() & 1) && !(st.bp.zmode() & 0x10);
++  if (s == Surface::Textured && e.level >= 3 && in_world && !owned_effect && !blended_nodepth) s = Surface::White;
++  out.wire = in_world && !owned_effect && (e.level >= 5 || s == Surface::Wire);
++  if (s == Surface::Wire) s = Surface::Textured;
++  out.mark = uint8_t(s) | ((e.unfiltered && s != Surface::Textured) ? 8 : 0);
++  // The look's port colours (fighters' models) and its white stage (opaque stage pieces): one plain colour, light and shade kept.
++  if (e.colours == 1 && d.skinned && d.owner_player < 4 && st.xf_regs[0x26] == 0) {
++    out.tint = true; const float* c = fe::looks::port_colour(d.owner_player); std::memcpy(out.rgb, c, sizeof out.rgb);
++  } else if (in_world && !d.skinned && !(st.bp.blendmode() & 1) && Surface(e.stage) == Surface::White) {
++    out.tint = true; out.rgb[0] = 0.93f; out.rgb[1] = 0.94f; out.rgb[2] = 0.96f;
++  }
++  return out;
++}
++// The tint as GX state: one TEV stage, colour = C0 * (1 - ras) + K0 * ras with C0 = 0.45 * tint, K0 = tint and the
++// rasterised colour of channel 0 lit from a white material register (gx_shader.cpp: tint * (0.45 + 0.55 * light)),
++// alpha 1. The registers it changes are put back into `st` after the draw is converted (Saved::restore).
++struct Saved {
++  uint32_t bp00, bp10, bp28, bpc0, bpc1, bpf6, xf0c, xf0e; int32_t c1[4], k0[4];
++  void save(const DrawState& st) {
++    bp00 = st.bp.reg[0x00]; bp10 = st.bp.reg[0x10]; bp28 = st.bp.reg[0x28]; bpc0 = st.bp.reg[0xC0]; bpc1 = st.bp.reg[0xC1]; bpf6 = st.bp.reg[0xF6];
++    xf0c = st.xf_regs[0x0C]; xf0e = st.xf_regs[0x0E]; std::memcpy(c1, st.tev_colors[1], sizeof c1); std::memcpy(k0, st.tev_kcolors[0], sizeof k0);
++  }
++  void restore(DrawState& st) const {
++    st.bp.reg[0x00] = bp00; st.bp.reg[0x10] = bp10; st.bp.reg[0x28] = bp28; st.bp.reg[0xC0] = bpc0; st.bp.reg[0xC1] = bpc1; st.bp.reg[0xF6] = bpf6;
++    st.xf_regs[0x0C] = xf0c; st.xf_regs[0x0E] = xf0e; std::memcpy(st.tev_colors[1], c1, sizeof c1); std::memcpy(st.tev_kcolors[0], k0, sizeof k0);
++  }
++};
++void apply_tint(DrawState& st, const float rgb[3]) {
++  const bool lit = st.bp.numcolchans() >= 1;
++  st.bp.reg[0x00] = (st.bp.reg[0x00] & ~((15u << 10) | (7u << 16))) & 0xffffff;   // one TEV stage, no indirect stage
++  st.bp.reg[0x10] = 0;                                                               // stage 0: no indirect texturing
++  st.bp.reg[0x28] = (st.bp.reg[0x28] & ~0xfffu) | 0u;                               // stage 0: no texture, colour channel 0
++  // colour: d ZERO, c RASC, b KONST, a C0, add, clamp; or KONST alone when the draw has no colour channel
++  st.bp.reg[0xC0] = lit ? (15u | (10u << 4) | (14u << 8) | (2u << 12) | (1u << 19)) : (14u | (15u << 4) | (15u << 8) | (15u << 12) | (1u << 19));
++  st.bp.reg[0xC1] = (6u << 4) | (7u << 7) | (7u << 10) | (7u << 13) | (1u << 19);   // alpha: d KONST (1, kasel 0)
++  st.bp.reg[0xF6] = (st.bp.reg[0xF6] & 0xfu) | (12u << 4) | (0u << 9);             // stage 0: kcsel K0, kasel 1
++  st.xf_regs[0x0C] = 0xffffffffu;                                                    // material colour white
++  st.xf_regs[0x0E] &= ~1u;                                                           // material from the register
++  for (int c = 0; c < 3; ++c) { st.tev_kcolors[0][c] = int32_t(rgb[c] * 255.0f + 0.5f); st.tev_colors[1][c] = int32_t(rgb[c] * 0.45f * 255.0f + 0.5f); }
++  st.tev_kcolors[0][3] = 255; st.tev_colors[1][3] = 255;
++}
++// Triangles (lists, strips, fans, quads) as a line list over the same vertex records.
++bool to_lines(Draw& out) {
++  const uint32_t n = out.vertex_count, stride = out.vertex_stride;
++  const uint8_t prim = out.primitive & 0xF8, fmt = out.primitive & 7;
++  if (!stride || !out.vertex_data || !n) return false;
++  static thread_local std::vector<uint32_t> idx; idx.clear();
++  const auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { idx.insert(idx.end(), {a, b, b, c, c, a}); };
++  if (prim == 0x90) for (uint32_t i = 0; i + 2 < n; i += 3) tri(i, i + 1, i + 2);
++  else if (prim == 0x98) for (uint32_t i = 0; i + 2 < n; ++i) tri(i, i + 1, i + 2);
++  else if (prim == 0xa0) for (uint32_t i = 1; i + 1 < n; ++i) tri(0, i, i + 1);
++  else if (prim == 0x80) for (uint32_t i = 0; i + 3 < n; i += 4) idx.insert(idx.end(), {i, i + 1, i + 1, i + 2, i + 2, i + 3, i + 3, i});
++  else return false;
++  if (idx.empty() || idx.size() > 65534) return false;
++  static thread_local std::vector<uint8_t> bytes;
++  bytes.resize(idx.size() * stride);
++  for (size_t k = 0; k < idx.size(); ++k) std::memcpy(bytes.data() + k * stride, out.vertex_data + size_t(idx[k]) * stride, stride);
++  out.vertices.swap(bytes);
++  out.vertex_data = out.vertices.data(); out.vertex_bytes = uint32_t(out.vertices.size());
++  out.vertex_count = uint16_t(idx.size()); out.primitive = uint8_t(0xa8 | fmt);
++  return true;
++}
++}  // namespace look
+ } // namespace
+ 
++uint8_t look_mark(size_t draw) { return draw < look::g_marks.size() ? look::g_marks[draw] : 0; }
++
+ PreparedFrame prepare_frame(const Frame& frame, Extent extent) {
+   PreparedFrame out;
+   prepare_frame(frame, extent, out);
+@@ -476,6 +778,22 @@
+   static thread_local std::unique_ptr<DrawState> state_storage(new DrawState()), emitted_storage(new DrawState());
+   DrawState& state = *state_storage;
+   DrawState& emitted = *emitted_storage;
++  // Looks (patches/0116): the frame's filter, the per-draw texture marks and the background rule's cache.
++  const auto look_t0 = std::chrono::steady_clock::now();
++  const look::Filter look_filter = look::build(frame);
++  look::g_marks.assign(frame.draws.size(), 0);
++  {
++    const int key = look_filter.level * 2 + (look_filter.backdrop_off ? 1 : 0);
++    if (look::g_skip_sequence != frame.sequence || look::g_skip_key != key || look::g_skip.size() != frame.draws.size()) {
++      look::g_skip.assign(frame.draws.size(), -1); look::g_skip_sequence = frame.sequence; look::g_skip_key = key;
++    }
++  }
++  uint64_t look_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - look_t0).count());
++  uint64_t look_skipped = 0, look_drawn = 0, look_tinted = 0, look_wired = 0;
++  // True widescreen (looks_live.h true_widescreen); never on the opening movie, which is presented 4:3 (upstream's
++  // frame_has_widenable_scene).
++  const bool look_wide = fe::looks::live().true_widescreen.load(std::memory_order_relaxed) && frame.scene_major != 0x18;
++  fe::looks::live().scene_major.store(frame.scene_major, std::memory_order_relaxed);
+   const DrawCall* previous = nullptr;   // last emitted draw since the frame start or the last copy
+   Dirty dirty;                          // state parts written since `emitted` was last brought up to date
+   const auto prefetch_draw = [&](size_t k) {   // records are ~5 KB apart: their headers miss the cache
+@@ -493,6 +811,20 @@
+     apply_state(state, frame.draws[i], frame);   // every draw, converted or not: the deltas chain through all of them
+     dirty.add(frame.draws[i].delta);
+     if (!previous) dirty.all = true;     // everything is emitted again: compare nothing, copy everything
++    look::Decision look_decision;
++    if (look_filter.on) {
++      const auto t0 = std::chrono::steady_clock::now();
++      look_decision = look::decide(look_filter, frame, i, frame.draws[i], state);
++      look_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
++      look::g_marks[i] = look_decision.mark;
++      if (look_filter.in_match) ++(look_decision.skip ? look_skipped : look_drawn);
++      if (look_decision.skip) {   // not handed to Aurora; the state chain goes on as for a draw the bridge rejects
++        for (unsigned k = 0; k < 8; ++k) out.draws[i].textures[k] = &frame.draws[i].textures[k];
++        out.draws[i].vertex_count = 0; out.draws[i].state.clear(); out.draws[i].vertices.clear();
++        if (emit) emit(c);
++        continue;
++      }
++    }
+     // Sub-frame overrides: the draw is converted with the solver's matrices, then the recorded ones are put back
+     // so the next draw's state (and its deltas) chain from what the game loaded. Every block is emitted.
+     static thread_local float kept_pos[256], kept_nrm[96];
+@@ -509,8 +841,28 @@
+     // Point at this frame's textures before anything can fail: the copy-history pass reads them for
+     // every draw, including ones the bridge rejects below.
+     for (unsigned k = 0; k < 8; ++k) out.draws[i].textures[k] = &frame.draws[i].textures[k];
++    look::Saved look_saved;
++    if (look_decision.tint) { look_saved.save(state); look::apply_tint(state, look_decision.rgb); dirty.all = true; ++look_tinted; }
++    uint32_t wide_kept[2] = {state.xf_regs[0x20], state.xf_regs[0x21]};
++    bool wide_now = false;
++    if (look_wide) {
++      dirty.xf[0] |= 0x7Full << 0x20;   // the projection is compared with the emitted one on every draw (widened or not)
++      if (look::widen(frame, frame.draws[i], state)) {
++        float* p = reinterpret_cast<float*>(&state.xf_regs[0x20]);
++        p[0] *= look::kWiden; p[1] *= look::kWiden; wide_now = true;
++      }
++    }
+     try {
+       convert_draw(frame, i, extent, state, previous, previous ? &emitted : nullptr, dirty, out.draws[i]);
++      if (look_decision.mark & 8)   // nearest-texel sampling: the mode registers again, filters off (written for every draw anyway)
++        for (unsigned k = 0; k < 8; ++k) if (frame.draws[i].textures[k].used) {
++          const uint32_t m0 = frame.draws[i].textures[k].mode0 & ~((1u << 4) | (1u << 7));   // gx_retro.h unfiltered_mode0
++          bp(out.draws[i].state, uint8_t((k < 4 ? 0x80 : 0xa0) + (k & 3)), m0);
++        }
++      if (look_decision.wire && look::to_lines(out.draws[i])) {
++        bp(out.draws[i].state, BP_LINEPTWIDTH, (state.bp.reg[BP_LINEPTWIDTH] & ~0xffu & 0xffffff) | 9u);   // 1.5 pixels at 640x480
++        ++look_wired;
++      } else look_decision.wire = false;
+       // MELEE_BRIDGE_VERIFY=1 (bridge_verify=1): the same draw converted comparing every block, as before
+       // the dirty tracking; any difference in the bytes handed to Aurora is logged.
+       static const bool verify = [] { const char* v = std::getenv("MELEE_BRIDGE_VERIFY"); return v && v[0] == '1'; }();
+@@ -529,13 +881,27 @@
+       previous = &frame.draws[i];
+       dirty.copy(emitted, state);
+       dirty.reset();
++      if (wide_now) { state.xf_regs[0x20] = wide_kept[0]; state.xf_regs[0x21] = wide_kept[1]; }   // the game's projection again; `emitted` keeps the widened one
++      if (look_decision.tint) {   // `emitted` holds the look's registers: the game's go back, and the next draw compares everything
++        look_saved.restore(state);
++        dirty.all = true;
++      }
++      if (look_decision.wire) { emitted.bp.reg[BP_LINEPTWIDTH] = ~0u; dirty.all = true; }   // the game's line width goes back on the next draw
+     } catch (const CoverageError& error) {
++      if (look_decision.tint) { look_saved.restore(state); dirty.all = true; }
++      if (wide_now) { state.xf_regs[0x20] = wide_kept[0]; state.xf_regs[0x21] = wide_kept[1]; }
+       // One draw the bridge cannot represent must not take the frame down.
+       warn(frame, "draw " + std::to_string(i), error.what());
+       out.draws[i].vertex_count = 0;   // the renderer skips it
+       out.draws[i].state.clear(); out.draws[i].vertices.clear();
+     }
+     if (emit) emit(c);
++  }
++  if (look_filter.on) {
++    auto& l = fe::looks::live();
++    l.frames.fetch_add(look_filter.in_match ? 1 : 0, std::memory_order_relaxed); l.rule_ns.fetch_add(look_filter.in_match ? look_ns : 0, std::memory_order_relaxed);
++    l.skipped.fetch_add(look_skipped, std::memory_order_relaxed); l.drawn.fetch_add(look_drawn, std::memory_order_relaxed);
++    l.tinted.fetch_add(look_tinted, std::memory_order_relaxed); l.wired.fetch_add(look_wired, std::memory_order_relaxed);
+   }
+ }
+ 
+diff -ru a/port/runtime/gx/gx_core.cpp b/port/runtime/gx/gx_core.cpp
+--- a/port/runtime/gx/gx_core.cpp	2026-11-24 15:27:45
++++ b/port/runtime/gx/gx_core.cpp	2026-11-24 15:29:42
+@@ -317,6 +317,12 @@
+ struct RawPending { uint32_t fmt = 0, offset = 0, size = 0; VertexArrayRef arrays[12]; const VertexDesc* desc = nullptr; bool valid = false; };
+ RawPending g_raw_pending;
+ bool g_state_deltas = false;   // set by init(): the backend rebuilds draw state from deltas (apply_state)
++// melee-unlocked's draw owner tokens (frontend/patches/0116; sent only while the host's native_owner_tracking answers 1,
++// which the looks module does when a look needs them): 0xF1 the fighter slot of the draws that follow (0xFE particles,
++// 0xFD items and projectiles, 0xFC an effect object's model, 0xFF none), 0xF2 whether the PObj is skinned, 0xF7 the
++// stage map gobj (0x80 scenery, 0x40 props close behind the floor, 0xFF none). Display only.
++uint8_t g_native_owner = 0xFF, g_native_stage_map = 0xFF;
++bool g_native_skinned = false;
+ StateDelta g_dirty;            // parts of the live state written since the last recorded draw
+ bool g_raw_vertices = false;   // set by init(): renderers that consume the hardware format ask for it
+ std::unordered_map<uint64_t, std::shared_ptr<std::vector<uint8_t>>> g_frame_arrays;   // (base, stride) -> this frame's copy
+@@ -469,6 +475,10 @@
+   if (!g_draw_merge || !g_state_deltas || !g_raw_pending.valid || g_frame.draws.empty() || g_cp_version != g_merge_cp_version ||
+       !dirty_is_empty(g_dirty)) return false;
+   if (primitive != 0x98 && primitive != 0x90 && primitive != 0x80) return false;   // strips, triangles, quads
++  {   // a draw of another owner, model or stage piece is a draw of its own (the looks tell them apart)
++    const DrawCall& q = g_frame.draws.back();
++    if (q.owner_player != g_native_owner || q.skinned != g_native_skinned || q.viewport_x != int(g_native_stage_map)) return false;
++  }
+   const FrameCommand& last = g_frame.commands.back();
+   if (last.kind != FrameCommand::Draw || last.index != g_frame.draws.size() - 1) return false;
+   DrawCall& p = g_frame.draws.back();
+@@ -588,8 +598,9 @@
+     uint32_t ordinal = g_immediate_draws[k]++;
+     dc.identity = hash_bytes(&k, 8) ^ ((uint64_t)ordinal << 44) ^ 2;
+   }
+-  if (g_state_deltas) {   // observation is off for Aurora (set_render_observe): nothing to ask
+-    dc.object_generation = 0; dc.owner_player = 0xFF; dc.skinned = false;
++  dc.viewport_x = g_native_stage_map;   // patches/0116: the stage map tag (DrawCall has no field of its own; viewport_* are unused)
++  if (g_state_deltas) {   // observation is off for Aurora (set_render_observe): the game's own owner tokens, when it sends them
++    dc.object_generation = 0; dc.owner_player = g_native_owner; dc.skinned = g_native_skinned;
+   } else { host::SimCostScope cost(host::SIM_OBSERVE);
+     dc.identity = observed_draw_identity(dc.identity, dc.object_generation);
+     dc.owner_player = observed_owner();   // SkipInit above means this has to be written every draw
+@@ -695,6 +706,7 @@
+         g_frame_arrays.clear();   // the frame's draws keep their shared copies alive
+         for (auto& last : g_last_array) last = LastArray{};
+         g_dl_calls.clear(); g_immediate_draws.clear(); finish_observed_frame();
++        g_native_owner = 0xFF; g_native_stage_map = 0xFF; g_native_skinned = false;
+       }
+       break;
+     }
+@@ -767,6 +779,13 @@
+     return 9;
+   }
+   if (op == 0x48) return 1;
++  // melee-unlocked's private tokens (not GX; patches/0116). 0xF0 is its draw-scope audit (21 bytes, only with
++  // native_draw_identity, which this host answers 0); 0xF8 marks the online character select's hands (1 byte).
++  if (op == 0xF0) { if (len < 21) return incomplete(21); return 21; }
++  if (op == 0xF1) { if (len < 2) return incomplete(2); g_native_owner = d[1]; return 2; }
++  if (op == 0xF2) { if (len < 2) return incomplete(2); g_native_skinned = d[1] != 0; return 2; }
++  if (op == 0xF7) { if (len < 2) return incomplete(2); g_native_stage_map = d[1]; return 2; }
++  if (op == 0xF8) return 1;
+   if (op == 0x61) { if (len < 5) return incomplete(5); bp_write(be32(d + 1)); return 5; }
+   if (op >= 0x80 && op < 0xC0) {
+     if (len < 3) return incomplete(3);

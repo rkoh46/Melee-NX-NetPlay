@@ -123,6 +123,7 @@ sync_tree() {
   # Sub-frame presentation (patches/0106: the features' presenter) in the renderer and the sub-frame solver.
   cp "$repo/port/runtime/gx/gx_aurora.cpp" "$repo/port/runtime/gx/subframe.cpp" "$gen/gxsrc/port/runtime/gx/"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0106-subframe-presentation.patch"
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0116-gx-looks.patch"   # the looks: owner tokens, look rules, treated textures (src/looks_live.h)
   for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
@@ -169,6 +170,14 @@ sync_tree() {
   done
   # The NRO's icon: melee-unlocked's own (port/app/launcher.ico, its largest picture), as a 256x256 JPEG (build_nro).
   mu_icon
+  # Skins (src/features/cosmetics.cpp): melee-unlocked's skeleton and drawing checks and its costume families, taken from
+  # its Windows-only cosmetic_mods.cpp (only these portable parts), and its pack_skin_rule; compiled from the fetched tree.
+  cm="$work/mu/port/runtime/host/cosmetic_mods.cpp"
+  awk '/^\/\/ The player reads this beside "Online: standard costume"/{on=0} /^namespace skeleton \{/{on=1} on' "$cm" > "$gen/cosmetics_skeleton.inc.new"
+  awk '/^constexpr FighterFamily families\[\] = \{/,/^\};/' "$cm" > "$gen/cosmetics_families.inc.new"
+  grep -q "costume_skeleton_matches" "$gen/cosmetics_skeleton.inc.new" && grep -q '"Fx", "Fox"' "$gen/cosmetics_families.inc.new" || { echo "sync: cosmetic_mods.cpp no longer has the parts cosmetics.cpp takes" >&2; exit 1; }
+  for f in cosmetics_skeleton.inc cosmetics_families.inc; do if cmp -s "$gen/$f.new" "$gen/$f"; then rm -f "$gen/$f.new"; else mv "$gen/$f.new" "$gen/$f"; fi; done
+  for f in pack_skin_rule.h pack_skin_rule.cpp; do cmp -s "$work/mu/port/runtime/host/$f" "$gen/$f" || cp "$work/mu/port/runtime/host/$f" "$gen/$f"; done
   # The image, the scripts and the reference digests, embedded as the headless runner embeds them.
   # Fight a pro and the Practice menu: melee-unlocked's phillip_ai.cpp and practice_menu.cpp, build-time copies with
   # patches/0112 (the app's own inference engine, the app's ProAI folder, downloads only when chosen) and 0113 (the

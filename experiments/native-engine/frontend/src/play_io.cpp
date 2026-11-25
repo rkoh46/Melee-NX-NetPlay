@@ -94,6 +94,7 @@ struct AutoVs {
       if (vanilla ? during(240, 30) : during(240, 10)) { pad.stick_y = 127; if (vanilla) pad.stick_x = 61; }
       else if (during(252, 4) && std::getenv("MU_AUTO_VS_Z")) pad.button = 0x0010;   // tests: Z on the hovered fighter (Squad Strike adds it)
       else if (during(vanilla ? 280 : 265, 10)) pad.button = A;
+      else if (during(284, 4) && std::getenv("MU_AUTO_VS_SKIN")) pad.button = 0x0020;   // tests: R on the picked costume (the next skin)
       else if (t == 300 && !p1_locked.load()) { finish(Failed, "the fighter was not picked"); return false; }
       else if (during(vanilla ? 338 : 305, 10)) pad.stick_y = -127;
       else if (!vanilla && during(335, 12)) pad.stick_x = 127;

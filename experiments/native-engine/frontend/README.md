@@ -74,6 +74,8 @@ render thread       newest finished frame -> gx::AuroraBackend (port/runtime/gx/
 | `patches/0101-host-frontend-hooks.patch` | Against the fetched tree's host services, weak hooks: run start and end, controller read, rumble, each mixed sound block, `host::log` lines, the game's own log lines, the option words. All answer "not mine" in the scripted runs. |
 | `patches/0103-gx-bridge-lines-points.patch` | Against a build-time copy of `port/runtime/gx/gx_aurora_bridge.cpp`: lines and points go to Aurora (the game's debug text screens are made of them), and a refused draw is reported once per reason instead of once per draw. |
 | `patches/0108-aurora-imgui-draw-list-delete.patch`, `patches/0109-aurora-picture-options.patch` | Against a build-time copy of Aurora (`build/sdk/aurora` -> `build/native-engine-gfx/gen/aurora`, which both picture variants compile): ImGui's frozen draw lists are freed with `IM_DELETE` (they were made with `IM_NEW` and freed with `operator delete`: AddressSanitizer's alloc/dealloc mismatch, now on in the sanitizer runs); `aurora_set_picture` (brightness, contrast, vibrance, sharpening, the CRT looks) in the present pass. `build/sdk` is not changed. |
+| `patches/0116-gx-looks.patch`, `src/looks_live.h`, `src/features/looks.cpp`, `test-looks-linux.sh` | The looks (after 0102, 0103, 0107, 0106): the decoder reads the game's draw-owner and stage tokens; the Aurora bridge applies melee-unlocked's look rules per draw (surfaces, tints, wire, the Lightweight background rule, Visual effects, the look's and the Arcade look's background) and True widescreen's projection rule; gx_aurora.cpp uploads treated textures. The module keeps the settings (`look`, `lightweight`, `effects`, `look_*`, `truewidescreen`) and the Looks page, and asks the game for owner tokens only while a look needs them. `test-looks-linux.sh all` shoots every preset. FEATURES.md "Look presets" and "True widescreen" have the rules and numbers. |
+| `src/features/cosmetics.cpp` | Skins: costume and stage files from `Cosmetics/` on the SD card and the mod discs' costumes, picked on the select screens (commands 0xF9, 0xFB-0xFD), with melee-unlocked's online rule compiled from the fetched tree (`build.sh sync` extracts the portable parts of its cosmetic_mods.cpp into `gen/cosmetics_*.inc` and copies pack_skin_rule); mods.cpp serves a session that can go online only the profile's look-only costumes through it. `test-mods-linux.sh skins`. |
 | `patches/0107-gx-core-array-pool-fence.patch` | After 0102: the decoder reuses a vertex-array buffer the render thread let go of only after an acquire fence (0.4.2; ThreadSanitizer). |
 | `patches/0110-audio-follows-game-speed.patch` | Against a build-time copy of `port/runtime/host/audio_sdl.cpp`: the output's resampling ratio follows the game's speed (online time sync, 0.4.3). |
 | `patches/0102-gx-core-native-memory.patch` | Against a build-time copy of `port/runtime/gx/gx_core.cpp`: 30-bit GX addresses, the memory size from the host, the scene from the game's state snapshot, no periodic log line, a timing scope around the decoder thread's work. The file in `port/` is not changed. |
@@ -300,6 +302,19 @@ two at the next start): Low, Medium, High (the default), Ultra, or shows Custom.
 ./test-overlays-linux.sh /path/to/disc-folder match training latency te picture studio scale1 scale2   # MU_MODS_DIR for te
 MU_APP_SETTINGS="playernicknames 1" ./test-app-linux.sh /path/to/disc-folder online overlaymenu
 ```
+
+### Looks, True widescreen and skins (0.4.6)
+
+All off by default and display only. settings.ini: `look N` (0 Off .. 11 Classic Style; or upstream's parts
+`lightweight`, `effects`, `look_fighter`, `look_stage`, `look_menus`, `look_unfiltered`, `look_colours`, `look_background`,
+`look_background_rgb`), the Arcade look's `arcade_backdrop 1|2` with `arcade_background_rgb`, `truewidescreen 1`; the
+in-game menu's Looks page has a row for the preset and each part. Skins: costume files in `Cosmetics/Costumes/` (named for
+their slot, `PlFxGr.dat` or `PlFxGr - Name.dat`, or a folder per skin), stage files in `Cosmetics/Stages/`, and every mod
+disc's changed costumes; L / R on a picked costume, X / Y on a highlighted stage; `Cosmetics/selection.txt` keeps the
+picks; `cosmetics 0` turns skins off. Online only a costume with the standard skeleton stays on, served with the standard
+rest pose (melee-unlocked's rule and code); stage skins never. On the console: copy a costume file into
+`sdmc:/switch/melee-nx-netplay/Cosmetics/Costumes/`, pick it with R on the character select, and check that an online
+match shows it only when the log says `stays on online`.
 
 ### Controller setup
 
@@ -1050,9 +1065,9 @@ why is not known. The same costume's portrait on the character select screen is 
   Pokémon Stadium screen) is missing until the next one.
 - Texture copies are kept as RGBA8 on the GPU whatever format the game asked for, depth copies are left out,
   half-size copies are made at full size (all as in the app's `gx::AuroraBackend`).
-- melee-unlocked's private stream tokens (`0xF0`-`0xF8`: draw owners, stage tags, render semantics) are not
-  understood by this decoder. The headless host never asks the game for them; a host that did would see
-  `gx: unknown opcode`.
+- melee-unlocked's private stream tokens: the draw owners and stage tags (`0xF1`, `0xF2`, `0xF7`) and the scope and
+  hand markers (`0xF0`, `0xF8`) are read since patches/0116 (the looks ask for them); the render semantics (`0xF3`-`0xF6`,
+  upstream's RTX path) are not, and nothing here asks the game for them.
 - A decoder or renderer error stops the picture, not the run: `picture: DECODER STOPPED` or `RENDERER STOPPED`
   with the reason, and the simulation finishes as the headless runner would.
 - Still written while a match runs, by code outside this folder: in scripted mode the runner's progress line every

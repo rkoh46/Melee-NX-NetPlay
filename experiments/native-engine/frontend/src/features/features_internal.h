@@ -20,6 +20,8 @@ void register_netoverlay();
 void register_replay_library();      // replay_library.cpp, from register_replays (its rows first on the Replays page)
 void register_search();
 void register_proai();               // proai.cpp: Fight a pro (command 0xEA) and the Practice menu's simulation-thread half
+void register_cosmetics();            // cosmetics.cpp: skins (commands 0xF9, 0xFB-0xFD), the online costume rule
+void register_looks();               // looks.cpp: look presets, Lightweight, Visual effects (the renderer: patches/0115)
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off

@@ -1,0 +1,93 @@
+Melee-NX-NetPlay: Training Mode CE's memory card operations finish (the Lab's Export, the Lab character select's Import).
+TM-CE waits in Memcard_Wait until its card callback sets MemcardWork.is_done. Two things kept that from ever happening
+natively, and the game froze on the Export screen:
+- TM-CE's MemcardWork (MexTK memcard.h) is the console's layout of the game's card block, where is_done (0x8ac) is the
+  game's task counter; natively that block (lbcardnew.c state) has another layout, and the callback TM-CE named
+  (mu_tmce_fn_onCardComplete) decremented the game's own counter. TM-CE now has a block of its own and a callback that
+  sets its is_done (tmce/native/tmce_runtime.c, mextk_redefine.txt); the game's card state is no longer touched;
+- the card's completion is a queued event natively (shim/mu_card.c mu_post), not an interrupt arriving during the loop:
+  the wait delivers the queued events.
+Only TM-CE's code changes (the reference scripts never run it).
+SPDX-License-Identifier: GPL-2.0-or-later
+
+diff --git a/sourceport/game/tmce/MexTK/include/memcard.h b/sourceport/game/tmce/MexTK/include/memcard.h
+index 9949108..2655275 100644
+--- a/sourceport/game/tmce/MexTK/include/memcard.h
++++ b/sourceport/game/tmce/MexTK/include/memcard.h
+@@ -2680,8 +2680,17 @@ extern void *mu_tmce_ref_stc_memcard_info;
+ extern void *mu_tmce_ref_stc_memcard_unk;
+ #define stc_memcard_unk ((MemcardUnk *)((char *)mu_tmce_ref_stc_memcard_unk + 0))
+ // static MemcardWork *stc_memcard_work = (void *)0x80432a68;
++#ifdef MU_NATIVE
++/* Melee-NX-NetPlay (patches/0007): natively the game's card work block (lbcardnew.c `state`) has another layout than
++ * this console-layout struct, so TM-CE's is_done (0x8ac on the console, the game's task counter) was neither the field
++ * the card callback changes nor a field of TM-CE's own. TM-CE gets a block of its own; its card callback
++ * (Memcard_RemovedCallback, tmce/native/tmce_runtime.c) sets is_done there. The native CARD calls do not use work_area. */
++extern MemcardWork mu_tmce_memcard_work;
++#define stc_memcard_work (&mu_tmce_memcard_work)
++#else
+ extern void *mu_tmce_ref_stc_memcard_work;
+ #define stc_memcard_work ((MemcardWork *)((char *)mu_tmce_ref_stc_memcard_work + 0))
++#endif
+ extern char mu_mx_gmMainLib_8045A6C0[] __asm__("gmMainLib_8045A6C0");
+ static Memcard *stc_memcard = (void *)(mu_mx_gmMainLib_8045A6C0 + 0); // pointer to this data @ 0x804d3ee0
+ // static int *stc_memcard_block_curr = R13_OFFSET(-0x3d20);
+diff --git a/sourceport/game/tmce/MexTK/mextk_redefine.txt b/sourceport/game/tmce/MexTK/mextk_redefine.txt
+index e50f098..55c857a 100644
+--- a/sourceport/game/tmce/MexTK/mextk_redefine.txt
++++ b/sourceport/game/tmce/MexTK/mextk_redefine.txt
+@@ -8,7 +8,7 @@ Egg_Destroy mu_tmce_fn_it_80289158
+ Fighter_GetKnockbackAngle mex_Fighter_GetKnockbackAngle
+ GrColl_RaycastGround mex_GrColl_RaycastGround
+ GuardOnInitIDK mu_tmce_fn_ftCo_800923B4
+-Memcard_RemovedCallback mu_tmce_fn_onCardComplete
++Memcard_RemovedCallback mu_tmce_card_complete
+ blr mex_blr
+ blr2 mex_blr
+ AOBJ_ClearFlags HSD_AObjClearFlags
+diff --git a/sourceport/game/tmce/native/tmce_runtime.c b/sourceport/game/tmce/native/tmce_runtime.c
+index 3538714..0f29589 100644
+--- a/sourceport/game/tmce/native/tmce_runtime.c
++++ b/sourceport/game/tmce/native/tmce_runtime.c
+@@ -33,6 +33,15 @@ int mex__vsprintf(char *str, int unk, const char *format, va_list arg)
+ /* MexTK's blr/blr2: a return instruction in the game, used as an empty callback */
+ void mex_blr(void) {}
+ 
++/* Melee-NX-NetPlay (patches/0007): TM-CE's own card work block and its card callback (MexTK memcard.h), which marks the
++ * operation done for Memcard_Wait. The game's card state (lbcardnew.c) is no longer touched by TM-CE's card calls. */
++MemcardWork mu_tmce_memcard_work;
++void mu_tmce_card_complete(s32 chan, s32 result)
++{
++    (void) chan; (void) result;
++    mu_tmce_memcard_work.is_done = 1;
++}
++
+ /* m-ex's calloc: the current heap, cleared */
+ void *mex_calloc(int size)
+ {
+diff --git a/sourceport/game/tmce/src/lab.c b/sourceport/game/tmce/src/lab.c
+index 1e4fb2d..cf88b11 100644
+--- a/sourceport/game/tmce/src/lab.c
++++ b/sourceport/game/tmce/src/lab.c
+@@ -4578,11 +4578,20 @@ void Record_OnSuccessfulSave(int deleteRecordings)
+ }
+ void Memcard_Wait()
+ {
+-
++#ifdef MU_NATIVE
++    /* Natively the card's completion is a queued event, not an interrupt that arrives during the
++     * loop: deliver the queued events while waiting, or the loop never ends (Export, Import). */
++    extern void mu_deliver_pending(void);
++    while (stc_memcard_work->is_done == 0)
++    {
++        mu_deliver_pending();
++    }
++#else
+     while (stc_memcard_work->is_done == 0)
+     {
+         blr2();
+     }
++#endif
+ }
+ void Record_MemcardLoad(int slot, int file_no)
+ {

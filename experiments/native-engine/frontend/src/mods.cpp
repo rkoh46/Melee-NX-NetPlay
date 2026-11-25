@@ -52,7 +52,7 @@ namespace fe {
 namespace {
 namespace hackpack = source_port::hackpack;
 constexpr uint32_t kBase = 0x70000000u;          // as upstream: past the disc and its system file range
-constexpr uint64_t kLimit = 0xF0000000ull;
+constexpr uint64_t kLimit = 0xE8000000ull;   // the skins (features/cosmetics.cpp) are served from 0xE8000000 up
 constexpr char kTeSha256[] = "61834b65d921668ff11702c458a1ae6946172b0a4c8321a47e2c2ddff9aef51d";   // 20XXTE-v2d-r4-USA.gci
 
 struct Layer { enum Kind { Iso, Gci } kind; std::string path; };
@@ -72,6 +72,11 @@ std::vector<Layer> layers;
 std::vector<Image> images;
 std::vector<ModFile> files;      // sorted by start
 bool te_owned = false, pack_loaded = false, retail_view = false, configured = false;
+// A session that can go online (the services program): only the profile's costumes that pass melee-unlocked's online rule
+// are served (the pack skin rule, features/cosmetics.cpp), in their online form; nothing else of the profile loads.
+bool costumes_only = false;
+bool offline_only_program = true;   // set false by mods_session_can_go_online (play_main: the netplay host runs)
+bool configured_offline_only() { return offline_only_program; }
 uint32_t replaced = 0, added = 0, kept_retail = 0;
 
 uint32_t be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
@@ -378,6 +383,22 @@ void add_profile_layers(const std::string& profile) {
 }
 }  // namespace
 
+void mods_session_can_go_online() { offline_only_program = false; }
+// A session that can go online: the profile's look-only costumes and nothing else (no memory card of its own).
+void mods_configure_costumes(const std::string& profile) {
+  configured = true; costumes_only = true;
+  if (profile.empty()) return;
+  profile_name = profile;
+  mods_dir = options.out_dir + "/mods";
+  for (size_t at = 0; at <= profile.size();) {
+    const size_t comma = std::min(profile.find(',', at), profile.size());
+    add_profile_layers(profile.substr(at, comma - at));
+    at = comma + 1;
+  }
+  layers.erase(std::remove_if(layers.begin(), layers.end(), [](const Layer& l) { return l.kind != Layer::Iso; }), layers.end());
+  say("mods: profile \"%s\" in a session that can go online: only its costumes that stay on online (the standard skeleton) are loaded", profile.c_str());
+}
+
 // Before the host starts: which layers, and which memory card folder. Returns that folder (empty: no profile).
 std::string mods_configure(const std::string& profile) {
   configured = true;
@@ -404,7 +425,25 @@ std::string mods_configure(const std::string& profile) {
 // The retail disc's table is loaded: put the profile's files over it.
 extern "C" void mu_frontend_disc_ready(void) {
   using namespace fe;
+  // The skins first, while the table is the retail disc's (features/cosmetics.cpp); their picks go on after the layers.
+  if (options.play && &features::cosmetics_disc_ready) features::cosmetics_disc_ready(costumes_only || !configured_offline_only(), profile_name);
+  struct Picks { ~Picks() { if (fe::options.play && &fe::features::cosmetics_apply_picks) fe::features::cosmetics_apply_picks(); } } picks_after;
   if (!configured) return;
+  if (costumes_only) {   // the pack skin rule: each costume the profile changes, in its online form when it passes
+    for (const auto& layer : layers) { std::string error; if (!add_image(layer.path, &error)) say("mods: %s NOT LOADED: %s", layer.path.c_str(), error.c_str()); }
+    unsigned kept = 0, reverted = 0;
+    for (const auto& file : files) {
+      if (file.path.size() != 11 || file.path.compare(0, 3, "/pl") != 0 || !&features::cosmetics_online_copy) continue;
+      if (linux_host::fe_disc_find(file.path.c_str(), nullptr, nullptr) < 0) continue;
+      std::vector<uint8_t> bytes(file.length);
+      if (!read_mod(file, 0, bytes.data(), bytes.size())) continue;
+      std::string reason;
+      if (features::cosmetics_online_copy(file.path, bytes, &reason)) { ++kept; say("mods: %s stays on online: %s", file.path.c_str(), reason.c_str()); }
+      else if (!reason.empty() && reason != "no standard costume") { ++reverted; say("mods: %s is the standard costume online: %s", file.path.c_str(), reason.c_str()); }
+    }
+    say("mods: %u costumes of the profile stay on (online form), %u are the standard costume", kept, reverted);
+    return;
+  }
   if (settings_slippi_menus()) slippi_files_build();      // from the retail files, before any layer changes the table
   for (const auto& layer : layers) {
     if (layer.kind == Layer::Gci) { add_card_file(layer.path); continue; }
@@ -451,7 +490,8 @@ extern "C" void mu_frontend_disc_ready(void) {
 extern "C" int mu_frontend_disc_read(uint64_t offset, void* out, size_t bytes) {
   using namespace fe;
   if (const int system = slippi_file_read(offset, out, bytes); system >= 0) return system;
-  if (offset < kBase || files.empty()) return -1;
+  if (&features::cosmetics_disc_read) { const int skin = features::cosmetics_disc_read(offset, out, bytes); if (skin >= 0) return skin; }
+  if (offset < kBase || files.empty() || costumes_only) return -1;
   // The file whose range holds the offset (files are in start order).
   auto after = std::upper_bound(files.begin(), files.end(), offset, [](uint64_t at, const ModFile& f) { return at < f.start; });
   if (after == files.begin()) return -1;
@@ -511,7 +551,10 @@ extern "C" int32_t mu_frontend_command(uint8_t command, const uint8_t* payload, 
   } else if (command == 0xF5 && size == 1) {                                               // content view: 0xFF offline, 0xFE asks, else an online mode
     if (payload[0] != 0xFE) {
       const bool retail = payload[0] != 0xFF && std::any_of(files.begin(), files.end(), [](const ModFile& f) { return f.served; });
-      if (retail != retail_view) { publish(retail); linux_host::log("content: %s view", retail ? "retail" : "mod"); }
+      if (retail != retail_view) {
+        publish(retail); linux_host::log("content: %s view", retail ? "retail" : "mod");
+        if (&features::cosmetics_view) features::cosmetics_view(retail);   // the picked skins in that view's form
+      }
     }
     reply.push_back(retail_view ? 1 : 0);
   } else {

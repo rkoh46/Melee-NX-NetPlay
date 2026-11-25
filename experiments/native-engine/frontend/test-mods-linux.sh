@@ -24,6 +24,24 @@
 #                   ("training: practice CPU sent to the game: ...")
 #   dsp             settings.ini dsp_lowpass 1 with no User/GC/dsp_coef.bin: the free table written to Sys/GC and read by the
 #                   mixer (its Adler-32 in the log), then a player's own file in User/GC taking priority
+#   tmce-lab        Training Mode CE (MU_TMCE_MODS, default build/mod-discs: tmce/tmce.iso, built from the official TM-CE.zip by
+#                   MU_MOD_INSTALL_KEEP=build/mod-discs/tmce ../tools/mod_install_test.sh <disc folder> tmce): the event select's
+#                   page change, Training Lab, its character and stage select, then in the match the Lab menu (Start): CPU
+#                   Options (CPU Percent up 6, Tech Options), Recording (Save Positions, HMN Mode Record, a walk and a jump,
+#                   HMN Mode Playback: the recording plays back), Slot Management > Modify Inputs (Alter Inputs), Export to
+#                   memory card slot A (card select, name, confirm: a new file in the profile's card folder), then L+R+A
+#                   (the Additional Codes' back to the select)
+#   skins           skins (src/features/cosmetics.cpp): two costumes made here from the disc's own PlFcNr.dat in
+#                   <out>/Cosmetics/Costumes (one with a joint moved by 1e-4, inside melee-unlocked's tolerance, one with a joint
+#                   moved by 5 units), the mod discs of MU_MODS_DIR as skins; --feature-test cosmetics-verdicts logs upstream's
+#                   online verdict for every costume skin; --auto-vs with R on the picked Falco (MU_AUTO_VS_SKIN) steps his
+#                   costume to its first skin, and the match loads it
+#   hackpack-hands  the 20XX Hack Pack disc's profile (MU_MODS_DIR hackpack/): VS Mode > Melee, Z with the hand over Pichu
+#                   swaps in Master Hand ("Controlled By All Ports"), P2 a computer player, Onett, and Master Hand played
+#                   from port 1 by the script (walk, A)
+#   tmce-ess        the TM-CE event select's controls: R (help with its QR code, R again closes it), the pages with the
+#                   D-pad, X and Y (jumps), then Training Lab and in it the Additional Codes: A+B held (the match starts
+#                   again) and L+R+A (back to the select)
 # MU_DOCKER_NAME: container name prefix (default mnx-mods).
 # MU_MODS_DIR: a folder with mod profiles (mounted as <out>/mods) for vanilla-only. Output:
 # build/native-engine-gfx/run-mods-test/<case>/ (console.log, host.log, settings.ini, shots/). MU_TEST_LIMIT: time limit in s.
@@ -33,7 +51,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; shift
 # No case named: every case (a run that names none must not pass by running nothing).
-[ $# -gt 0 ] || set -- training-menu frozen vanilla-only vanilla-refuse mex rogue install squad practice-cpu dsp
+[ $# -gt 0 ] || set -- training-menu frozen vanilla-only vanilla-refuse mex rogue install squad practice-cpu dsp tmce-lab tmce-ess skins hackpack-hands
 # The mod discs: MU_MODS_DIR, else the disc folder's mods/ when it has one.
 [ -n "${MU_MODS_DIR:-}" ] || { [ -d "$disc/mods" ] && export MU_MODS_DIR="$disc/mods"; } || true
 work="$repo/build/native-engine-gfx"; root="$work/run-mods-test"
@@ -219,6 +237,104 @@ for case in "$@"; do
     run "$dir" 400 5 "--auto-vs"
     grep -h "low-pass\|DSP coefficient" "$dir/console.log" "$dir/host.log" 2>/dev/null | cut -c1-200
     continue
+    ;;
+  tmce-lab|tmce-ess)
+    tmce_mods="${MU_TMCE_MODS:-$repo/build/mod-discs}"
+    [ -f "$tmce_mods/tmce/tmce.iso" ] || { echo "== $case: skipped: no $tmce_mods/tmce/tmce.iso (see the case's note)"; continue; }
+    fresh "$dir"
+    printf '%s\n' "mod_profile tmce" > "$dir/settings.ini"
+    # Times from the start to the event select (1-P Mode > Event Match), then @scene blocks: 2B 00 the Lab's character
+    # select, 2B 02 its stage select, 2B 01 the match.
+    python3 -I - "$dir/script.txt" "$case" <<'PY'
+import sys
+case = sys.argv[2]
+L = ["130 A", "140", "400 START", "410", "520 A", "524", "600 sy=-127", "604", "660 A", "664"]
+t = 900
+def p(w, n=1, gap=20, hold=4):
+    global t
+    for _ in range(n): L.extend([f"{t} {w}", f"{t+hold}"]); t += gap
+if case == "tmce-ess":
+    p("R", gap=120); p("R", gap=80)               # help (QR code), closed again
+    p("DR", gap=80)                                # page 2 (General Tech) with the D-pad
+    p("X", gap=60); p("Y", gap=60)                 # jumps down and up
+    p("DL", gap=80); p("DR", gap=80)               # back a page and forward again
+    p("A", gap=60)                                 # Training Lab
+else:
+    p("sx=127", gap=80); p("A", gap=60)            # page 2 (General Tech) > Training Lab
+L += ["@scene 2b 00", "60 sy=127", "70", "72 sx=127", "78", "100 A", "104", "180 START", "184",   # Fox, then Start
+      "@scene 2b 02", "60 sy=127", "66", "90 A", "94",                                          # a stage
+      "@scene 2b 01"]
+t = 200
+if case == "tmce-ess":
+    t = 300; L.extend([f"{t} sx=127", f"{t+40}"]); t += 120      # walk, then A+B held: the Lab starts again (salty runback)
+    L.extend([f"{t} A+B", f"{t+90}"]); t += 300
+    L.extend([f"{t} L+R+A", f"{t+60}"]); t += 200                 # back to the select (Additional Codes)
+else:
+    p("START", gap=60); p("sy=-127", gap=30); p("A", gap=60)      # menu > CPU Options
+    p("sx=127", 6, gap=12); t += 40                               # CPU Percent up
+    p("sy=-127", 2); p("sx=127", gap=40); t += 40                 # Tech Options
+    p("B", gap=60); p("sy=-127", gap=30); p("A", gap=60)          # back > Recording
+    p("A", gap=60)                                                # Save Positions
+    p("sy=-127", gap=30); p("sx=127", gap=40)                     # HMN Mode: Record
+    p("START", gap=40)                                            # play: the recording runs
+    L.extend([f"{t} sx=127", f"{t+50}", f"{t+60} X", f"{t+64}", f"{t+120} sx=-127", f"{t+150}"]); t += 240
+    p("START", gap=60); p("sx=127", gap=40)                       # HMN Mode: Playback
+    p("START", gap=300)                                           # the recording plays back by itself
+    p("START", gap=60); p("sy=127", 20, gap=12)                   # the menu again (Recording): to its top (no wrap)
+    p("sy=-127", 13, gap=16); p("A", gap=60)                      # Slot Management (Mirrored Playback is skipped, greyed)
+    p("sy=-127", 2, gap=20); p("A", gap=120)                      # Modify Inputs (Alter Inputs)
+    p("B", gap=60); p("B", gap=60)                                # back to Recording (Slot Management selected)
+    p("sy=-127", 3, gap=20); p("A", gap=120)                      # Export
+    p("A", gap=240); p("A", gap=60); p("START", gap=240); p("A", gap=240)   # slot A, the name "1", Start, Yes: a new file
+    p("B", gap=80); p("START", gap=80)                            # out of the card screen, close the menu
+    L.extend([f"{t} L+R+A", f"{t+60}"]); t += 200                 # back to the select (Additional Codes)
+open(sys.argv[1], "w").write("\n".join(L) + "\n")
+PY
+    MU_MODS_DIR="$tmce_mods" run "$dir" "$([ "$case" = tmce-lab ] && echo 5600 || echo 2600)" 2 ""
+    echo "card folder: $(ls "$dir/card-tmce" 2>/dev/null | tr '\n' ' ')"
+    grep -h "scene: major" "$dir/console.log" | tail -4
+    ;;
+  hackpack-hands)
+    fresh "$dir"
+    printf '%s\n' "mod_profile hackpack" > "$dir/settings.ini"
+    printf '%s\n' "130 A" "140" "400 START" "410" "520 sy=-127" "524" "580 A" "584" "660 A" "664" \
+      "@scene 02 00" "240 sy=127" "246" "248 sx=127" "254" "270 Z" "274" "290 A" "294" "305 sy=-127" "310" "320 sx=127" "326" "350 A" "356" "420 START" "428" \
+      "@scene 02 01" "200 sy=100" "240" "260 A" "270" \
+      "@scene 02 02" "200 sx=127" "260" "300 A" "304" "360 B" "364" "420 A" "424" "480 sx=-127" "540" "560 A" "564" > "$dir/script.txt"
+    run "$dir" 2600 3 ""
+    grep -h "20xx-hp\] character select" "$dir/console.log" | cut -c1-160
+    ;;
+  skins)
+    fresh "$dir"; mkdir -p "$dir/Cosmetics/Costumes"
+    # The disc's own PlFcNr.dat (read here, never committed), and two copies with the root's first child joint moved.
+    python3 -I - "$disc/GALE01.iso" "$dir/Cosmetics/Costumes" <<'PY'
+import struct, sys
+iso, out = sys.argv[1], sys.argv[2]
+f = open(iso, "rb"); f.seek(0x424); fst_off, fst_size = struct.unpack(">II", f.read(8)); f.seek(fst_off); fst = f.read(fst_size)
+count = struct.unpack(">I", fst[8:12])[0]; names = count * 12
+for i in range(1, count):
+    e = fst[i*12:i*12+12]
+    if e[0]: continue
+    n = fst[names + (struct.unpack(">I", e[0:4])[0] & 0xFFFFFF):].split(b"\0")[0].decode()
+    if n.lower() == "plfcnr.dat":
+        off, size = struct.unpack(">II", e[4:12]); f.seek(off); dat = bytearray(f.read(size)); break
+dsize, nrel, nroot, nref = struct.unpack(">IIII", dat[4:20])
+table = 0x20 + dsize + nrel * 4; strings = table + (nroot + nref) * 8
+for r in range(nroot):
+    j, name_at = struct.unpack(">II", dat[table + r*8: table + r*8 + 8])
+    if dat[strings + name_at:].split(b"\0")[0].endswith(b"_Share_joint"): root = j; break
+child = struct.unpack(">I", dat[0x20 + root + 8: 0x20 + root + 12])[0]
+at = 0x20 + child + 0x2C                                    # the joint's rest translation x
+for label, delta in (("Nudged", 1e-4), ("Moved bone", 5.0)):
+    b = bytearray(dat); x = struct.unpack(">f", b[at:at+4])[0]; b[at:at+4] = struct.pack(">f", x + delta)
+    open(f"{out}/PlFcNr - {label}.dat", "wb").write(bytes(b))
+PY
+    : > "$dir/settings.ini"
+    MU_RUN_ENV="-e MU_AUTO_VS_SKIN=1" run "$dir" 1500 3 "--auto-vs --feature-test cosmetics-verdicts"
+    grep -h "cosmetics" "$dir/console.log" | grep -v "verdict" | cut -c1-200
+    echo "verdicts: $(grep -c 'cosmetics: verdict' "$dir/console.log") ($(grep -c 'stays on online' "$dir/console.log") stay on online)"
+    grep -h "cosmetics: verdict /plfcnr.dat" "$dir/console.log" | cut -c1-200
+    echo "selection.txt: $(grep -v '^#' "$dir/Cosmetics/selection.txt" 2>/dev/null | tr '\t\n' '= ')"
     ;;
   practice-cpu)
     fresh "$dir"
