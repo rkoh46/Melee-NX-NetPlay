@@ -1,0 +1,61 @@
+--- a/include/aurora/imgui.h
++++ b/include/aurora/imgui.h
+@@ -12,6 +12,9 @@
+ #endif
+ 
+ ImTextureID aurora_imgui_add_texture(uint32_t width, uint32_t height, const void* rgba8);
++// The host feeds ImGui's gamepad keys from its own controller input (io.AddKeyEvent): the SDL backend stops reading SDL
++// gamepads and keeps ImGuiBackendFlags_HasGamepad set, so gamepad navigation works with the host's keys.
++void aurora_imgui_host_gamepad(bool on);
+ 
+ #ifdef __cplusplus
+ }
+--- a/lib/imgui.cpp
++++ b/lib/imgui.cpp
+@@ -81,6 +81,9 @@
+   void operator()(ImDrawList* list) const noexcept { IM_DELETE(list); }
+ };
+ 
++// aurora_imgui_host_gamepad: the host routes its own controllers to ImGui's gamepad keys.
++static bool g_hostGamepad = false;
++
+ struct DrawData::Impl {
+   ImDrawData drawData;
+   std::vector<std::unique_ptr<ImDrawList, ImDrawListDelete>> drawLists;
+@@ -100,6 +103,7 @@
+   ZoneScoped;
+   SDL_Renderer* renderer = window::get_sdl_renderer();
+   ImGui_ImplSDL3_InitForSDLRenderer(window::get_sdl_window(), renderer);
++  if (g_hostGamepad) ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
+   g_useSdlRenderer = renderer != nullptr;
+   if (g_useSdlRenderer) {
+     ImGui_ImplSDLRenderer3_Init(renderer);
+@@ -202,6 +206,9 @@
+     ImGui_ImplWGPU_NewFrame();
+   }
+   ImGui_ImplSDL3_NewFrame();
++  // The host feeds the gamepad keys itself (aurora_imgui_host_gamepad): the SDL backend, which has no gamepad of its own
++  // then, must not clear the flag that lets ImGui navigate with them.
++  if (g_hostGamepad) ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+ 
+   ImGuiIO& io = ImGui::GetIO();
+   io.DisplayFramebufferScale = framebufferScale;
+@@ -252,6 +259,12 @@
+   }
+ }
+ 
++void set_host_gamepad(bool on) noexcept {
++  g_hostGamepad = on;
++  if (on && ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData)
++    ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
++}
++
+ ImTextureID add_texture(uint32_t width, uint32_t height, const uint8_t* data) noexcept {
+   if (SDL_Renderer* renderer = window::get_sdl_renderer()) {
+     SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, width, height);
+@@ -305,4 +318,5 @@
+ ImTextureID aurora_imgui_add_texture(uint32_t width, uint32_t height, const void* rgba8) {
+   return aurora::imgui::add_texture(width, height, static_cast<const uint8_t*>(rgba8));
+ }
++void aurora_imgui_host_gamepad(bool on) { aurora::imgui::set_host_gamepad(on); }
+ }

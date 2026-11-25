@@ -178,6 +178,9 @@ void stop_worker() {
   }
   if (worker.joinable()) worker.join();
 }
+// The page can be read after the run has ended (the settings panel draws over the last frame, the home screen before the
+// game): a worker started then is stopped at exit, not left joinable for the static destructors (std::terminate).
+struct StopAtExit { ~StopAtExit() { stop_worker(); } } stop_at_exit;
 
 // ---- the page's values (menu thread) ----
 std::string replay_value() {

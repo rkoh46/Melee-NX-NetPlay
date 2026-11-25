@@ -37,6 +37,7 @@
 extern "C" const uint8_t mu_embedded_game[], mu_embedded_game_end[];
 
 namespace fe {
+std::string home_replay;   // a replay the home screen (mu_home.cpp) asked to watch: the game starts with it
 namespace {
 using Clock = std::chrono::steady_clock;
 inline uint64_t now_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count()); }
@@ -373,14 +374,28 @@ int play_main() {
   // The app's screens before the game (render thread, which then draws the game): an update from the player's build
   // computer, then the Slippi sign-in when there is no user.json yet, as port/app/main_switch.cpp does it.
   bool offline_chosen = options.offline;
+  bool menu_ready = false;
   if (options.app && !direct) {
     const bool online_wanted = !options.offline && settings_slippi_menus() && netplay_bridge::has_services();
     const bool signed_in = net.fake_user || file_exists(user_dir + "/user.json");
     if (online_wanted && !signed_in) say("app: no %s/user.json: the sign-in screen comes first", user_dir.c_str());
     if (app_services_run && screens_start()) {
+      // melee-unlocked's launcher comes first (mu_home.cpp): its Settings page is the in-game panel, so the panel's
+      // rows are set up before it.
+      app_menu_setup(); menu_ready = true;
       const AppStart start = app_services_run(!options.offline, online_wanted && !signed_in, user_dir);
       if (start == AppStart::Quit) { say("---- done: the player left before the game started ----"); screens_stop(); log_close(); return 0; }
-      if (start == AppStart::PlayOffline && !signed_in) offline_chosen = true;
+      if (start == AppStart::PlayOffline && !file_exists(user_dir + "/user.json")) offline_chosen = true;
+      if (!home_replay.empty()) {   // the home screen's Replay Viewer: the game starts with that replay, offline
+        options.rest.push_back("--replay"); options.rest.push_back(home_replay);
+        offline_chosen = true;
+        say("play: the home screen asked for the replay %s", home_replay.c_str());
+      }
+      if (!delay_given) {           // the panel may have changed the online delay before the game
+        const int frames = options.online_delay >= 0 ? options.online_delay : settings_online_delay();
+        net.delay_auto = frames <= 0;
+        if (frames > 0) net.delay = frames;
+      }
     }
   }
   bool services_ok = true;
@@ -432,7 +447,7 @@ int play_main() {
     say("play: clocks: cpu %u -> %u MHz reported (%s); the core measures %u MHz", before.cpu_hz / 1000000u, now.cpu_hz / 1000000u, now.cpu_ok ? "accepted" : "REFUSED", switch_measure_cpu_mhz());
   }
 #endif
-  if (options.app) app_menu_setup();                       // the app's in-game menu (Aurora builds)
+  if (options.app && !menu_ready) app_menu_setup();        // the app's in-game menu (Aurora builds)
   Run run;
   for (;;) {
     // The game runs its own main loop and expects a desktop-sized stack.

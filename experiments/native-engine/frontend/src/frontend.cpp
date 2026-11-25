@@ -35,6 +35,7 @@
 #include "metal_frontend.h"          // the screens before the game take the app's MetalFrontend (switch_signin.h)
 #include "overlay.h"
 #include "overlay_imgui.h"
+#include "mu_ui.h"
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <SDL3/SDL_video.h>
@@ -529,6 +530,7 @@ void* render_main(void*) {
       if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay()); mode && mode->refresh_rate > 1.0f) refresh_hz = double(mode->refresh_rate);
       say("picture: display refresh %.2f Hz (the simulation stays at 60 Hz)", refresh_hz.load());
       VIConfigure(nullptr);   // the 640x480 logical framebuffer gx::AuroraBackend expects
+      if (options.app) mu_ui::fonts_init();   // melee-unlocked's fonts for its panel and launcher (mu_ui.h), before the first frame
       if (const char* f = std::getenv("MU_APP_FILTER")) {   // launcher.ini filter (the app's screen filter)
         const int filter = std::atoi(f);
         aurora_set_resampler(filter == 1 ? SAMPLER_AREA : filter == 2 ? SAMPLER_CRT : filter == 3 ? SAMPLER_VIBRANT : SAMPLER_BILINEAR);
@@ -559,6 +561,7 @@ void* render_main(void*) {
         if (options.app) host::game_overlay(overlay);
         feature_overlay(&overlay, w, h);
         if (!overlay.shapes.empty() || !overlay.texts.empty()) host::overlay_imgui_draw(overlay);
+        if (options.app) mu_ui::panel_draw(w, h);   // melee-unlocked's settings panel (mu_panel.cpp), over everything
       });
       backend = std::move(aurora_backend);
       st.backend_name = "Aurora/Vulkan";

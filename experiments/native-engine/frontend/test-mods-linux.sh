@@ -70,40 +70,35 @@ for case in "$@"; do
   dir="$root/$case"
   case "$case" in
   training-menu)
-    # The in-game menu is the app's (play mode has none): an app folder as test-app-linux.sh makes it, a made-up user.json.
+    # The in-game menu is the app's, melee-unlocked's settings panel (play mode has none): an app folder as test-app-linux.sh makes
+    # it, a made-up user.json, driven through the test pad file. GAME > Training: Practice CPU one step right (the first preset),
+    # Random numbers one step (Same each start), seed number 3, save to slot 1, Practice CPU back off, load slot 1.
     fresh "$dir"; mkdir -p "$dir/melee-nx-netplay/User/Slippi"
-    # The menu (L+R+Start) lists its own pages and then the feature pages (Game, Training, ...): Training is 13 rows down.
-    # On the Training page the rows are: 0 Go to Training, 6 Practice CPU, 7 Random numbers, 8 seed number,
-    # 9 save to slot 1, 10 load slot 1.
-    python3 -I - "$dir/script.txt" <<'PY'
-import sys
-lines = ["@scene 01 00", "300 L+R+START", "345"]
-t = 360
-def press(what, n=1, gap=12, hold=4):
-    global t
-    for _ in range(n): lines.extend([f"{t} {what}", f"{t+hold}"]); t += gap
-press("sy=-127", 13); t += 20; press("A", gap=60)
-press("sy=-127", 6); press("sx=127", gap=30)          # Practice CPU: the first preset
-press("sy=-127"); press("sx=127", gap=30)             # Random numbers: Same each start
-press("sy=-127"); press("sx=127", 3)                  # seed number 3
-press("sy=-127"); press("A", gap=40)                  # save to slot 1
-press("sy=127", 3); press("sx=-127", gap=30)          # Practice CPU off
-press("sy=-127", 4); press("A", gap=40)               # load slot 1
-press("B", gap=30); press("START", gap=30)            # close the menu (Training's menus are then pressed through)
-open(sys.argv[1], "w").write("\n".join(lines) + "\n")
-PY
-    printf '%s\n' "iso=/iso/GALE01.iso" "frames=3600" "script=/out/script.txt" > "$dir/melee-nx-netplay/launcher.ini"
+    printf '%s\n' "iso=/iso/GALE01.iso" "frames=6000" "home=0" > "$dir/melee-nx-netplay/launcher.ini"
     printf '{"uid":"mock-test-1","playKey":"mock-test-only","connectCode":"MOCK#001","displayName":"Mock 1"}\n' > "$dir/melee-nx-netplay/User/Slippi/user.json"
     timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-mods}-training-menu" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
-      -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp -e MELEE_PAD_FILE=/out/pad.txt "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
         Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
         export DISPLAY=:99
         for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
+        pad() { printf "%s\n" "$1" > /out/pad.txt; }
+        tap() { pad "$1"; sleep 0.2; pad ""; sleep 0.45; }
+        focus() { for i in $(seq 140); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1"; return 1; }
+        wait_log() { for i in $(seq $(( $2 * 10 ))); do grep -aq "$1" /out/console.log 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+        pad ""
         cd /out && /b/mu-native-gfx-linux-services > /out/console.log 2>&1 &
-        pid=$!; n=0
-        while kill -0 $pid 2>/dev/null; do
-          sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true
-        done
+        pid=$!
+        (n=0; while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true; done) &
+        wait_log "online menu: row 1" 120 && sleep 3
+        pad "L R START"; sleep 1.2; pad ""; sleep 1.5
+        tap DD; tap DD; tap A; sleep 0.5
+        focus "Practice CPU"; tap DR
+        focus "Random numbers (items, turnips)"; tap DR
+        focus "Random numbers: seed number"; tap DR; tap DR; tap DR
+        focus "Practice CPU: save to slot 1"; tap A
+        focus "Practice CPU" DU; tap DL
+        focus "Practice CPU: load slot 1"; tap A
+        tap B; tap START
         wait $pid; echo "exit code $?" >> /out/console.log' || echo "test-mods-linux: container ended with $?"
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
     report "$dir"
@@ -154,7 +149,7 @@ PY
     run "$dir" 300 1 "--vanilla-only" /out/not-retail.iso
     ;;
   install)
-    # The Mods page (mods_page.cpp) driven by a controller script in the app: rogueMelee (a link-only catalog entry: its
+    # The settings panel's MODS page (src/mu_panel.cpp over src/mu_mods.cpp) driven through the test pad file in the app: rogueMelee (a link-only catalog entry: its
     # file is put in mods/Downloads as the player would), Install, then "Play it at the next start"; the installer builds
     # the disc from the vanilla disc and checks it against the catalog. Then play mode with the settings.ini the page
     # wrote: 1-P Mode > Regular Match > All-Star, which Rogue Mode replaces on that disc (as the rogue case).
@@ -168,36 +163,30 @@ PY
     [ "$(shasum -a 256 "$patch" | cut -c1-64)" = "$want" ] || { echo "rogueMelee-v3.xdelta does not match the catalog" >&2; exit 1; }
     fresh "$dir"; app="$dir/melee-nx-netplay"; mkdir -p "$app/User/Slippi" "$app/mods/Downloads"
     cp "$patch" "$app/mods/Downloads/"
-    # Start + D-pad Down + Z opens the menu on the Mods page (MU_CONTROLS_TEST_PAGE). Row 0 picks the mod: rogueMelee is the
-    # 8th catalog entry (7 to the right). Row 4 is the main action: A installs; about 50 s later A again chooses it for the
-    # next start (the row then reads "Play it at the next start"). Start closes the menu.
-    python3 -I - "$dir/script.txt" <<'PY'
-import sys
-lines = ["@scene 01 00"]
-t = 300
-def press(what, n=1, gap=14, hold=4):
-    global t
-    for _ in range(n): lines.extend([f"{t} {what}", f"{t+hold}"]); t += hold + gap
-press("START+DD+Z", hold=6, gap=60)
-press("sx=127", 7, gap=20)
-press("sy=-127", 4)
-t += 30; press("A", gap=40)
-t += 3000; press("A", gap=60)
-press("START", gap=60)
-open(sys.argv[1], "w").write("\n".join(lines) + "\n")
-PY
-    printf '%s\n' "iso=/iso/GALE01.iso" "frames=4000" "script=/out/script.txt" > "$app/launcher.ini"
+    # Start + D-pad Down + Z opens melee-unlocked's settings panel on its MODS page (MU_CONTROLS_TEST_PAGE=Mods), through the test
+    # pad file: the focus walks to rogueMelee's button ("Add file (mods/Downloads)": its file is there), A installs; once the log
+    # says it is installed, A on the same button ("Play it at the next start") chooses it. Start closes the panel.
+    printf '%s\n' "iso=/iso/GALE01.iso" "frames=6000" "home=0" > "$app/launcher.ini"
     printf '{"uid":"mock-test-1","playKey":"mock-test-only","connectCode":"MOCK#001","displayName":"Mock 1"}\n' > "$app/User/Slippi/user.json"
-    timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name mnx-modinstall-app --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
-      -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp -e MU_CONTROLS_TEST_PAGE=Mods "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-modinstall}-app-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
+      -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp -e MU_CONTROLS_TEST_PAGE=Mods -e MELEE_PAD_FILE=/out/pad.txt "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
         Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
         export DISPLAY=:99
         for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
+        pad() { printf "%s\n" "$1" > /out/pad.txt; }
+        tap() { pad "$1"; sleep 0.15; pad ""; sleep 0.5; }
+        last() { grep -a "settings: focus" /out/console.log | tail -1; }
+        wait_log() { for i in $(seq $(( $2 * 10 ))); do grep -aq "$1" /out/console.log 2>/dev/null && return 0; sleep 0.1; done; echo "TIMEOUT waiting for: $1" >> /out/harness.log; return 1; }
+        pad ""
         cd /out && /b/mu-native-gfx-linux-services > /out/console.log 2>&1 &
-        pid=$!; n=0
-        while kill -0 $pid 2>/dev/null; do
-          sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true
-        done
+        pid=$!
+        (n=0; while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); xwd -root -silent 2>/dev/null | convert xwd:- "$(printf /out/shots/shot-%03d.png $n)" 2>/dev/null || true; done) &
+        wait_log "online menu: row 1" 120 && sleep 3
+        pad "START DD Z"; sleep 0.3; pad ""; sleep 2
+        for i in $(seq 80); do [ "$(last)" = "settings: focus Add file (mods/Downloads)" ] && break; tap DD; done
+        tap A
+        wait_log "roguemelee: installed" 600 && { sleep 1; tap A; sleep 1; }
+        tap START
         wait $pid; echo "exit code $?" >> /out/console.log' || echo "test-mods-linux: container ended with $?"
     grep -hE "^mods|mods page|mod_profile" "$dir/console.log" "$app/Logs/latest.log" 2>/dev/null | sort -u | cut -c1-200 || true
     echo "installed.txt: $(tr '\n' ' ' < "$app/mods/roguemelee/installed.txt" 2>/dev/null || echo missing)"

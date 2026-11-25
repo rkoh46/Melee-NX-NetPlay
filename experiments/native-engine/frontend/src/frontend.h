@@ -131,7 +131,6 @@ void controls_apply_sdl(const std::string& guid, void* sdl_gamepad, const void* 
 bool controls_capture_frame(const void* raw_pads4);   // a binding is being captured: true = the menu gets neutral pads
 void controls_chords(void* pads4);             // Start + D-pad Down + Z, Start + D-pad Up + Z; Training's lone Start
 void controls_menu_pages(void* extra_pages);   // appends the pages (std::vector<host::MenuExtraPage>)
-void mods_menu_pages(void* extra_pages);      // mods_page.cpp: the Mods page (the mod installer), appended last
 void controls_saved(void (*put)(const std::string& id, const std::string& text));   // launcher.ini padx.<id>
 void controls_load(const std::string& id, const std::string& text);
 std::vector<std::string> controls_rate_lines();   // render thread: Pro Controller / Joy-Con report rates (console)
@@ -151,6 +150,7 @@ enum class AppStart { Play, PlayOffline, Quit };
 // app_services.cpp in the services program with a picture; null (weak) in the others. The update check against
 // launcher.ini's update_host (prompt, download, swap), then the sign-in screen when `need_signin`.
 __attribute__((weak)) AppStart app_services_run(bool check_update, bool need_signin, const std::string& user_dir);
+extern std::string home_replay;               // play_main.cpp: a replay the home screen's Replay Viewer chose
 __attribute__((weak)) bool app_notice_run(const std::string& headline, const std::vector<std::string>& lines);
 
 // ---- frontend.cpp: the render thread before the game (app mode) ----
