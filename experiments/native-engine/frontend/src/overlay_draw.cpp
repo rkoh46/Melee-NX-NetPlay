@@ -16,6 +16,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
 #include "overlay_state.h"
+#include "looks_live.h"   // True widescreen: the opening movie stays 4:3
 #include "replay_view.h"
 #include "proai/practice_state.h"   // practice_menu_draw (weak)
 #include "host.h"                // shim: gcadapter_status
@@ -58,7 +59,9 @@ float picture_aspect(const overlay::Config& c) {
     case 2: return 4.0f / 3.0f;
     case 3: return 16.0f / 9.0f;
     case 4: return 0.0f;
-    default: return options.stretch ? 0.0f : 4.0f / 3.0f;   // Auto: 16:9 code fills the screen, else 4:3
+    default:   // Auto: 16:9 code fills the screen, else 4:3; True widescreen boxes the opening movie (nothing widens it)
+      if (fe::looks::live().true_widescreen.load(std::memory_order_relaxed) && fe::looks::live().scene_major.load(std::memory_order_relaxed) == 0x18) return 4.0f / 3.0f;
+      return options.stretch ? 0.0f : 4.0f / 3.0f;
   }
 }
 Rect game_rect(int ww, int wh, float aspect) {
@@ -79,12 +82,18 @@ float text_width(float size, const char* s) { return ImGui::GetFont()->CalcTextS
 // ---- picture options: applied when they change ----
 uint32_t applied_generation = ~0u;
 bool applied_once = false;
+float applied_aspect = -1.0f;
 void apply_picture(const overlay::Config& c) {
-  if (applied_once && c.generation == applied_generation) return;
+  if (applied_once && c.generation == applied_generation) {
+    const float aspect = picture_aspect(c);   // the shape can follow the scene (True widescreen's opening movie)
+    if (aspect != applied_aspect) { applied_aspect = aspect; aurora::window::set_frame_buffer_aspect(aspect); }
+    return;
+  }
   applied_once = true; applied_generation = c.generation;
   AuroraPicture p{c.brightness, c.contrast, c.vibrance, c.sharpness, uint32_t(c.crt), c.crt_curve};
   aurora_set_picture(&p);
-  aurora::window::set_frame_buffer_aspect(picture_aspect(c));
+  applied_aspect = picture_aspect(c);
+  aurora::window::set_frame_buffer_aspect(applied_aspect);
   aurora::window::set_frame_buffer_scale(float(c.scale));
   say("overlay: picture: shape %d (%.3f), internal resolution %s, brightness %.2f, contrast %.2f, vibrance %.2f, sharpening %.2f, CRT %d (curve %.2f), border \"%s\"",
       c.aspect, picture_aspect(c), c.scale ? (std::to_string(640 * c.scale) + "x" + std::to_string(480 * c.scale)).c_str() : "auto",

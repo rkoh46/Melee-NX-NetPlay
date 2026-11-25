@@ -13,6 +13,7 @@
 #include "hackpack_source.h"     // melee-unlocked (fetched tree): the Hack Pack's saved choices
 #include "feature_calls.h"       // the feature modules' settings keys (src/features/)
 #include "netplay_bridge.h"      // runner: online port colours (patches/net-0004)
+#include "looks_live.h"          // the Arcade look's plain background goes to the renderer (patches/0115)
 
 #include <algorithm>
 #include <atomic>
@@ -38,6 +39,7 @@ struct Settings {
   bool vanilla = false;                   // ours: the retail game without the always-on code set
   bool vanilla_only = false;              // upstream's --vanilla-only session: retail gameplay, its own memory card, no mods
   // Picture
+  bool true_widescreen = false;   // truewidescreen: the renderer widens the picture to 16:9 (upstream's True widescreen at 16:9)
   bool widescreen = false, player_tags = false, hide_ko_explosions = false, hide_hud_emblems = false, freeze_fd = false;
   bool low_poly = false, fod_reflections = false, css_background_free = false, training_hud = true;
   int stock_hud_scale = 100, damage_hud_scale = 100;   // 75..175
@@ -45,6 +47,7 @@ struct Settings {
   bool arcade_hitboxes = false, arcade_projectile_hitboxes = false, arcade_hitboxes_behind = false, arcade_camera_2d = false;
   int arcade_backdrop = 0;                // 2: grid
   uint32_t arcade_grid_rgb = 0xFFFFFF;
+  uint32_t arcade_background_rgb = 0x1E2430;   // the plain background behind the stage (arcade_backdrop 1 or 2), drawn by the renderer
   // Sound
   bool mute_voices = false, audio_early_keyon = false;
   int music = 100;
@@ -96,11 +99,13 @@ const char kTemplate[] =
   "#stadium_frozen 0\n"
   "#freeze_fd 0\n"
   "#widescreen 0            # the 16:9 code; the picture then fills the screen\n"
+  "#truewidescreen 0        # True widescreen: the renderer widens to 16:9 (instead of the 16:9 code)\n"
   "#arcade_hitboxes 0\n"
   "#arcade_projectile_hitboxes 0\n"
   "#arcade_hitboxes_behind 0\n"
   "#arcade_backdrop 0       # 2: a grid behind the stage\n"
   "#arcade_grid_rgb FFFFFF\n"
+  "#arcade_background_rgb 1E2430   # arcade_backdrop 1 or 2: the plain colour behind the stage\n"
   "#cpu_20xx 0\n"
   "#cpu_tech 0              # 1 in place, 2 roll forward, 3 roll back, 4 miss, 5 random\n"
   "#cpu_getup 0             # 1 stand, 2 roll forward, 3 roll back, 4 attack, 5 random\n"
@@ -142,12 +147,14 @@ void set(const std::string& key, const std::string& value) {
   else if (key == "stadium_frozen") s.stadium_frozen = on;
   else if (key == "freeze_fd") s.freeze_fd = on;
   else if (key == "widescreen") s.widescreen = on;
+  else if (key == "truewidescreen") { s.true_widescreen = on; fe::looks::live().true_widescreen.store(on); }
   else if (key == "arcade_hitboxes") s.arcade_hitboxes = on;
   else if (key == "arcade_projectile_hitboxes") s.arcade_projectile_hitboxes = on;
   else if (key == "arcade_hitboxes_behind") s.arcade_hitboxes_behind = on;
   else if (key == "arcade_camera_2d") s.arcade_camera_2d = on;
   else if (key == "arcade_backdrop") s.arcade_backdrop = std::clamp(n, 0, 2);
   else if (key == "arcade_grid_rgb") s.arcade_grid_rgb = uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & 0xFFFFFFu;
+  else if (key == "arcade_background_rgb") s.arcade_background_rgb = uint32_t(std::strtoul(value.c_str(), nullptr, 16)) & 0xFFFFFFu;
   else if (key == "cpu_20xx") s.cpu_20xx = on;
   else if (key == "cpu_tech") s.cpu_tech = std::clamp(n, 0, 5);
   else if (key == "cpu_getup") s.cpu_getup = std::clamp(n, 0, 5);
@@ -204,12 +211,14 @@ std::string get(const std::string& key) {
   if (key == "stadium_frozen") return bit(s.stadium_frozen);
   if (key == "freeze_fd") return bit(s.freeze_fd);
   if (key == "widescreen") return bit(s.widescreen);
+  if (key == "truewidescreen") return bit(s.true_widescreen);
   if (key == "arcade_hitboxes") return bit(s.arcade_hitboxes);
   if (key == "arcade_projectile_hitboxes") return bit(s.arcade_projectile_hitboxes);
   if (key == "arcade_hitboxes_behind") return bit(s.arcade_hitboxes_behind);
   if (key == "arcade_camera_2d") return bit(s.arcade_camera_2d);
   if (key == "arcade_backdrop") return num(s.arcade_backdrop);
   if (key == "arcade_grid_rgb") return hex(s.arcade_grid_rgb);
+  if (key == "arcade_background_rgb") return hex(s.arcade_background_rgb);
   if (key == "cpu_20xx") return bit(s.cpu_20xx);
   if (key == "cpu_tech") return num(s.cpu_tech);
   if (key == "cpu_getup") return num(s.cpu_getup);
@@ -286,7 +295,7 @@ uint32_t word_options() {
   const auto& s = settings;
   const bool net = online.load(std::memory_order_relaxed);
   return (s.no_screen_shake ? MU_GAME_OPTION_NO_SCREEN_SHAKE : 0u) | (s.pal_stock_icons ? MU_GAME_OPTION_PAL_STOCK_ICONS : 0u) |
-         (s.widescreen ? MU_GAME_OPTION_WIDESCREEN : 0u) |
+         (s.true_widescreen ? MU_GAME_OPTION_TRUE_WIDESCREEN : s.widescreen ? MU_GAME_OPTION_WIDESCREEN : 0u) |   // display only, like the code
          ((uint32_t(s.language) << MU_GAME_OPTION_LANGUAGE_SHIFT) & MU_GAME_OPTION_LANGUAGE_MASK) |
          (s.vanilla ? MU_GAME_OPTION_VANILLA : 0u) |
          (slippi_menus_on() ? MU_GAME_OPT_SLIPPI_MENUS : 0u) |
@@ -317,6 +326,8 @@ uint32_t word_options3() {
 }
 uint32_t word_display() {
   const auto& s = settings;
+  fe::looks::live().arcade_backdrop.store(uint8_t(s.arcade_backdrop), std::memory_order_relaxed);   // the renderer's plain background (patches/0115)
+  fe::looks::live().arcade_rgb.store(s.arcade_background_rgb, std::memory_order_relaxed);
   const bool net = online.load(std::memory_order_relaxed);
   return (s.low_poly ? MU_DISPLAY_OPTION_LOW_POLY : 0u) | (s.training_hud ? 0u : MU_DISPLAY_OPTION_NO_TRAINING_HUD) |
          (s.player_tags ? MU_DISPLAY_OPTION_PLAYER_TAGS : 0u) | (s.fod_reflections ? MU_DISPLAY_OPTION_FOD_REFLECTIONS : 0u) |
@@ -367,7 +378,7 @@ void settings_state_changed() {
     std::fclose(out);
   }
 }
-bool settings_widescreen() { return settings.widescreen; }
+bool settings_widescreen() { return settings.widescreen || settings.true_widescreen; }   // either fills a 16:9 screen
 void settings_boot_to_css(bool on) { boot_to_css = on; }
 
 // A '#' starts a comment at the start of a line or after a space: a connect code (blockcode1 ABCD#123) keeps its own.
