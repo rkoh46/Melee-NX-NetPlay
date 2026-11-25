@@ -34,7 +34,7 @@ mkdir -p "$root"
 # already in the folder.
 run() {
   local dir=$1 frames=$2 every=$3 extra=$4 name
-  name="mnx-replays-$(basename "$dir")-$$"
+  name="${MU_DOCKER_NAME:-mnx}-replays-$(basename "$dir")-$$"
   timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "$name" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" \
     -e FRAMES="$frames" -e EVERY="$every" -e EXTRA="$extra" -e SDL_AUDIODRIVER="${MU_AUDIO_DRIVER:-dummy}" -e SDL_AUDIO_DRIVER="${MU_AUDIO_DRIVER:-dummy}" -e SDL_AUDIO_DISK_OUTPUT_FILE=/out/out.raw -e VOLUME="${MU_VOLUME:-0}" -e MU_ENV="${MU_ENV:-}" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &

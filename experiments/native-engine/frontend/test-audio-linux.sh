@@ -26,7 +26,7 @@ run() {   # $1 folder, $2 frames, $3 container name suffix, $4 extra arguments
   local dir=$1 frames=$2 name=$3 extra=$4
   local mods=(); [ -n "${MODS:-}" ] && mods=(-v "$MODS:/out/mods:ro")
   mkdir -p "$dir/shots"
-  timeout "${MU_TEST_LIMIT:-600}" docker run --rm --name "mnx-hw-audio-$name-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} \
+  timeout "${MU_TEST_LIMIT:-600}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-hw}-audio-$name-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} \
     -e FRAMES="$frames" -e EXTRA="$extra" -e SDL_AUDIO_DRIVER=disk -e SDL_AUDIO_DISK_OUTPUT_FILE=/out/out.raw "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
