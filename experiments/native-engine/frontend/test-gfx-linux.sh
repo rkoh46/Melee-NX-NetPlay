@@ -17,8 +17,8 @@
 #   video     menu video backgrounds: made-up clips as css.mp4 and sss.mp4 (needs build.sh ffmpeg)
 #   border-png   border art from a PNG (Borders/sunset.png, made here) beside the 4:3 picture
 #   border-video  border art from a looping MP4 (Borders/loop.mp4, made here; needs build.sh ffmpeg): the bars change between shots
-#   shader    a RetroArch preset written here (Shaders/scanlines: two passes, an alias, a LUT picture, OriginalHistory1, parameters
-#             set by the preset; needs build.sh glslang): compiled, running, screenshots; then the same match without it, and the
+#   shader    a RetroArch preset written here (Shaders/scanlines: two passes, an alias, a float framebuffer, a LUT picture,
+#             OriginalHistory1, the last pass's own feedback, parameters set by the preset; needs build.sh glslang): compiled, running, screenshots; then the same match without it, and the
 #             render thread's aurora_end_frame median of both (the present pass's cost on Mesa's software Vulkan driver)
 #   shader-bad  a preset naming a missing file and a shader that does not compile: the reasons logged, the game drawn as usual
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
@@ -234,9 +234,11 @@ layout(location = 0) out vec4 FragColor;
 layout(set = 0, binding = 2) uniform sampler2D Soft;
 layout(set = 0, binding = 3) uniform sampler2D OriginalHistory1;
 layout(set = 0, binding = 4) uniform sampler2D MaskTex;
+layout(set = 0, binding = 5) uniform sampler2D PassFeedback1;
 void main() {
   vec3 c = texture(Soft, vTexCoord).rgb;
   c = max(c, texture(OriginalHistory1, vTexCoord).rgb * params.PERSISTENCE);
+  c = max(c, texture(PassFeedback1, vTexCoord).rgb * 0.1);
   float line = fract(vTexCoord.y * params.LINES);
   float beam = 1.0 - params.SCANLINE_STRENGTH * pow(abs(line - 0.5) * 2.0, 2.0);
   vec3 mask = mix(vec3(1.0), texture(MaskTex, gl_FragCoord.xy * params.MaskTexSize.zw).rgb, params.MASK_STRENGTH);
@@ -249,6 +251,7 @@ shader0 = soften.slang
 filter_linear0 = false
 scale_type0 = source
 scale0 = 1.0
+float_framebuffer0 = true
 shader1 = scanlines.slang
 filter_linear1 = true
 scale_type1 = viewport
