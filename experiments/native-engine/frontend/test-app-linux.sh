@@ -108,7 +108,7 @@ report() {
   local dir=$1
   echo "== $(basename "$dir")"
   [ -f "$dir/harness.log" ] && cat "$dir/harness.log"
-  grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|skins off online|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40}
+  grep -hE "^app:|^play: (started|settings|options|online|match|stopped|cannot)|^update:|^menu:|^picture: controller script|sign-in|skins off online|services check|online connection|opponent found|exit code|instance exit|DIVERGED|desync|STOPPED|---- done" "$dir"/console*.log 2>/dev/null | cut -c1-240 | tail -${MU_REPORT_LINES:-40} || true   # a case with sub-runs (phob) has no console.log of its own
   echo "shots: $(ls "$dir/shots" 2>/dev/null | wc -l | tr -d ' ')"
   if [ -n "${MU_SANITIZE:-}" ]; then
     echo "sanitizer reports: $(find "$dir" -name 'san.*' | wc -l | tr -d ' ') files, $(find "$dir" -name 'san.*' -exec cat {} + 2>/dev/null | grep -cE '^(WARNING: ThreadSanitizer|==[0-9]+==ERROR: AddressSanitizer)') reports"
@@ -302,7 +302,9 @@ for case in "$@"; do
       app=$!
       wait_log /out/console2.log "online menu: row 1" 120 && sleep 3
       pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
-      focus "Load this profile"; tap A; sleep 0.5; tap START; sleep 1.5; tap X 0.2
+      # The rows above the profiles grew (PhobGCC): a longer walk than focus allows (it timed out since 0.4.7).
+      for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console2.log | tail -1)" = "settings: focus Load this profile" ] && break; tap DD 0.08 0.25; done
+      tap A; sleep 0.5; tap START; sleep 1.5; tap X 0.2
       wait $app'
     echo "second start:"; grep -E "controls:|menu: the game gets" "$dir/console2.log" | cut -c1-160
     echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"

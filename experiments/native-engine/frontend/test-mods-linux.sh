@@ -106,7 +106,7 @@ for case in "$@"; do
         export DISPLAY=:99
         for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
         pad() { printf "%s\n" "$1" > /out/pad.txt; }
-        tap() { pad "$1"; sleep 0.2; pad ""; sleep 0.45; }
+        tap() { pad "$1"; sleep 0.08; pad ""; sleep 0.45; }   # a short press: a longer one let the D-pad repeat past a row
         focus() { for i in $(seq 140); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus $1" ] && return 0; tap ${2:-DD}; done; echo "TIMEOUT focus $1"; return 1; }
         wait_log() { for i in $(seq $(( $2 * 10 ))); do grep -aq "$1" /out/console.log 2>/dev/null && return 0; sleep 0.1; done; return 1; }
         pad ""
@@ -117,7 +117,9 @@ for case in "$@"; do
         # Start + D-pad Up + Z (melee-unlocked'"'"'s Practice chord; outside offline Training it opens the menu on its Training page):
         # the walk through the categories from VIDEO depended on where the panel had its focus and timed out when it was not there.
         pad "START DU Z"; sleep 0.3; pad ""; sleep 1.5
-        focus "Practice CPU"; tap DR
+        # The panel opens on GAME with its focus at the category'"'"'s top; the Training rows sit far below (more with mod profiles).
+        for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus Practice CPU" ] && break; pad DD; sleep 0.08; pad ""; sleep 0.25; done
+        tap DR
         focus "Random numbers (items, turnips)"; tap DR
         focus "Random numbers: seed number"; tap DR; tap DR; tap DR
         focus "Practice CPU: save to slot 1"; tap A
@@ -316,7 +318,9 @@ open(sys.argv[1], "w").write("\n".join(L) + "\n")
 PY
     # tmce-osd: the run is ended by the time limit (240 s): with the Lab's menu used, the frame limit was not reached in time.
     [ "$case" = tmce-osd ] && export MU_TEST_LIMIT="${MU_TEST_LIMIT:-240}"
-    MU_MODS_DIR="$tmce_mods" run "$dir" "$(case $case in tmce-lab) echo 5600;; tmce-osd) echo 4000;; *) echo 2600;; esac)" "$([ "$case" = tmce-osd ] && echo 1 || echo 2)" ""
+    frames=2600; every=2   # (no case inside $(...): macOS's bash 3.2 cannot parse it)
+    if [ "$case" = tmce-lab ]; then frames=5600; elif [ "$case" = tmce-osd ]; then frames=4000; every=1; fi
+    MU_MODS_DIR="$tmce_mods" run "$dir" "$frames" "$every" ""
     echo "card folder: $(ls "$dir/card-tmce" 2>/dev/null | tr '\n' ' ')"
     grep -h "scene: major" "$dir/console.log" | tail -4
     ;;
