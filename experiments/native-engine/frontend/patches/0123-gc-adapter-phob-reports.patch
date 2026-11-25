@@ -1,0 +1,50 @@
+PhobGCC settings on a stock controller (Melee-NX-NetPlay 0.4.7): the adapter reader (1 ms poll) hands every raw 37-byte report to
+frontend/src/phob_adapter.cpp, which runs the firmware's loop on this thread as melee-unlocked's gc_adapter.cpp does, and the poll takes
+each port's processed controller when that port's settings are on. Against a build-time copy of port/runtime/host/gc_adapter_usbhs.cpp.
+--- a/port/runtime/host/gc_adapter_usbhs.cpp
++++ b/port/runtime/host/gc_adapter_usbhs.cpp
+@@ -49,6 +49,12 @@
+ int g_interval_ms = 0;
+ 
+ uint64_t now_ms() { return armTicksToNs(armGetSystemTick()) / 1000000ull; }
++}  // namespace
++// Melee-NX-NetPlay (frontend/patches/0123): PhobGCC settings on a stock controller (frontend/src/phob_adapter.cpp). Every raw
++// report, on this reader thread, and each port's processed controller when the game reads them. Weak: nothing without it.
++extern "C" __attribute__((weak)) void mu_frontend_adapter_report(const uint8_t* report37, uint64_t time_us);
++extern "C" __attribute__((weak)) int mu_frontend_adapter_pad(int port, uint16_t* buttons, int8_t sticks[4], uint8_t triggers[2]);
++namespace {
+ 
+ bool post(UsbHsClientEpSession* ep, uint8_t* buf, uint32_t size, uint32_t* got) {
+   return R_SUCCEEDED(usbHsEpPostBuffer(ep, buf, size, got));
+@@ -65,10 +71,13 @@
+     if (post(&g_in, g_in_buf, 37, &got)) {
+       failures = 0;
+       if (got == 37 && g_in_buf[0] == 0x21) {
+-        std::lock_guard<std::mutex> lk(g_mutex);
+-        std::memcpy(g_report, g_in_buf, 37);
+-        g_have_report = true;
+-        ++reports;
++        {
++          std::lock_guard<std::mutex> lk(g_mutex);
++          std::memcpy(g_report, g_in_buf, 37);
++          g_have_report = true;
++          ++reports;
++        }
++        if (mu_frontend_adapter_report) mu_frontend_adapter_report(g_in_buf, armTicksToNs(armGetSystemTick()) / 1000ull);   // patches/0123
+       }
+     } else if (++failures > 50) {
+       log("gc adapter: reads failing, adapter disconnected");
+@@ -231,6 +240,13 @@
+     p.sub_x = axis(c[5], o.cx); p.sub_y = axis(c[6], o.cy);
+     p.trig_l = (uint8_t)(c[7] > o.tl ? c[7] - o.tl : 0);
+     p.trig_r = (uint8_t)(c[8] > o.tr ? c[8] - o.tr : 0);
++    if (mu_frontend_adapter_pad) {   // patches/0123: the port's PhobGCC settings, when on
++      int8_t sticks[4]; uint8_t triggers[2]; uint16_t buttons = 0;
++      if (mu_frontend_adapter_pad(port, &buttons, sticks, triggers)) {
++        p.button = buttons; p.stick_x = sticks[0]; p.stick_y = sticks[1]; p.sub_x = sticks[2]; p.sub_y = sticks[3];
++        p.trig_l = triggers[0]; p.trig_r = triggers[1];
++      }
++    }
+     mask |= 1u << port;
+   }
+   g_ports.store(mask);

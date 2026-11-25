@@ -252,7 +252,7 @@ void place(const std::string& page, int* cat, std::string* title) {
     {"Picture", 0, "Picture"}, {"Game options", 2, "Game"}, {"Picture and HUD", 2, "HUD"}, {"Community codes", 2, "Community codes"},
     {"Computer players", 2, "Computer players"}, {"Game", 2, "Input"}, {"Online", 2, "Online"}, {"Training", 2, "Training"},
     {"Replays", 2, "Replays"}, {"Overlays", 4, "Overlays"}, {"Mods", 7, "Game mods"}, {"Controller setup", 3, "Controller setup"},
-    {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}, {"Audio", 1, "Output"}};
+    {"Controller bindings", 3, "Controller bindings"}, {"Controller profiles", 3, "Controller profiles"}, {"Audio", 1, "Output"}, {"PhobGCC", 3, "PhobGCC (GameCube adapter)"}};
   for (const P& p : table) if (page == p.page) { *cat = p.cat; *title = p.title; return; }
   *cat = 2; *title = page;
 }
@@ -465,7 +465,8 @@ std::array<Category, 8> build_rows(bool in_game) {
     {1, "Menu sounds", "Not wired on the Switch yet."},
     {2, "Background input, Discord", "No other windows or Discord on the console."},
     {2, "YouGame", "Left out: melee-unlocked's own online service."},
-    {3, "Keyboard and HID controller editors, PhobGCC menu", "The Switch's controllers come through the system and the GameCube adapter: the rows above."},
+    {3, "Keyboard and HID controller editors", "The Switch's controllers come through the system and the GameCube adapter: the rows above."},
+    {3, "PhobVision screens (stick maps, scope plots, reaction test), named Phob setups, the remap editor", "Not on the Switch yet: the PhobGCC rows above set the firmware's values; the remap is read from PhobGCC/port<N>.ini."},
     {4, "Controller overlay placement (dragging)", "No pointer: the overlays have fixed places."},
     {5, "Menu styles (Dashboard, GD Melee, Radial, Wide, Simple, legacy), custom accent wheel, transparency", "The Clean side style only (melee-unlocked's default)."},
     {6, "Add, edit or import a code here", "Needs a keyboard: put codes in GeckoCodes.ini on the SD card (above)."},

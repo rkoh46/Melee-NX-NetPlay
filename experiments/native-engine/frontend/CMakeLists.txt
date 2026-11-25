@@ -196,6 +196,9 @@ get_filename_component(RUN_TREE "${CMAKE_CURRENT_LIST_DIR}/../runner" ABSOLUTE)
 file(GLOB MU_FEATURE_SOURCES CONFIGURE_DEPENDS "${FE}/features/*.cpp" "${RUN_TREE}/features/*.cpp")
 if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
   add_library(mu_features OBJECT ${MU_FEATURE_SOURCES})
+  # PhobGCC settings on a stock controller: the report path (src/phob_adapter.cpp, patches/0123) and melee-unlocked's firmware
+  # port, compiled from the fetched tree (host/phob.cpp, GPL-3.0-only).
+  target_sources(mu_features PRIVATE "${FE}/phob_adapter.cpp" "${MU}/port/runtime/host/phob.cpp")
   set_target_properties(mu_features PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
   target_include_directories(mu_features PRIVATE "${FE}" "${FE}/features" "${RUN}" "${RUN_TREE}" "${RUN_TREE}/features" "${MU}/port/linux" "${MU}/port/runtime/abi" "${MU}/port/runtime/hle"
     "${MU}/port/runtime/host" "${MU}/port/runtime/ppc" "${MU}/port/runtime/gx" "${MU}/native")

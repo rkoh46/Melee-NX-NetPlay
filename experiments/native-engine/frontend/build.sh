@@ -144,9 +144,14 @@ sync_tree() {
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
   mkdir -p "$gen/app"
-  for f in input_sdl.cpp input_script.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
+  for f in input_sdl.cpp input_script.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
     cmp -s "$repo/port/runtime/host/$f" "$gen/app/$f" || cp "$repo/port/runtime/host/$f" "$gen/app/$f"
   done
+  # The GameCube adapter over usb:hs, with patches/0123: its raw reports for PhobGCC settings (src/phob_adapter.cpp).
+  rm -rf "$gen/adaptersrc"; mkdir -p "$gen/adaptersrc/port/runtime/host"; cp "$repo/port/runtime/host/gc_adapter_usbhs.cpp" "$gen/adaptersrc/port/runtime/host/"
+  patch -s -p1 -d "$gen/adaptersrc" < "$here/patches/0123-gc-adapter-phob-reports.patch"
+  cmp -s "$gen/adaptersrc/port/runtime/host/gc_adapter_usbhs.cpp" "$gen/app/gc_adapter_usbhs.cpp" || cp "$gen/adaptersrc/port/runtime/host/gc_adapter_usbhs.cpp" "$gen/app/gc_adapter_usbhs.cpp"
+  rm -rf "$gen/adaptersrc"
   # The sound output follows the game's speed (online time sync; patches/0110).
   rm -rf "$gen/audiosrc"; mkdir -p "$gen/audiosrc/port/runtime/host"; cp "$repo/port/runtime/host/audio_sdl.cpp" "$gen/audiosrc/port/runtime/host/"
   patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0110-audio-follows-game-speed.patch"
