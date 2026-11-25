@@ -339,6 +339,8 @@ int play_main() {
   }
   if (fixedmap_relaunch_count()) say("play: started over %d time(s) to get a usable layout", fixedmap_relaunch_count());
   if (options.iso.empty()) { say("play: --iso PATH is needed"); log_close(); return 2; }
+  if (options.app && (!file_exists(options.iso) || options.iso.size() < 4 || options.iso.compare(options.iso.size() - 4, 4, ".iso") != 0))
+    app_disc_convert(&options.iso);   // an RVZ or WIA image becomes the plain disc image once (melee-unlocked's disc_rvz.cpp)
   if (options.app && !file_exists(options.iso)) {
     say("play: cannot start: no disc image at %s", options.iso.c_str());
     app_message_screen("DISC NOT FOUND", {"Melee-NX-NetPlay needs your Super Smash Bros. Melee disc image (NTSC 1.02) at", options.iso, "",

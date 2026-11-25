@@ -122,6 +122,9 @@ void app_report();                             // the log lines saying what the 
 std::string app_ini(const std::string& key, const std::string& fallback);
 void app_ini_set(const std::string& key, const std::string& value);   // and writes launcher.ini
 void app_backup_card();                        // the first session of this app copies the memory card once
+// No disc image at `iso`, but a Dolphin RVZ or WIA image of it beside it (or `iso` itself is one): converted once into the plain
+// image at `iso` (melee-unlocked's disc_rvz.cpp), with a screen while it runs. True when `iso` is now a disc image.
+bool app_disc_convert(std::string* iso);
 // Simulation thread (lane 0, the game's poll) or the input-suggestion thread (lane 1), under play_io's input lock:
 // remapping, deadzones and the rest of the controller setup (host::PadState[4]).
 void app_pad_postprocess(void* pads4, int lane);

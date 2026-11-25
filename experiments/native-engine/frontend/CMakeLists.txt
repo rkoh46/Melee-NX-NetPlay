@@ -336,6 +336,26 @@ if(EXISTS "${GEN}/gecko/user_gecko.cpp")
   endif()
 endif()
 
+# RVZ and WIA discs (app.cpp app_disc_convert: a GALE01.rvz or .wia becomes GALE01.iso at start): melee-unlocked's disc_rvz.cpp and the
+# bzip2 it vendors, compiled from the fetched tree; LZMA from mu_modinstall's LZMA SDK objects, Zstandard the system's or
+# devkitPro's (the same one replays.cpp links). Builds with a picture only (the app).
+if(NOT MU_FE_VARIANT STREQUAL "null" AND EXISTS "${MU}/port/app/disc_rvz.cpp")
+  set(_tp "${MU}/port/third_party")
+  add_library(mu_rvz OBJECT "${MU}/port/app/disc_rvz.cpp" "${_tp}/bzip2/blocksort.c" "${_tp}/bzip2/huffman.c" "${_tp}/bzip2/crctable.c"
+    "${_tp}/bzip2/randtable.c" "${_tp}/bzip2/compress.c" "${_tp}/bzip2/decompress.c" "${_tp}/bzip2/bzlib.c")
+  set_target_properties(mu_rvz PROPERTIES CXX_STANDARD 17)
+  file(WRITE "${CMAKE_BINARY_DIR}/zstdshim/zstd/zstd.h" "#include <zstd.h>\n")
+  target_include_directories(mu_rvz BEFORE PRIVATE "${CMAKE_BINARY_DIR}/zstdshim")
+  target_include_directories(mu_rvz PRIVATE "${_tp}")
+  target_compile_definitions(mu_rvz PRIVATE BZ_EXPORT)
+  target_compile_options(mu_rvz PRIVATE -O2 $<$<COMPILE_LANGUAGE:C>:-w>)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_rvz SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+  target_compile_definitions(mu_gx PRIVATE MU_FE_RVZ=1)
+  target_include_directories(mu_gx PRIVATE "${MU}/port/app")   # disc_rvz.h for app.cpp (app_disc_convert)
+endif()
+
 # The program, twice: with the netplay object of ../build.sh (copied by build.sh sync: everything behind net_host,
 # its other symbols local), and with the services variant of that object when there is one.
 function(mu_program target netplay_object suffix)
@@ -359,6 +379,9 @@ function(mu_program target netplay_object suffix)
   endif()
   if(TARGET mu_jukebox)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_jukebox>)
+  endif()
+  if(TARGET mu_rvz)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_rvz>)
   endif()
   if(TARGET mu_gecko AND TARGET mu_features)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_gecko>)
