@@ -151,6 +151,12 @@ void publish(const std::string& slot, std::shared_ptr<const std::vector<uint8_t>
   }
   const uint32_t length = uint32_t(bytes->size()), span = (length + 0x7FFFu) & ~0x7FFFu;
   if (next_start + uint64_t(span) > kRangeEnd) { say("cosmetics: the skin range is full; %s keeps its file", slot.c_str()); return; }
+  // The slot's older copies go, but the newest one before this (a read the game started under the old entry finishes).
+  {
+    size_t kept = 0;
+    for (size_t i = served.size(); i-- > 0;)
+      if (served[i].slot == slot && ++kept > 1) served.erase(served.begin() + ptrdiff_t(i));
+  }
   served.push_back({next_start, length, std::move(bytes), slot});
   linux_host::fe_disc_remove(slot.c_str());
   linux_host::fe_disc_set(slot.c_str(), next_start, length);
