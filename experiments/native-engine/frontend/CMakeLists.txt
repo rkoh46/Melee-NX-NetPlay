@@ -220,6 +220,8 @@ else()
   endif()
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
+  # A USB keyboard on the console (libnx's HID keyboard): melee-unlocked's keyboard layout as a controller, typing into ImGui.
+  target_sources(mu_gx PRIVATE "${FE}/usb_keyboard.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the
   # Mods screens of melee-unlocked's interface over it (mu_mods.cpp: the home screen's Mods page, the panel's MODS).
   target_sources(mu_gx PRIVATE "${FE}/mods_service.cpp" "${FE}/mu_mods.cpp" "${FE}/modlooks.cpp")   # modlooks: Get mod looks

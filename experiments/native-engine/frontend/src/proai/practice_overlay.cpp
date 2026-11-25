@@ -13,6 +13,7 @@
 #include <imgui.h>
 
 namespace fe {
+__attribute__((weak)) bool kb_seen();   // usb_keyboard.cpp: a USB keyboard has been used this session
 void practice_menu_draw(float display_w, float display_h, float game_x0, float game_y0, float game_x1, float game_y1) {
   const proai::MenuView v = proai::menu_view();
   if (!v.open && !v.training) return;   // nothing of it outside offline Training
@@ -30,7 +31,9 @@ void practice_menu_draw(float display_w, float display_h, float game_x0, float g
   f.buttons = v.buttons;
   f.stick_x = v.stick_x;
   f.stick_y = v.stick_y;
-  f.keyboard = false;              // the controller drives it (no keyboard on the console)
+  // A USB keyboard in use (usb_keyboard.cpp feeds its keys to ImGui): arrows, Enter, Escape and typing drive it too, as upstream's
+  // keyboard does (the connect-code keyboard takes typed letters and digits). Otherwise the controller drives it.
+  f.keyboard = &fe::kb_seen && fe::kb_seen();
   f.hint = v.hint && v.training;   // the corner hint in Training (upstream: every Training match unless turned off)
   f.intro = false;                 // upstream disables its banner too (kBanner false); the corner hint stays
   f.unlocked = v.unlocked;

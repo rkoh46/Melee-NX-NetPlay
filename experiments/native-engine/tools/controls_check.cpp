@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <sys/stat.h>
 
@@ -204,6 +205,40 @@ int main(int argc, char** argv) {
     const auto list = dolphin_list(folder);
     CHECK(list.size() == 3 && list[0].section == "GCPad1" && list[2].name == "Melee");
     CHECK(dolphin_read_entry(list[2]).ok);
+  }
+
+  // A USB keyboard (Kind::Keyboard, usb_keyboard.cpp): upstream's default_key_bindings in virtual-key codes, Shift walks, the
+  // box rule with Mod X bound, and a "keyboard" profile in upstream's format.
+  {
+    const Config kb = Config::defaults(Kind::Keyboard);
+    CHECK(kb.mask[A] == 'Z' && kb.mask[B] == 'X' && kb.mask[Start] == 0x0D && kb.mask[L] == 'Q' && kb.mask[SLeft] == 0x25 && kb.mask[StickMod] == 0x10);
+    uint8_t keys[32] = {};
+    auto key = [&](int vk, bool on) { if (on) keys[vk >> 3] |= uint8_t(1u << (vk & 7)); else keys[vk >> 3] &= uint8_t(~(1u << (vk & 7))); };
+    auto press = [&](const Config& c) { State st; Raw raw; raw.keys = keys; Pad p = neutral(); apply(c, raw, 0, 0, st, p); return p; };
+    key('Z', true); key('Q', true);
+    Pad p = press(kb); CHECK(p.button == (0x0100 | 0x0040) && p.trig_l == 255);
+    key('Z', false); key('Q', false); key(0x27, true);
+    p = press(kb); CHECK(p.stick_x == 127 && p.stick_y == 0);
+    key(0x10, true);
+    p = press(kb); CHECK(p.stick_x == 64);   // half a push, upstream's stick modifier default
+    key(0x10, false); key(0x27, false); key('I', true);
+    p = press(kb); CHECK(p.sub_y == 127 && p.button == 0);
+    key('I', false);
+    Config moved = kb; moved.mask[A] = 'N';
+    key('Z', true); p = press(moved); CHECK(p.button == 0);
+    key('Z', false); key('N', true); p = press(moved); CHECK(p.button == 0x0100);
+    key('N', false);
+    Config boxed = kb; boxed.mask[ModX] = 'M';
+    key(0x27, true); key('M', true); p = press(boxed); CHECK(p.stick_x == 53);   // B0XX Mod X horizontal
+    key(0x27, false); key('M', false);
+    CHECK(moved.serialize() == "m0=78" && Config::parse(Kind::Keyboard, "m0=78").same_as(moved));
+    Profile prof; prof.config = moved;
+    CHECK(profile_save(tmp, "Keyboard 1", prof));
+    Profile back; back.config = Config::defaults(Kind::Keyboard);
+    CHECK(profile_load(tmp, "Keyboard 1", back) && back.config.mask[A] == 'N' && back.config.mask[B] == 'X');
+    { std::ifstream f(tmp + "/Keyboard 1.profile"); std::string all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); CHECK(all.find("device keyboard") != std::string::npos && all.find("A 78") != std::string::npos); }
+    Profile wrong; wrong.config = Config::defaults(Kind::Sdl);
+    CHECK(!profile_load(tmp, "Keyboard 1", wrong));   // never another kind's file
   }
 
   std::printf("controls_check: %d checks, %d failed\n", checks, failed);

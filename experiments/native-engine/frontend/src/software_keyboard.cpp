@@ -3,6 +3,7 @@
 // keys, so the console's own keyboard takes the screen until the player presses OK or cancels.
 // Off the console (Linux tests) there is no applet: MU_TEST_KEYBOARD="words|more words|-" answers the calls in order, one
 // entry each ("-" cancels); without it every call is cancelled.
+// A USB keyboard in use (usb_keyboard.cpp, also MU_TEST_KEYS off the console) takes the place of both: a box over the game.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
 
@@ -14,7 +15,12 @@
 #endif
 
 namespace fe {
+// usb_keyboard.cpp (builds with a picture): with a USB keyboard in use, the words are typed on it in a box over the game.
+__attribute__((weak)) bool kb_prompt(const char* header, const char* guide, std::string& text, bool* ok);
+
 bool software_keyboard(const char* header, const char* guide, std::string& text) {
+  bool typed = false;
+  if (&kb_prompt && kb_prompt(header, guide, text, &typed)) return typed;
 #ifdef __SWITCH__
   static std::mutex one_at_a_time;   // the applet is one at a time
   std::lock_guard<std::mutex> lock(one_at_a_time);

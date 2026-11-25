@@ -45,7 +45,10 @@ inline constexpr bool is_analog_action(int i) { return i == LAnalog || i == RAna
 //  Adapter: a GameCube controller on the adapter; the bits are its own buttons in the pad layout (kPadBit),
 //           where L and R are the clicks at the end of the triggers' travel (as upstream's gcadapter tables, so a
 //           gcadapter profile saved by melee-unlocked on a PC loads here unchanged).
-enum class Kind : uint8_t { Sdl, Adapter };
+//  Keyboard: a USB keyboard (the console's HID keyboard, usb_keyboard.cpp); mask[i] is the Windows virtual-key code of the key
+//           bound to action i (upstream's KeyBindings: one key per action, 0 unbound), so upstream's "keyboard" profiles and
+//           its default layout (default_key_bindings) mean the same keys here.
+enum class Kind : uint8_t { Sdl, Adapter, Keyboard };
 inline constexpr uint32_t kSrcLT = 1u << 28, kSrcRT = 1u << 29;
 
 inline constexpr int kDefaultTriggerClick = 200;   // upstream: the physical click is kept at this value
@@ -72,6 +75,11 @@ struct Config {
     if (kind == Kind::Sdl) {
       c.mask[LAnalog] = kSrcLT;   // the trigger's own travel, as Aurora's PAD gives it
       c.mask[RAnalog] = kSrcRT;
+    } else if (kind == Kind::Keyboard) {   // upstream default_key_bindings, in its virtual-key codes
+      static constexpr uint8_t keys[kActions] = {'Z', 'X', 'C', 'V', 'E', 0x0D /* Return */, 'Q', 'W', 'T', 'G', 'F', 'H',
+                                                 'I', 'K', 'J', 'L', 0x26, 0x28, 0x25, 0x27 /* the arrows: up, down, left, right */,
+                                                 0, 0, 0, 0, 0, 0, 0x10 /* Shift walks */};
+      for (int i = 0; i < kActions; ++i) c.mask[i] = keys[i];
     } else {   // upstream default_gc_bindings: the identity, L / R travel from the triggers themselves
       for (int i = 0; i <= DRight; ++i) c.mask[i] = kPadBit[i];
       c.mask[LAnalog] = kPadL;
@@ -169,7 +177,9 @@ struct Pad { uint16_t button; int8_t stick_x, stick_y, sub_x, sub_y; uint8_t tri
 struct Raw {
   uint32_t buttons = 0;     // Sdl: bit b = SDL button b held; Adapter: the pad bits as the adapter reported them
   uint8_t lt = 0, rt = 0;   // the triggers' travel (0..255)
+  const uint8_t* keys = nullptr;   // Keyboard: 256 bits, bit v = virtual key v held
 };
+inline bool key_held(const uint8_t* keys, uint32_t vk) { return keys && vk && vk < 256 && (keys[vk >> 3] >> (vk & 7) & 1); }
 
 // ---- upstream input_bindings.h, adapted ----
 
@@ -260,6 +270,7 @@ inline uint8_t analog_binding_travel(uint32_t mask, int level, uint32_t buttons,
 inline bool binding_pressed(const Config& c, int i, const Raw& raw, int trigger_point) {
   const uint32_t m = c.mask[i];
   if (!m) return false;
+  if (c.kind == Kind::Keyboard) return key_held(raw.keys, m);
   if (c.kind == Kind::Sdl) {
     const int t = c.level[i] ? c.level[i] : trigger_point;
     if ((m & kSrcLT) && raw.lt > t) return true;
@@ -283,7 +294,20 @@ struct State { box::State box; SnapbackAxis snap[2]; };
 inline uint32_t apply(const Config& c, const Raw& raw, int trigger_point, double now, State& st, Pad& pad) {
   uint32_t actions = 0;
   const bool sdl = c.kind == Kind::Sdl;
-  if (!c.bindings_default()) {
+  if (c.kind == Kind::Keyboard) {   // upstream keyboard_apply_bindings: every action from the table, always
+    pad = Pad{};
+    for (int i = 0; i < kActions; ++i)
+      if (binding_pressed(c, i, raw, 0)) { actions |= 1u << i; if (i <= DRight) pad.button |= kPadBit[i]; }
+    // A key on L / R travel presses it to its level (upstream's level, a light shield without one); L or R itself bottoms out.
+    if (actions & (1u << LAnalog)) pad.trig_l = uint8_t(c.level[LAnalog] ? c.level[LAnalog] : kDefaultAnalogDepth);
+    if (actions & (1u << RAnalog)) pad.trig_r = uint8_t(c.level[RAnalog] ? c.level[RAnalog] : kDefaultAnalogDepth);
+    if (pad.button & kPadL) pad.trig_l = 255;
+    if (pad.button & kPadR) pad.trig_r = 255;
+    apply_cstick_actions(actions, pad.sub_x, pad.sub_y);
+    if (!apply_box_actions(c.box_mode(), actions, pad, st.box)) apply_stick_actions(actions, pad.stick_x, pad.stick_y, c.modifier_percent);
+    const uint8_t shield = (actions & (1u << MidShield)) ? box::kMidShield : (actions & (1u << LightShield)) ? box::kLightShield : 0;
+    if (shield > pad.trig_r) pad.trig_r = shield;
+  } else if (!c.bindings_default()) {
     if (!sdl) {   // the adapter: every action from its own table (upstream gc_apply_bindings)
       pad.button = 0;
       for (int i = 0; i < kActions; ++i)

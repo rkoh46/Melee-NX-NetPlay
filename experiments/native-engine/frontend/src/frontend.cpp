@@ -70,6 +70,7 @@ extern "C" void switch_set_pthread_cores(int preferred, uint64_t mask);   // swi
 namespace linux_host { uint64_t slept_nanoseconds(); }   // ../runner/mu_elf_bridge.h: the host's own 60 Hz waits so far
 
 namespace fe {
+namespace features { __attribute__((weak)) bool practice_menu_open(); }   // features/proai.cpp: the Practice menu is open
 Options options;
 uint64_t sim_cost[3] = {};
 bool in_resim = false;
@@ -563,6 +564,9 @@ void* render_main(void*) {
         feature_overlay(&overlay, w, h);
         if (!overlay.shapes.empty() || !overlay.texts.empty()) host::overlay_imgui_draw(overlay);
         if (options.app) mu_ui::panel_draw(w, h);   // melee-unlocked's settings panel (mu_panel.cpp), over everything
+        // A USB keyboard (usb_keyboard.cpp): its keys to ImGui, and the box a screen's words are typed in, over the panel. The
+        // Practice menu's code keyboard takes typed letters itself while it is open.
+        kb_frame(w, h, &features::practice_menu_open && features::practice_menu_open());
       });
       backend = std::move(aurora_backend);
       st.backend_name = "Aurora/Vulkan";

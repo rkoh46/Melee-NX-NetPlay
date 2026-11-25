@@ -42,6 +42,9 @@ __attribute__((weak)) void phob_menu_pads(MuPadStatus pads[4]);   // features/ph
 }
 
 namespace fe {
+bool kb_seen();                                  // usb_keyboard.cpp: a USB keyboard has been used this session
+void kb_keys(uint8_t out[32]);                   // the virtual keys held now
+std::string kb_key_name(uint32_t vk);
 namespace {
 using namespace controls;
 
@@ -134,6 +137,7 @@ void refresh_devices_locked(bool files = true) {
   const uint32_t ports = adapter_ports();
   for (int p = 0; p < 4; ++p)
     if (ports & (1u << p)) devices.push_back({"gc" + std::to_string(p + 1), "GameCube controller, adapter port " + std::to_string(p + 1), Kind::Adapter, p});
+  if (kb_seen()) devices.push_back({"kb", "USB keyboard", Kind::Keyboard, -1});   // once one of its keys was pressed
   selected = 0;
   for (size_t i = 0; i < devices.size(); ++i) if (devices[i].id == keep) selected = i;
   if (std::getenv("MU_TEST_VIRTUAL_PAD")) say("controls: test: %zu devices (%s)", devices.size(), devices.empty() ? "none" : devices[0].name.c_str());
@@ -157,7 +161,9 @@ std::string source_name(Kind kind, uint32_t mask, uint8_t level) {
   if (!mask) return "Not bound";
   std::string out;
   auto add = [&](const std::string& s) { out += out.empty() ? s : " + " + s; };
-  if (kind == Kind::Sdl) {
+  if (kind == Kind::Keyboard) {
+    add(kb_key_name(mask));
+  } else if (kind == Kind::Sdl) {
     if (mask & kSrcLT) add("ZL / left trigger");
     if (mask & kSrcRT) add("ZR / right trigger");
     for (int b = 0; b < 28; ++b) if (mask & (1u << b)) add(sdl_button_name(b));
@@ -186,6 +192,20 @@ void controls_apply_adapter(int port, void* pad_v, int lane) {
   raw.buttons = p.button; raw.lt = p.trig_l; raw.rt = p.trig_r;
   Pad g{p.button, p.stick_x, p.stick_y, p.sub_x, p.sub_y, p.trig_l, p.trig_r};
   apply(it->second, raw, kDefaultTriggerClick, now_s(), states[lane & 1][it->first], g);
+  p.button = g.button; p.stick_x = g.stick_x; p.stick_y = g.stick_y; p.sub_x = g.sub_x; p.sub_y = g.sub_y; p.trig_l = g.trig_l; p.trig_r = g.trig_r;
+}
+
+// usb_keyboard.cpp: the keyboard's pad from the keys held (`keys`: 256 bits by virtual key), its bindings and setup (upstream's
+// default layout until changed).
+void controls_apply_keyboard(const uint8_t* keys, void* pad_v, int lane) {
+  auto& p = *static_cast<host::PadState*>(pad_v);
+  std::lock_guard<std::mutex> lock(mu);
+  const auto it = configs.find("kb");
+  const Config c = it == configs.end() ? Config::defaults(Kind::Keyboard) : it->second;
+  Raw raw;
+  raw.keys = keys;
+  Pad g{};
+  apply(c, raw, 0, now_s(), states[lane & 1]["kb"], g);
   p.button = g.button; p.stick_x = g.stick_x; p.stick_y = g.stick_y; p.sub_x = g.sub_x; p.sub_y = g.sub_y; p.trig_l = g.trig_l; p.trig_r = g.trig_r;
 }
 
@@ -219,7 +239,12 @@ bool controls_capture_frame(const void* raw_v) {
   if (!capture.active) return false;
   if (!open) { capture.active = false; return false; }
   uint32_t sources = 0;
-  if (capture.kind == Kind::Sdl) {
+  if (capture.kind == Kind::Keyboard) {   // the lowest virtual key held (the generic Shift before Left Shift); Escape cancels
+    uint8_t keys[32];
+    kb_keys(keys);
+    if (key_held(keys, 0x1B)) { capture.active = false; status = "Cancelled: binding kept"; return true; }
+    for (uint32_t vk = 1; vk < 256 && !sources; ++vk) if (key_held(keys, vk)) sources = vk;
+  } else if (capture.kind == Kind::Sdl) {
     SDL_Gamepad* pad = sdl_by_guid(capture.id);
     if (!pad) { capture.active = false; status = "The controller went away"; return true; }
     sources = sdl_buttons(pad);
@@ -246,7 +271,7 @@ bool controls_capture_frame(const void* raw_v) {
   }
   if (!capture.armed) { if (!sources) capture.armed = true; }
   else if (sources) {
-    const uint32_t pick = sources & (~sources + 1);   // the lowest one
+    const uint32_t pick = capture.kind == Kind::Keyboard ? sources : sources & (~sources + 1);   // the lowest one (a key: its code)
     for (const Device& d : devices) {
       if (d.id != capture.id) continue;
       Config c = config_locked(d);
@@ -311,7 +336,7 @@ void controls_saved(void (*put)(const std::string&, const std::string&)) {
 }
 void controls_load(const std::string& id, const std::string& text) {
   std::lock_guard<std::mutex> lock(mu);
-  const Kind kind = id.size() == 3 && id[0] == 'g' && id[1] == 'c' ? Kind::Adapter : Kind::Sdl;
+  const Kind kind = id.size() == 3 && id[0] == 'g' && id[1] == 'c' ? Kind::Adapter : id == "kb" ? Kind::Keyboard : Kind::Sdl;
   const Config c = Config::parse(kind, text);
   if (!c.is_default()) configs[id] = c;
   update_active_locked();
@@ -376,6 +401,7 @@ const char* const kSetupLabels[S_COUNT] = {"Controller", "Stick mode", "Invert s
     "Snapback filter, left/right", "Snapback filter, up/down", "Snapback filter window", "L click point", "R click point", "L trigger cap",
     "R trigger cap", "Reset these to defaults"};
 bool setup_row_shown(int r, Kind kind) {
+  if (kind == Kind::Keyboard) return r <= S_MODIFIER || r == S_RESET_ANALOG;   // keys make full pushes: no deadzones, filters or triggers
   if (kind == Kind::Adapter) return r != S_SNAP_X && r != S_SNAP_Y && r != S_SNAP_MS;   // upstream: no snapback filter on a GameCube controller
   return r != S_CLICK_L && r != S_CLICK_R;   // an SDL pad's press point is the Controls page's trigger row
 }
@@ -481,7 +507,7 @@ bool setup_change(int item, int dir) {
 std::vector<int> binding_actions_locked() {
   std::vector<int> v;
   const Device* d = device_locked();
-  for (int i = (d && d->kind == Kind::Adapter) ? 0 : CUp; i < kActions; ++i) v.push_back(i);
+  for (int i = (d && d->kind != Kind::Sdl) ? 0 : CUp; i < kActions; ++i) v.push_back(i);
   return v;
 }
 // Rows: the controller, a hint, the actions, "Reset all bindings". A or Right on an action: capture; Left: unbind.
@@ -528,7 +554,7 @@ std::string profile_value_locked(int r) {
     case P_PICK: return profile_names.empty() ? "None saved" : profile_names[profile_pick] + (profile_names.size() > 1 ? "  (" + std::to_string(profile_pick + 1) + "/" + std::to_string(profile_names.size()) + ")" : "");
     case P_DELETE: return delete_armed ? "Press A again to delete" : "";
     case P_DOLPHIN: return dolphin_entries.empty() ? "None found" : dolphin_entries[dolphin_pick].name;
-    case P_IMPORT: return d && d->kind == Kind::Adapter ? "SDL controllers only" : "";
+    case P_IMPORT: return d && d->kind != Kind::Sdl ? "SDL controllers only" : "";
     case P_STATUS: return status.empty() ? "-" : status;
     default: return "";
   }
@@ -558,7 +584,7 @@ bool profiles_change(int item, int dir) {
     case P_SAVE: case P_SAVE_NEW: {
       if (dir < 0) return false;
       const std::string name = item == P_SAVE && !profile_names.empty() ? profile_names[profile_pick]
-                             : profile_free_name(folder, d->kind == Kind::Adapter ? "GameCube" : "Controller");
+                             : profile_free_name(folder, d->kind == Kind::Adapter ? "GameCube" : d->kind == Kind::Keyboard ? "Keyboard" : "Controller");
       if (!profile_save(folder, name, profile_of_locked(*d))) { status = "Could not save " + name; return false; }
       profile_names = profile_list(folder, d->kind);
       for (size_t i = 0; i < profile_names.size(); ++i) if (profile_names[i] == name) profile_pick = i;

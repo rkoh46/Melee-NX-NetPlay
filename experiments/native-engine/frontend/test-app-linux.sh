@@ -30,6 +30,8 @@
 #   box      box mode (Mod X bound) on an adapter port: B0XX coordinates, Mod X, second-input priority (the "the game gets" lines)
 #   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
 #            settings search with the software keyboard's test answer
+#   keyboard a USB keyboard (src/usb_keyboard.cpp, the test key file in place of libnx's HID keyboard): melee-unlocked's layout as
+#            port 1, the settings search typed in the box over the game, a key rebound on Controller bindings (see the case)
 #   launcher the home screen's What's new, Language (Deutsch), launcher colour wheel and a rail picture (screenshots)
 #   replaylib the home screen's Replay Viewer: search, the session trace graph, compress all, delete to .trash and undo, the
 #            folder browser; then As played and the watch queue (needs the record and online runs, see the case)
@@ -425,6 +427,38 @@ for case in "$@"; do
         pkill -f "/b/$BIN" 2>/dev/null; wait $app 2>/dev/null; sleep 1
       done'
     grep -hE "settings: (opened|search|focus|VIDEO|categories)|keyboard:" "$dir"/console-*.log | cut -c1-160 | head -60
+    ;;
+  keyboard)
+    # A USB keyboard (src/usb_keyboard.cpp; on the console libnx's HID keyboard, here the test key file MU_TEST_KEY_FILE that stands
+    # in for it, read at the same place): (1) melee-unlocked's keyboard layout as port 1, every key of it once (the "keyboard: port 1
+    # gets" lines: Z X C V = A B X Y, Q W E = L R Z, T F G H the D-pad, I J K L the C-stick, the arrows the stick, Shift walks);
+    # (2) the settings search typed on it: the panel's search box asks for words, the box over the game takes "dead" and Enter;
+    # (3) remapping through the menu: Enter + G + E (Start + D-pad Down + Z) opens Controller bindings (MU_CONTROLS_TEST_PAGE) on
+    # the USB keyboard, the A row captures N; the panel closed (launcher.ini padx.kb=m0=78); then Z no longer gives A and N does:
+    # N on 1-P Mode's Online Play opens its page (Unranked, Direct, Teams, Party). Screenshots shots/kb-*.png.
+    make_app "$dir" 1 7200 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_TEST_KEY_FILE=/out/keys.txt MU_CONTROLS_TEST_PAGE="Controller bindings"; pad ""; : > /out/keys.txt
+      keys() { printf "%s\n" "$1" > /out/keys.txt; }
+      press() { keys "$1"; sleep ${2:-0.25}; keys ""; sleep ${3:-0.5}; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      # (Z, which is A, is left for the end: on Online Play it would open Unranked.)
+      for k in X C V Q W E T G F H I K J L Up Down Left Right "Shift Right"; do press "$k" 0.2 0.3; done
+      shot kb-layout
+      pad "L R START"; sleep 1.2; pad ""; sleep 2
+      tap A; sleep 1; focus "Search all settings" DU; tap A; sleep 1.5; shot kb-box
+      keys "type dead"; sleep 2; shot kb-box-typed
+      press Enter 0.2 1.5; shot kb-search
+      focus "Clear the search"; tap A; sleep 0.8
+      tap B; sleep 1; tap START; sleep 1.5
+      press "Enter G E" 0.3 1.5; shot kb-bindings
+      focus A; tap A; sleep 0.8; press N 0.3 1; shot kb-bound
+      tap START; sleep 1.5
+      press Z 0.2 1; press N 0.2 2; shot kb-remapped
+      wait $app'
+    grep -aE "keyboard:|controls: USB|settings: search|menu: (opened|closed)|scene: major 08" "$dir/console.log" | cut -c1-170 | head -70
+    echo "launcher.ini: $(grep '^padx' "$dir/melee-nx-netplay/launcher.ini")"
     ;;
   launcher)
     # The home screen's Play page extras: What's new (launcher.ini notesseen from an older version: it opens by itself), the

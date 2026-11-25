@@ -151,6 +151,9 @@ void hud_frame(double work_ms);                // simulation thread: the frame t
 void hud_log_line(const char* line);
 int perf_history(float* sim_ms, int capacity);   // the newest `capacity` simulation-thread frame times (oldest first); count
 void overlay_draw(int window_w, int window_h);   // overlay_draw.cpp: the overlays and picture options (render thread, Aurora builds)
+// usb_keyboard.cpp (builds with a picture): a USB keyboard's keys to the ImGui frame and the box a screen's words are typed in
+// (render thread, in the in-game overlay; `text_wanted`: another text field takes the keys this frame).
+void kb_frame(int window_w, int window_h, bool text_wanted);
 void feature_overlay(void* overlay_frame, int window_w, int window_h);   // the feature modules' HUD lines (host::OverlayFrame)           // every queued log line: the ping and the input delay come from them
 // The screens before the game (layout failure, disc missing, update, sign-in). Services program only for the
 // update and sign-in; false when the screen could not be shown (no picture).

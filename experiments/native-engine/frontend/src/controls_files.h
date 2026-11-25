@@ -32,7 +32,7 @@ struct Profile {
   bool swap_sticks = false, rumble = true;
 };
 
-const char* kind_key(Kind kind);        // "sdlgamepad", "gcadapter"
+const char* kind_key(Kind kind);        // "sdlgamepad", "gcadapter", "keyboard"
 std::string profile_clean_name(const std::string& name);   // upstream's rule: letters, digits, space - _ . ; at most 40
 std::vector<std::string> profile_list(const std::string& folder, Kind kind);
 bool profile_save(const std::string& folder, const std::string& name, const Profile& p);

@@ -391,6 +391,9 @@ extern "C" int mu_net_suggest_read(int port, uint8_t out[8]) {
   return 1;
 }
 
+// usb_keyboard.cpp (builds with a picture): a USB keyboard's pad onto its port, after the remapping of the other controllers.
+namespace fe { __attribute__((weak)) void kb_merge_pads(host::PadState pads[4], int lane); }
+
 // ---- what the app's sources expect from the rest of the app ----
 namespace host {
 uint32_t retrace_count() { return linux_host::counters().retraces; }
@@ -431,6 +434,7 @@ void menu_frame(PadState pads[4]) {
     std::memcpy(unmapped, pads, sizeof unmapped);
     fe::app_pad_postprocess(pads, fe::suggestion_read ? 1 : 0);
   }
+  if (&fe::kb_merge_pads) fe::kb_merge_pads(pads, fe::suggestion_read ? 1 : 0);
   if (fe::suggestion_read) return;                 // a read for an input suggestion: fe::menu_masks applies the masks
   if (fe::options.app) {
     if (!fe::running.load(std::memory_order_relaxed)) return;

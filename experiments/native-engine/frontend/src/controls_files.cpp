@@ -65,7 +65,7 @@ std::string trim(const std::string& s) {
 }
 }  // namespace
 
-const char* kind_key(Kind kind) { return kind == Kind::Adapter ? "gcadapter" : "sdlgamepad"; }
+const char* kind_key(Kind kind) { return kind == Kind::Adapter ? "gcadapter" : kind == Kind::Keyboard ? "keyboard" : "sdlgamepad"; }   // keyboard: upstream's virtual-key profiles
 
 std::string profile_clean_name(const std::string& name) {
   std::string out;

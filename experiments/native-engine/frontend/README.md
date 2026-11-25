@@ -347,7 +347,7 @@ controller's own pad, as pressing other buttons would: nothing new reaches the g
   kind (`sdlgamepad`, SDL button numbers). Levels and analog settings follow as `opt.` / `app.` lines, which upstream skips.
 - **Dolphin import**: copy a Dolphin `User/Config/Profiles/GCPad/NAME.ini` or `GCPadNew.ini` into `<app folder>/Dolphin/`; the
   page lists each profile (each `[GCPadN]` of GCPadNew.ini), and *Import it into this controller* reads its SDL or XInput
-  bindings onto the selected SDL controller (keyboard profiles are refused: the console has none) and saves the result as the
+  bindings onto the selected SDL controller (keyboard profiles are refused: their key names are not read; a USB keyboard is set up on its own rows) and saves the result as the
   profile "Dolphin NAME". Plain controls and `A | B` are read; stick axes become the stick swap and inversion; Dolphin's dead
   zones, trigger threshold, modifier range and radius become the matching rows; anything else (modifier expressions, raw
   `Button 3` joystick numbers) is counted as skipped (`controls: Dolphin ... imported ...: N bindings read, M not understood`).
@@ -362,7 +362,7 @@ controller's own pad, as pressing other buttons would: nothing new reaches the g
   menu, its hand-over masks and the chords see the pads as the game gets them; for the input-suggestion reads the box rule and
   the snapback filter keep their own state.
 
-Tests: `../tools/controls_check.sh` (65 checks: box coordinates and the opposing-button rule, snapback, deadzone, radius,
+Tests: `../tools/controls_check.sh` (78 checks: the USB keyboard's layout, Shift walk, box rule and "keyboard" profile, box coordinates and the opposing-button rule, snapback, deadzone, radius,
 click and cap, adapter and SDL bindings, profile round trip and an upstream gcadapter profile, Dolphin XInput, SDL and keyboard
 profiles, GCPadNew.ini listing) and `./test-app-linux.sh DISC controls` (port 1's scripted pad read as adapter port 1 with
 `MU_CONTROLS_TEST_ADAPTER=1`; `MU_CONTROLS_TEST_PAGE` makes the Start + D-pad Down + Z chord open that page; a second start loads the saved profile).
@@ -867,7 +867,7 @@ none of these has been measured on the console's GPU.
   simulator per side); `test-online-linux.sh` `MU_FILES_A/B`, `MU_SKIN_A=1`. `test-mods-linux.sh training-menu` now opens the panel's
   Training page with the Practice chord (the walk through the categories timed out).
 
-### Alternate stages, frozen Stadium, leaving a Party, UCF 0.8 replays (feat/play4)
+### Alternate stages, frozen Stadium, leaving a Party, UCF 0.8 replays, a USB keyboard (feat/play4)
 
 - **Alternate stages by held buttons** (`src/features/cosmetics.cpp`, wired in 0.4.6, now tried): with a mod profile whose disc
   names a stage's alternate for a button ("GrNBa.lat" / ".rat", or "GrNBa-Name(L).dat" in a folder, melee-unlocked's
@@ -886,6 +886,14 @@ none of these has been measured on the console's GPU.
   writes the playback's own events to FILE with the code list's UCF entries replaced by `MU_TEST_RERECORD_CODES`
   (`scripts/ucf08_codes.txt`, Slippi's UCF 0.8 codes). Test: `./test-replays-linux.sh DISC ucf08` (a UCF 0.8 replay made this way,
   played back with 0 differing records, and played with 0.84 for contrast).
+- **USB keyboard on the console** (`src/usb_keyboard.cpp`, libnx's HID keyboard): melee-unlocked's keyboard layout as a controller
+  on port 1 (settings.ini `keyboard_port 1..4`), every action rebindable on CONTROLS > Controller bindings with the device "USB
+  keyboard" (launcher.ini `padx.kb`, upstream's "keyboard" profiles; `src/controls_core.h` Kind::Keyboard); in the menu Enter and
+  Escape are A and B. Typing: keys and characters go to ImGui (the Practice menu's connect-code keyboard takes them), and the
+  settings search and the Replay library's search take a line typed in a box over the game instead of the console's software
+  keyboard. The keyboard counts once one of its keys is pressed. Off the console `MU_TEST_KEYS` (a script keyed on polls) or
+  `MU_TEST_KEY_FILE` (a file re-read at every poll, like the test pad file) stand in for the HID read. Test:
+  `./test-app-linux.sh DISC keyboard`.
 - **Test aid**: `MU_AUTO_VS_STAGE="UP RIGHT PRESS HOLD"` moves `--auto-vs`'s stage select cursor (11 12 is Pokémon Stadium, 3 1
   Battlefield), taps PRESS and holds HOLD after the pick (hex pad bits).
 
