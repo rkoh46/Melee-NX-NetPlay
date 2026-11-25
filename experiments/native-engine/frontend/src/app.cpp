@@ -27,6 +27,8 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -490,3 +492,86 @@ void window_test_rumble(const std::string& guid) {
 }
 #endif
 }  // namespace host
+
+// ---- RVZ and WIA discs (melee-unlocked port/app/disc_rvz.cpp, compiled from the fetched tree: MU_FE_RVZ) ----
+// Upstream's launcher turns a dropped .rvz or .wia into the plain disc image once; here the app does it at start: `iso` itself
+// when it is one, else GALE01.rvz / GALE01.wia beside the expected GALE01.iso, else the only .rvz or .wia in that folder. The
+// image is checked (a GameCube disc, GALE01) before anything is written; the result is GALE01.iso beside it (written as .part
+// and renamed when complete, upstream's rule), and the compressed file is left as it was. Every later check (the vanilla
+// MD5 of the mod installer, a vanilla-only session's header check) reads the plain image as usual.
+#if MU_FE_RVZ
+#include "disc_rvz.h"
+#endif
+namespace fe {
+bool app_disc_convert(std::string* iso) {
+  const auto exists = [](const std::string& p) { if (FILE* f = std::fopen(p.c_str(), "rb")) { std::fclose(f); return true; } return false; };
+#if MU_FE_RVZ
+  const auto lower_ext = [](const std::string& p) {
+    const size_t dot = p.rfind('.');
+    std::string e = dot == std::string::npos ? std::string() : p.substr(dot);
+    for (auto& c : e) c = char(std::tolower((unsigned char)c));
+    return e;
+  };
+  const std::string given = *iso;
+  const size_t slash = given.rfind('/');
+  const std::string folder = slash == std::string::npos ? std::string(".") : given.substr(0, slash);
+  std::string source, target;
+  if (exists(given) && disc_rvz::detect(given) != disc_rvz::Format::NotCompressed) { source = given; target = folder + "/GALE01.iso"; }
+  else if (exists(given)) return true;   // a plain image under another name
+  else {
+    target = given;
+    const std::string stem = given.size() > 4 && lower_ext(given) == ".iso" ? given.substr(0, given.size() - 4) : given;
+    for (const char* ext : {".rvz", ".wia", ".RVZ", ".WIA"}) if (exists(stem + ext)) { source = stem + ext; break; }
+    if (source.empty()) {
+      std::vector<std::string> found;
+      if (DIR* d = opendir(folder.c_str())) {
+        while (dirent* e = readdir(d)) {
+          const std::string n = e->d_name, x = lower_ext(n);
+          if (n[0] != '.' && (x == ".rvz" || x == ".wia")) found.push_back(folder + "/" + n);
+        }
+        closedir(d);
+      }
+      if (found.size() == 1) source = found[0];
+      else if (found.size() > 1) say("app: %zu RVZ or WIA images in %s: name the one to use with iso= in launcher.ini", found.size(), folder.c_str());
+    }
+  }
+  if (source.empty()) return exists(*iso);
+  if (exists(target)) { *iso = target; return true; }   // converted before
+  disc_rvz::Info info;
+  std::string error;
+  if (!disc_rvz::probe(source, &info, &error)) {
+    say("app: %s cannot be read as a disc image: %s", source.c_str(), error.c_str());
+    app_message_screen("DISC IMAGE NOT USABLE", {source, error, "", "Use a clean Melee NTSC 1.02 image (ISO, or RVZ/WIA made by Dolphin), then start the app again."});
+    return false;
+  }
+  if (!info.gamecube || info.game_id != "GALE01") {
+    say("app: %s is %s (%s), not Super Smash Bros. Melee NTSC", source.c_str(), info.game_id.c_str(), info.gamecube ? "GameCube" : "not a GameCube disc");
+    app_message_screen("NOT A MELEE DISC", {source, "is " + info.game_id + ", not Super Smash Bros. Melee (GALE01).", "", "Put your Melee NTSC 1.02 image there, then start the app again."});
+    return false;
+  }
+  say("app: converting %s (%s, %s compression, revision %d) into %s (%.2f GB)", source.c_str(), info.format == disc_rvz::Format::Rvz ? "RVZ" : "WIA",
+      info.compression.c_str(), info.revision, target.c_str(), double(info.iso_size) / 1e9);
+  app_message_screen("CONVERTING YOUR DISC", {"Your disc image is a Dolphin " + std::string(info.format == disc_rvz::Format::Rvz ? "RVZ" : "WIA") +
+                     " file. The app now writes the plain image it plays from:", target, "",
+                     "This happens once and takes a few minutes on the SD card; the screen stays dark meanwhile.", "The compressed file is left as it was."});
+  const auto t0 = std::chrono::steady_clock::now();
+  int last_tenth = -1;
+  const bool ok = disc_rvz::convert(source, target, [&](uint64_t done, uint64_t total) {
+    const int tenth = total ? int(done * 10 / total) : 0;
+    if (tenth != last_tenth) { last_tenth = tenth; say("app: converting the disc: %d%%", tenth * 10); }
+    return true;
+  }, &error);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  if (!ok) {
+    say("app: the conversion failed after %.0f s: %s", seconds, error.c_str());
+    app_message_screen("THE DISC COULD NOT BE CONVERTED", {source, error, "", "Check the free space on the SD card (about 1.4 GB), then start the app again."});
+    return false;
+  }
+  say("app: %s written in %.0f s", target.c_str(), seconds);
+  *iso = target;
+  return true;
+#else
+  return exists(*iso);
+#endif
+}
+}  // namespace fe

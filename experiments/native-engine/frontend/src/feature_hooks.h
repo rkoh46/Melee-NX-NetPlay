@@ -113,6 +113,11 @@ std::vector<HudLine> hud_lines();
 // it": the game takes a replay only at boot). Play mode polls this after each retrace or when its menu
 // closes; true hands the arguments over once.
 bool take_restart_request(std::vector<std::string>* extra_args);
+// gecko.cpp: the player's Gecko codes (GeckoCodes.ini) as the panel's GECKO CODES page shows them, and a switch (simulation thread).
+struct GeckoRow { std::string name; bool enabled = false, supported = false; std::string reason; };
+std::vector<GeckoRow> gecko_rows();
+std::string gecko_file();
+void gecko_toggle(const std::string& name);
 // The replays on the SD card, newest first (file names in the replay folder), for a launcher's list.
 std::vector<std::string> replays_list();
 // Slippi's game report asked for the replay (the netplay object's reporter thread, any thread): the path of the online game the

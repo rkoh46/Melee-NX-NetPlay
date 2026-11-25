@@ -5,7 +5,7 @@
 //     frame advantage the game measures, command 0xF4);
 //   - frame counter and performance graph (showfps, performance), the GameCube adapter's report rate (adapterrate);
 //   - players' names over the fighters online (playernicknames), the Arcade look's combo counter (arcade_combo_counter),
-//     the L-cancel flash (lcancel_flash_mode) as a ring over the fighter, the display latency test (latencytest);
+//     the display latency test (latencytest) (the L-cancel flash is the fighter's model tinted: features/overlays.cpp, patches/0120);
 //   - the replay viewer (replay_view.h, src/features/replays.cpp): where playback is on a timeline with the coach's tips,
 //     the speed, the player A takes over or the live takeover, the newest frame data reading, a tip's banner at its moment,
 //     a try's result, the buttons (the look follows upstream's gx/replay_hud.cpp: dark plates fading into the picture);
@@ -83,7 +83,15 @@ float text_width(float size, const char* s) { return ImGui::GetFont()->CalcTextS
 uint32_t applied_generation = ~0u;
 bool applied_once = false;
 float applied_aspect = -1.0f;
-void apply_picture(const overlay::Config& c) {
+int applied_window_h = 0;
+// Upstream's SSAA (its `ssaa` 2..4: 4x, 9x, 16x): the internal resolution rendered N times per axis and scaled down to the picture.
+// Aurora takes a fractional scale of 640x480; Auto (the display's height) times N when no resolution is chosen.
+float frame_buffer_scale(const overlay::Config& c, int window_h) {
+  const float base = c.scale ? float(c.scale) : (c.ssaa > 1 && window_h > 0 ? float(window_h) / 480.0f : 0.0f);
+  return c.ssaa > 1 ? std::min(base * float(c.ssaa), 4.5f) : base;
+}
+void apply_picture(const overlay::Config& c, int window_h) {
+  if (c.ssaa > 1 && window_h != applied_window_h) { applied_window_h = window_h; aurora::window::set_frame_buffer_scale(frame_buffer_scale(c, window_h)); }
   if (applied_once && c.generation == applied_generation) {
     const float aspect = picture_aspect(c);   // the shape can follow the scene (True widescreen's opening movie)
     if (aspect != applied_aspect) { applied_aspect = aspect; aurora::window::set_frame_buffer_aspect(aspect); }
@@ -94,7 +102,8 @@ void apply_picture(const overlay::Config& c) {
   aurora_set_picture(&p);
   applied_aspect = picture_aspect(c);
   aurora::window::set_frame_buffer_aspect(applied_aspect);
-  aurora::window::set_frame_buffer_scale(float(c.scale));
+  aurora::window::set_frame_buffer_scale(frame_buffer_scale(c, window_h));
+  if (c.ssaa > 1) say("overlay: picture: %dx supersampling (frame buffer scale %.2f of 640x480)", c.ssaa * c.ssaa, frame_buffer_scale(c, window_h));
   say("overlay: picture: shape %d (%.3f), internal resolution %s, brightness %.2f, contrast %.2f, vibrance %.2f, sharpening %.2f, CRT %d (curve %.2f), border \"%s\"",
       c.aspect, picture_aspect(c), c.scale ? (std::to_string(640 * c.scale) + "x" + std::to_string(480 * c.scale)).c_str() : "auto",
       c.brightness, c.contrast, c.vibrance, c.sharpness, c.crt, c.crt_curve, c.border.c_str());
@@ -488,28 +497,6 @@ void draw_combos(ImDrawList* dl, const overlay::Snapshot& s, const Rect& g) {
   }
 }
 
-// The L-cancel flash: the renderer cannot tint one fighter's model here (melee-unlocked does it per draw through its
-// owner tokens, which this decoder does not read), so a ring flashes around the fighter for ten frames instead.
-void draw_lcancel(ImDrawList* dl, const overlay::Config& c, const overlay::Snapshot& s, const Rect& g) {
-  for (int slot = 0; slot < 4; ++slot) {
-    const overlay::Flash& f = s.flashes[slot];
-    if (!f.on || (f.success && c.lcancel_success == 0)) continue;
-    const overlay::Player& p = s.players[slot];
-    if (!std::isfinite(p.tag_x) || !std::isfinite(p.tag_y)) continue;
-    const uint32_t age = s.retrace - f.start;
-    if (age >= 10) continue;
-    const float fade = age < 6 ? 1.0f : 1.0f - float(age - 6) / 4.0f;
-    const ImU32 col = !f.success ? IM_COL32(255, 40, 30, 255) : c.lcancel_success == 1 ? IM_COL32(255, 255, 255, 255) : IM_COL32(40, 255, 60, 255);
-    const ImVec2 centre(to_x(g, p.tag_x), to_y(g, p.tag_y + 56.0f));   // the tag sits over the head: the ring goes on the body
-    const float r = g.h() * 0.075f * (1.0f + 0.04f * float(age));
-    dl->AddCircleFilled(centre, r, with_alpha(col, 0.22f * fade), 40);
-    dl->AddCircle(centre, r, with_alpha(col, 0.95f * fade), 40, std::max(3.0f, g.h() / 160.0f));
-    const char* label = f.success ? "L-CANCEL" : "MISSED L-CANCEL";
-    const float size = std::clamp(g.h() / 34.0f, 12.0f, 26.0f);
-    text(dl, size, ImVec2(centre.x - text_width(size, label) * 0.5f, centre.y - r - size - 2), with_alpha(col, fade), label);
-  }
-}
-
 // ---- the replay viewer (replay_view.h) ----
 std::vector<std::string> wrap(const std::string& s, float size, float width) {
   std::vector<std::string> lines;
@@ -670,7 +657,7 @@ void overlay_draw(int ww, int wh) {
   if (!&features::overlay_config || !&features::overlay_snapshot) return;
   if (!ImGui::GetCurrentContext()) return;
   const overlay::Config c = features::overlay_config();
-  apply_picture(c);
+  apply_picture(c, wh);
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const Rect g = game_rect(ww, wh, picture_aspect(c));
   draw_border(dl, c, g, ww, wh);
@@ -688,7 +675,6 @@ void overlay_draw(int ww, int wh) {
   if (s.latency_fill >= 0) dl->AddRectFilled(ImVec2(g.x0, g.y0), ImVec2(g.x1, g.y1), s.latency_fill ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255));
   if (s.match) {
     dl->PushClipRect(ImVec2(g.x0, g.y0), ImVec2(g.x1, g.y1), true);
-    if (c.lcancel) draw_lcancel(dl, c, s, g);
     if (c.nicknames) draw_names(dl, s, g);
     if (c.combo || s.practice_combo) draw_combos(dl, s, g);
     dl->PopClipRect();

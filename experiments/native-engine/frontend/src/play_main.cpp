@@ -20,6 +20,7 @@
 #include <climits>
 #include <cstdarg>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -225,6 +226,20 @@ void* play_thread(void* user) {
     config.card_dir += "/VanillaOnly";
     say("play: vanilla-only session: retail gameplay, memory card folder %s", config.card_dir.c_str());
   }
+  // The Lossless adapter's lag test (upstream --lag-test or the saved switch lagtestnext, which arms one start only): the game's
+  // shim/mu_lagtest.c reads MELEE_LAG_TEST (develop mode, boot to the character select, its default rules on Dream Land, a
+  // 10-second rumble when the select loads, X held a white and A held a black background for the adapter's photodiode), and the
+  // session gets an empty memory card folder of its own, as upstream's (its app runs Dolphin with no card). Offline only.
+  const bool lag_test_asked = settings_lag_test_take() || std::find(options.rest.begin(), options.rest.end(), "--lag-test") != options.rest.end();
+  if (lag_test_asked && !direct && !vanilla_only && !net_on) {
+    setenv("MELEE_LAG_TEST", "1", 1);
+    config.card_dir = options.out_dir + "/LagTestCard";
+    options.fresh_card = true;
+    say("play: Lossless adapter lag test: this start only (develop mode, boot to the character select, rumble on its load, X white / A black background); memory card folder %s", config.card_dir.c_str());
+  } else {
+    if (lag_test_asked) say("play: the Lossless adapter lag test is offline only and not in a vanilla-only session: not started");
+    unsetenv("MELEE_LAG_TEST");
+  }
   config.max_frames = options.frames;                     // 0: until the player stops it
   // The frontend paces the retrace; with netplay the host does (its clock is what the netplay host moves).
   config.pace = net_on;
@@ -324,6 +339,8 @@ int play_main() {
   }
   if (fixedmap_relaunch_count()) say("play: started over %d time(s) to get a usable layout", fixedmap_relaunch_count());
   if (options.iso.empty()) { say("play: --iso PATH is needed"); log_close(); return 2; }
+  if (options.app && (!file_exists(options.iso) || options.iso.size() < 4 || options.iso.compare(options.iso.size() - 4, 4, ".iso") != 0))
+    app_disc_convert(&options.iso);   // an RVZ or WIA image becomes the plain disc image once (melee-unlocked's disc_rvz.cpp)
   if (options.app && !file_exists(options.iso)) {
     say("play: cannot start: no disc image at %s", options.iso.c_str());
     app_message_screen("DISC NOT FOUND", {"Melee-NX-NetPlay needs your Super Smash Bros. Melee disc image (NTSC 1.02) at", options.iso, "",

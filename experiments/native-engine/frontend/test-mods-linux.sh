@@ -42,6 +42,10 @@
 #   tmce-ess        the TM-CE event select's controls: R (help with its QR code, R again closes it), the pages with the
 #                   D-pad, X and Y (jumps), then Training Lab and in it the Additional Codes: A+B held (the match starts
 #                   again) and L+R+A (back to the select)
+#   gecko           the player's Gecko codes (features/gecko.cpp): a GeckoCodes.ini made here with a code that writes a game
+#                   variable (P1's model scale in the VS start data, 1.5), a PowerPC injection (C2) and a function rewrite (waxo's
+#                   No Character Shadows), all three switched on in settings.ini; --auto-vs: the first runs (P1 giant in the match),
+#                   the other two are refused with upstream's reasons
 # MU_DOCKER_NAME: container name prefix (default mnx-mods).
 # MU_MODS_DIR: a folder with mod profiles (mounted as <out>/mods) for vanilla-only. Output:
 # build/native-engine-gfx/run-mods-test/<case>/ (console.log, host.log, settings.ini, shots/). MU_TEST_LIMIT: time limit in s.
@@ -51,7 +55,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; shift
 # No case named: every case (a run that names none must not pass by running nothing).
-[ $# -gt 0 ] || set -- training-menu frozen vanilla-only vanilla-refuse mex rogue install squad practice-cpu dsp tmce-lab tmce-ess skins hackpack-hands
+[ $# -gt 0 ] || set -- training-menu frozen vanilla-only vanilla-refuse mex rogue install squad practice-cpu dsp tmce-lab tmce-ess skins hackpack-hands gecko
 # The mod discs: MU_MODS_DIR, else the disc folder's mods/ when it has one.
 [ -n "${MU_MODS_DIR:-}" ] || { [ -d "$disc/mods" ] && export MU_MODS_DIR="$disc/mods"; } || true
 work="$repo/build/native-engine-gfx"; root="$work/run-mods-test"
@@ -79,7 +83,7 @@ run() {
 }
 report() {
   echo "== $(basename "$1")"
-  grep -hE "^training|^mods|^play: (options|match|stopped|started|vanilla|a vanilla)|\[pc\]|\[mex\] (stages|stage select)|\[rogue\]|\[game\].*(rng|stage)|^replay|exit code|rror" "$1/console.log" "$1/host.log" 2>/dev/null | cut -c1-220 | tail -25 || true
+  grep -hE "^gecko|^training|^mods|^play: (options|match|stopped|started|vanilla|a vanilla)|\[pc\]|\[mex\] (stages|stage select)|\[rogue\]|\[game\].*(rng|stage)|^replay|exit code|rror" "$1/console.log" "$1/host.log" 2>/dev/null | cut -c1-220 | tail -25 || true
   echo "shots: $(ls "$1/shots" 2>/dev/null | wc -l | tr -d ' ')"
 }
 fresh() { rm -rf "$1"; mkdir -p "$1/shots"; }
@@ -303,6 +307,14 @@ PY
       "@scene 02 02" "200 sx=127" "260" "300 A" "304" "360 B" "364" "420 A" "424" "480 sx=-127" "540" "560 A" "564" > "$dir/script.txt"
     run "$dir" 2600 3 ""
     grep -h "20xx-hp\] character select" "$dir/console.log" | cut -c1-160
+    ;;
+  gecko)
+    fresh "$dir"
+    printf '%s\n' '[Gecko]' '$Giant P1 (VS)' '*P1 at 1.5 times its size in VS matches' '044805B0 3FC00000' \
+      '$C2 injection test' 'C2000000 00000001' '60000000 00000000' '$No Character Shadows' '040872F8 38600000' > "$dir/GeckoCodes.ini"
+    printf '%s\n' "geckocode Giant P1 (VS)" "geckocode C2 injection test" "geckocode No Character Shadows" "geckochosen 1" > "$dir/settings.ini"
+    run "$dir" 1500 2 "--auto-vs"
+    grep -h "gecko" "$dir/console.log" | head -12
     ;;
   skins)
     fresh "$dir"; mkdir -p "$dir/Cosmetics/Costumes"

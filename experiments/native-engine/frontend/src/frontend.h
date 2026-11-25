@@ -73,6 +73,7 @@ void settings_load(const std::string& path);
 bool settings_vanilla();
 bool settings_vanilla_only();            // settings.ini vanilla_only 1 or --vanilla-only: retail gameplay, own card, no mods
 void settings_force_vanilla_only();      // --vanilla-only
+bool settings_lag_test_take();           // settings.ini lagtestnext 1: this start is the Lossless adapter lag test (cleared for the next)
 void settings_online(bool on);       // the option words follow the online rules while this is on
 void settings_deactivate();          // the host's own words again (the netplay runs that boot straight into a match)
 int settings_online_delay();         // frames; 0: automatic
@@ -121,6 +122,9 @@ void app_report();                             // the log lines saying what the 
 std::string app_ini(const std::string& key, const std::string& fallback);
 void app_ini_set(const std::string& key, const std::string& value);   // and writes launcher.ini
 void app_backup_card();                        // the first session of this app copies the memory card once
+// No disc image at `iso`, but a Dolphin RVZ or WIA image of it beside it (or `iso` itself is one): converted once into the plain
+// image at `iso` (melee-unlocked's disc_rvz.cpp), with a screen while it runs. True when `iso` is now a disc image.
+bool app_disc_convert(std::string* iso);
 // Simulation thread (lane 0, the game's poll) or the input-suggestion thread (lane 1), under play_io's input lock:
 // remapping, deadzones and the rest of the controller setup (host::PadState[4]).
 void app_pad_postprocess(void* pads4, int lane);

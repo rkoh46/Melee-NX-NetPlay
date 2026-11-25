@@ -196,6 +196,9 @@ get_filename_component(RUN_TREE "${CMAKE_CURRENT_LIST_DIR}/../runner" ABSOLUTE)
 file(GLOB MU_FEATURE_SOURCES CONFIGURE_DEPENDS "${FE}/features/*.cpp" "${RUN_TREE}/features/*.cpp")
 if(MU_FE_FEATURES AND MU_FEATURE_SOURCES)
   add_library(mu_features OBJECT ${MU_FEATURE_SOURCES})
+  # PhobGCC settings on a stock controller: the report path (src/phob_adapter.cpp, patches/0123) and melee-unlocked's firmware
+  # port, compiled from the fetched tree (host/phob.cpp, GPL-3.0-only).
+  target_sources(mu_features PRIVATE "${FE}/phob_adapter.cpp" "${MU}/port/runtime/host/phob.cpp")
   set_target_properties(mu_features PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
   target_include_directories(mu_features PRIVATE "${FE}" "${FE}/features" "${RUN}" "${RUN_TREE}" "${RUN_TREE}/features" "${MU}/port/linux" "${MU}/port/runtime/abi" "${MU}/port/runtime/hle"
     "${MU}/port/runtime/host" "${MU}/port/runtime/ppc" "${MU}/port/runtime/gx" "${MU}/native")
@@ -302,6 +305,60 @@ target_compile_options(mu_present PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 if(NOT MU_FE_VARIANT STREQUAL "null")
   target_link_libraries(mu_present PRIVATE aurora::core aurora::gx)
 endif()
+# Use custom music (features/audio.cpp): melee-unlocked's jukebox (build.sh sync's copy with patches/0118, on the few host
+# services src/jukebox_shim/ declares) and the player-file decoders (src/media_decode.cpp over minimp3, stb_vorbis, dr_wav
+# and dr_flac, fetched by ../fetch.sh into build/native-engine/audio-decoders). Builds with sound output only.
+set(MU_AUDIO_DECODERS "${REPO}/build/native-engine/audio-decoders")
+if(NOT MU_FE_VARIANT STREQUAL "null" AND EXISTS "${GEN}/jukebox/jukebox.cpp" AND EXISTS "${MU_AUDIO_DECODERS}/minimp3_ex.h")
+  add_library(mu_jukebox OBJECT "${GEN}/jukebox/jukebox.cpp" "${FE}/media_decode.cpp")
+  set_target_properties(mu_jukebox PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)   # upstream builds it as C++17 (u8string is a std::string there)
+  target_include_directories(mu_jukebox BEFORE PRIVATE "${FE}/jukebox_shim")
+  target_include_directories(mu_jukebox PRIVATE "${MU}/port/runtime/hle" "${MU}/port/linux" "${MU_AUDIO_DECODERS}")
+  # Only audio_sinc.h is wanted from here; host.h and test_env.h are found in jukebox_shim first.
+  target_include_directories(mu_jukebox PRIVATE "${MU}/port/runtime/host")
+  target_compile_options(mu_jukebox PRIVATE -O2 -g -fno-strict-aliasing)
+  set_source_files_properties("${FE}/media_decode.cpp" PROPERTIES COMPILE_OPTIONS "-w")   # the decoders' own warnings
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_jukebox SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+else()
+  message(STATUS "Use custom music: no jukebox in this variant (null, or build.sh sync / ../fetch.sh not run)")
+endif()
+
+# The player's Gecko codes (features/gecko.cpp): melee-unlocked's user_gecko.cpp, build.sh sync's copy with patches/0122, on
+# src/gecko_shim/gecko_host_shim.h; its variable table (user_gecko_targets.h) and function tables from the fetched tree.
+if(EXISTS "${GEN}/gecko/user_gecko.cpp")
+  add_library(mu_gecko OBJECT "${GEN}/gecko/user_gecko.cpp")
+  set_target_properties(mu_gecko PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
+  target_include_directories(mu_gecko BEFORE PRIVATE "${FE}/gecko_shim")
+  target_include_directories(mu_gecko PRIVATE "${MU}/port/runtime/host" "${REPO}/build/native-engine/mu/sourceport/game/shim")   # the function tables (the fetched tree)
+  target_compile_definitions(mu_gecko PRIVATE MELEE_NO_SLIPPI MNX_NO_FUNCTION_PATCHES)
+  target_compile_options(mu_gecko PRIVATE -O2 -g -fno-strict-aliasing)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_gecko SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+endif()
+
+# RVZ and WIA discs (app.cpp app_disc_convert: a GALE01.rvz or .wia becomes GALE01.iso at start): melee-unlocked's disc_rvz.cpp and the
+# bzip2 it vendors, compiled from the fetched tree; LZMA from mu_modinstall's LZMA SDK objects, Zstandard the system's or
+# devkitPro's (the same one replays.cpp links). Builds with a picture only (the app).
+if(NOT MU_FE_VARIANT STREQUAL "null" AND EXISTS "${MU}/port/app/disc_rvz.cpp")
+  set(_tp "${MU}/port/third_party")
+  add_library(mu_rvz OBJECT "${MU}/port/app/disc_rvz.cpp" "${_tp}/bzip2/blocksort.c" "${_tp}/bzip2/huffman.c" "${_tp}/bzip2/crctable.c"
+    "${_tp}/bzip2/randtable.c" "${_tp}/bzip2/compress.c" "${_tp}/bzip2/decompress.c" "${_tp}/bzip2/bzlib.c")
+  set_target_properties(mu_rvz PROPERTIES CXX_STANDARD 17)
+  file(WRITE "${CMAKE_BINARY_DIR}/zstdshim/zstd/zstd.h" "#include <zstd.h>\n")
+  target_include_directories(mu_rvz BEFORE PRIVATE "${CMAKE_BINARY_DIR}/zstdshim")
+  target_include_directories(mu_rvz PRIVATE "${_tp}")
+  target_compile_definitions(mu_rvz PRIVATE BZ_EXPORT)
+  target_compile_options(mu_rvz PRIVATE -O2 $<$<COMPILE_LANGUAGE:C>:-w>)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_rvz SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+  target_compile_definitions(mu_gx PRIVATE MU_FE_RVZ=1)
+  target_include_directories(mu_gx PRIVATE "${MU}/port/app")   # disc_rvz.h for app.cpp (app_disc_convert)
+endif()
+
 # The program, twice: with the netplay object of ../build.sh (copied by build.sh sync: everything behind net_host,
 # its other symbols local), and with the services variant of that object when there is one.
 function(mu_program target netplay_object suffix)
@@ -322,6 +379,15 @@ function(mu_program target netplay_object suffix)
   endif()
   if(TARGET mu_proai)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_proai>)
+  endif()
+  if(TARGET mu_jukebox)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_jukebox>)
+  endif()
+  if(TARGET mu_rvz)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_rvz>)
+  endif()
+  if(TARGET mu_gecko AND TARGET mu_features)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_gecko>)
   endif()
   if(TARGET mu_practice_menu)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_practice_menu>)
@@ -411,7 +477,7 @@ else()
 endif()
 if(MU_FE_SANITIZE)
   set(_san_flags -fsanitize=${MU_FE_SANITIZE} -fno-omit-frame-pointer)
-  foreach(_t mu_host mu_gx mu_present mu_features mu_app_services mu_native_gfx mu_native_gfx_services)
+  foreach(_t mu_host mu_gx mu_present mu_features mu_jukebox mu_gecko mu_app_services mu_native_gfx mu_native_gfx_services)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:${_san_flags}>)
     endif()

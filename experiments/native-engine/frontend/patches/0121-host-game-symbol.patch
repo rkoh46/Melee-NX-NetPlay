@@ -1,0 +1,19 @@
+Player Gecko codes (Melee-NX-NetPlay 0.4.7): play mode looks up the game image's exported mu_user_gecko_write and mu_user_gecko_read
+(shim/mu_gecko.c), which melee-unlocked's host finds with game_proc. After 0101 and 0119.
+--- a/port/linux/host_services.cpp
++++ b/port/linux/host_services.cpp
+@@ -1113,6 +1113,14 @@
+ } // namespace
+ 
+ void log(const char* format, ...) { va_list args; va_start(args, format); write_log(format, args); va_end(args); }
++// patches/0121: an exported symbol of the game image (the user Gecko codes' native writer and reader, features/gecko.cpp).
++void* fe_game_symbol(const char* name) {
++#if defined(__APPLE__) || defined(MU_FOREIGN_ELF)
++  return mac_image.symbol(name);
++#else
++  (void)name; return nullptr;
++#endif
++}
+ void set_video_sinks(FifoSink fifo, RetraceSink retrace, void* user) { fifo_sink=fifo; retrace_sink=retrace; video_user=user; }
+ void set_frame_observer(FrameObserver observer, void* user) {
+   frame_observer=observer; observer_user=user;

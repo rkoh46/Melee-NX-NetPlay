@@ -48,4 +48,19 @@ seed "$tree" "$here"/patches/0*.patch
 seed "$tree/sourceport/extern/melee" "$here"/patches/decomp-*.patch
 for p in "$here"/patches/0*.patch; do apply "$tree" "$p"; done
 for p in "$here"/patches/decomp-*.patch; do apply "$tree/sourceport/extern/melee" "$p"; done
+# Small permissive audio decoders for Use custom music (frontend/src/media_decode.cpp), pinned by commit and SHA-256: minimp3
+# (CC0), stb_vorbis (public domain or MIT), dr_wav and dr_flac (public domain or MIT No Attribution). Never committed.
+dec="$work/audio-decoders"; mkdir -p "$dec"
+pinned() {   # $1 URL, $2 SHA-256
+  local name; name="$(basename "$1")"
+  if [ -f "$dec/$name" ] && [ "$(shasum -a 256 "$dec/$name" | cut -d' ' -f1)" = "$2" ]; then echo "have  $name"; return; fi
+  curl -fsSL --max-time 120 -o "$dec/$name.part" "$1"
+  [ "$(shasum -a 256 "$dec/$name.part" | cut -d' ' -f1)" = "$2" ] || { rm -f "$dec/$name.part"; echo "fetch: $name is not the pinned file" >&2; exit 1; }
+  mv "$dec/$name.part" "$dec/$name"; echo "fetch $name"
+}
+pinned https://raw.githubusercontent.com/lieff/minimp3/48e3a085f0e1a99446b34614e1e7f17f09dc2e82/minimp3.h eb4b44812cfe77a358aa1820462cc877473a8d97206009ebecd18b60a123875a
+pinned https://raw.githubusercontent.com/lieff/minimp3/48e3a085f0e1a99446b34614e1e7f17f09dc2e82/minimp3_ex.h ec1240ad4f29961ed83a9da160fcb190ce2253b618aaae36dfbd7bab4d5eedcf
+pinned https://raw.githubusercontent.com/nothings/stb/6b5799bae8a1fe3792691ef4b72ae26434c3e799/stb_vorbis.c 97a8febc738e6a29fafc8d8bc557c7f17ad3db7ba6544485f59395cc6008b764
+pinned https://raw.githubusercontent.com/mackron/dr_libs/e381981afa52800b9a3864df548353ff67252fbc/dr_wav.h b36c32661cfbbfb1cc0beb19f7a9d2567065e5a297f64172dcebfff59885f37b
+pinned https://raw.githubusercontent.com/mackron/dr_libs/e381981afa52800b9a3864df548353ff67252fbc/dr_flac.h bd569c910a7c465e481fd50af84e2871e81e2154e30ac510d98f953cc0d5a546
 echo "tree: $tree"

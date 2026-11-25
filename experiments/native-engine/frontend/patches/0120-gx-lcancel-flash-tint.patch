@@ -1,0 +1,32 @@
+The L-cancel flash on the fighter's model (Melee-NX-NetPlay 0.4.7), as melee-unlocked draws it (gx_shader.cpp's player tint): the
+flashing slot's skinned model of the perspective camera takes the colour (the looks' one-stage tint, light and shade kept), not
+its shadow pass or effects. features/overlays.cpp sets the colour per slot (looks_live.h flash) and asks the game for draw
+owners while a renderer flash mode is chosen. Display only. After 0116, against the build-time copy of gx_aurora_bridge.cpp.
+--- a/port/runtime/gx/gx_aurora_bridge.cpp
++++ b/port/runtime/gx/gx_aurora_bridge.cpp
+@@ -525,7 +525,7 @@
+   e.colours = fe::looks::load(l.colours); e.unfiltered = l.unfiltered.load(std::memory_order_relaxed);
+   e.backdrop_off = e.level >= 2 || fe::looks::load(l.arcade_backdrop) != 0;
+   if (e.level >= 3) e.effects = std::max(e.effects, 2);
+-  e.on = fe::looks::active() || e.menus;
++  e.on = fe::looks::active() || e.menus || l.flash_on.load(std::memory_order_relaxed);   // patches/0120: the L-cancel flash
+   if (!e.on || !frame_in_match(f)) return e;
+   // A pass over the frame's state: the first perspective draw of a skinned fighter model gives the world camera
+   // (frame_scene_draw), then the farthest such model the play plane's depth.
+@@ -671,6 +671,16 @@
+   out.wire = in_world && !owned_effect && (e.level >= 5 || s == Surface::Wire);
+   if (s == Surface::Wire) s = Surface::Textured;
+   out.mark = uint8_t(s) | ((e.unfiltered && s != Surface::Textured) ? 8 : 0);
++  // patches/0120: a slot's fighter model flashes for an L-cancel (features/overlays.cpp; upstream gx_shader.cpp's player tint:
++  // the skinned model of the perspective camera only, not its shadow pass or effects), over every look.
++  if (d.skinned && d.owner_player < 6 && st.xf_regs[0x26] == 0) {
++    const uint32_t flash = fe::looks::live().flash[d.owner_player].load(std::memory_order_relaxed);
++    if (flash) {
++      out.tint = true;
++      out.rgb[0] = float((flash >> 16) & 0xFF) / 255.0f; out.rgb[1] = float((flash >> 8) & 0xFF) / 255.0f; out.rgb[2] = float(flash & 0xFF) / 255.0f;
++      return out;
++    }
++  }
+   // The look's port colours (fighters' models) and its white stage (opaque stage pieces): one plain colour, light and shade kept.
+   if (e.colours == 1 && d.skinned && d.owner_player < 4 && st.xf_regs[0x26] == 0) {
+     out.tint = true; const float* c = fe::looks::port_colour(d.owner_player); std::memcpy(out.rgb, c, sizeof out.rgb);

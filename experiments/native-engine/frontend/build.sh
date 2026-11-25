@@ -96,6 +96,20 @@ sync_tree() {
   for p in "$stage"/patches/0*.patch; do patch -s -p1 -d "$stage/mu" < "$p"; done
   cp "$stage/mu/port/linux/host_services.cpp" "$gen/host_services.base.cpp"     # what patches/0101 is a diff against
   patch -s -p1 -d "$stage/mu" < "$here/patches/0101-host-frontend-hooks.patch"
+  patch -s -p1 -d "$stage/mu" < "$here/patches/0119-host-jukebox-hook.patch"   # Use custom music: the host jukebox (features/audio.cpp)
+  patch -s -p1 -d "$stage/mu" < "$here/patches/0121-host-game-symbol.patch"   # the game's Gecko writer and reader (features/gecko.cpp)
+  # melee-unlocked's player Gecko codes (user_gecko.cpp), LF, with patches/0122: the shim host header and the include paths of a copy.
+  rm -rf "$gen/geckosrc"; mkdir -p "$gen/geckosrc/port/runtime/host" "$gen/gecko"
+  perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/host/user_gecko.cpp" > "$gen/geckosrc/port/runtime/host/user_gecko.cpp"
+  patch -s -p1 -d "$gen/geckosrc" < "$here/patches/0122-user-gecko-on-the-switch.patch"
+  cmp -s "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp" || cp "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp"
+  rm -rf "$gen/geckosrc"
+  # melee-unlocked's jukebox (Use custom music, features/audio.cpp), LF line ends, with patches/0118: the app's MusicPacks folder.
+  rm -rf "$gen/jukeboxsrc"; mkdir -p "$gen/jukeboxsrc/port/runtime/hle" "$gen/jukebox"
+  perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/hle/jukebox.cpp" > "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp"
+  patch -s -p1 -d "$gen/jukeboxsrc" < "$here/patches/0118-jukebox-on-the-switch.patch"
+  cmp -s "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp" "$gen/jukebox/jukebox.cpp" || cp "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp" "$gen/jukebox/jukebox.cpp"
+  rm -rf "$gen/jukeboxsrc"
   # By content and without time stamps: only files that changed get a new time, so the next build sees exactly those.
   rsync -rlpc --delete "$stage/mu/" "$work/mu/"
   rsync -rlpc --delete "$stage/experiments/native-engine/runner/" "$work/runner/"
@@ -124,17 +138,24 @@ sync_tree() {
   cp "$repo/port/runtime/gx/gx_aurora.cpp" "$repo/port/runtime/gx/subframe.cpp" "$gen/gxsrc/port/runtime/gx/"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0106-subframe-presentation.patch"
   patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0116-gx-looks.patch"   # the looks: owner tokens, look rules, treated textures (src/looks_live.h)
+  patch -s -p1 -d "$gen/gxsrc" < "$here/patches/0120-gx-lcancel-flash-tint.patch"   # the L-cancel flash on the fighter's model (features/overlays.cpp)
   for f in gx_aurora.cpp subframe.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   for f in gx_core.cpp gx_aurora_bridge.cpp; do cmp -s "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f" || cp "$gen/gxsrc/port/runtime/gx/$f" "$gen/$f"; done
   # The app's controller input and sound output, verbatim. Copies, because a file compiled where it lives finds
   # the app's own host.h beside it before the shim's.
   mkdir -p "$gen/app"
-  for f in input_sdl.cpp input_script.cpp gc_adapter_usbhs.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
+  for f in input_sdl.cpp input_script.cpp gc_adapter_none.cpp overlay_imgui.cpp; do
     cmp -s "$repo/port/runtime/host/$f" "$gen/app/$f" || cp "$repo/port/runtime/host/$f" "$gen/app/$f"
   done
+  # The GameCube adapter over usb:hs, with patches/0123: its raw reports for PhobGCC settings (src/phob_adapter.cpp).
+  rm -rf "$gen/adaptersrc"; mkdir -p "$gen/adaptersrc/port/runtime/host"; cp "$repo/port/runtime/host/gc_adapter_usbhs.cpp" "$gen/adaptersrc/port/runtime/host/"
+  patch -s -p1 -d "$gen/adaptersrc" < "$here/patches/0123-gc-adapter-phob-reports.patch"
+  cmp -s "$gen/adaptersrc/port/runtime/host/gc_adapter_usbhs.cpp" "$gen/app/gc_adapter_usbhs.cpp" || cp "$gen/adaptersrc/port/runtime/host/gc_adapter_usbhs.cpp" "$gen/app/gc_adapter_usbhs.cpp"
+  rm -rf "$gen/adaptersrc"
   # The sound output follows the game's speed (online time sync; patches/0110).
   rm -rf "$gen/audiosrc"; mkdir -p "$gen/audiosrc/port/runtime/host"; cp "$repo/port/runtime/host/audio_sdl.cpp" "$gen/audiosrc/port/runtime/host/"
   patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0110-audio-follows-game-speed.patch"
+  patch -s -p1 -d "$gen/audiosrc" < "$here/patches/0117-audio-buffer-setting.patch"   # the player's buffer: Auto or Low latency (features/audio.cpp)
   cmp -s "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp" || cp "$gen/audiosrc/port/runtime/host/audio_sdl.cpp" "$gen/app/audio_sdl.cpp"
   rm -rf "$gen/audiosrc"
   # The app's in-game menu (patches/0104: pages a host adds, greyed rows, the Quit action, a HUD extra) and its sign-in

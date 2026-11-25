@@ -287,10 +287,11 @@ on). Play mode and the app; settings.ini keys (upstream's names), also on the me
 | `adapterrate 1` | the GameCube adapter's measured report rate (console; the Linux build reads no adapter) |
 | `playernicknames 1` | online: the players' Slippi names over the fighters |
 | `arcade_combo_counter 1` | offline: "N HITS" over the attacker's damage |
-| `lcancel_flash_mode 0/1/5/6`, `lcancel_success_flash 0/1/2` | off, missed, made, both; made in no colour, white, green: a ring around the fighter for 10 frames (not a tint of the model: that needs draw-owner tokens this decoder does not read). Online: this console's player only |
+| `lcancel_flash_mode 0..6`, `lcancel_success_flash 0/1/2` | off, MU missed (1), made (5), both (6): the fighter's model tinted red or green (white with success colour 1) for 8 frames (patches/0120, the game marks draw owners while a MU mode is chosen); TE missed (2), made (3), both (4) with the 20XX TE save: TE's own flash from its word 2 bits, the success colour from `lcancel_success_flash`. Online: this console's player only |
 | `latencytest 1` | X + D-pad Down paints the picture black, then white; X + D-pad Up ends it |
 | `aspect 0..4` | Auto (4:3, or the screen with the 16:9 code), 73:60, 4:3, 16:9, stretched; live |
 | `scale 0..4` | internal resolution: Auto (the display) or 640x480 times N; live |
+| `ssaa 1..4` | supersampling: that resolution rendered N times per axis and scaled down (off, 4x, 9x, 16x); live |
 | `brightness`, `contrast` 0.5..1.5, `vibrance` 0..2, `sharpness` 0..1 | Aurora's present pass (patches/0109); live |
 | `crt_filter 0/1/2`, `crt_curve 0..3` | off, studio monitor, home television (curved); live |
 | `borderart grid` or `FILE.bmp`, `borderedge 0/1` | art in the side bars (`<folder>/Borders`, the app's folder in the app), soft shadow at the picture's edge |
@@ -586,7 +587,9 @@ side's selections always follow its build message on the same ordered channel, b
 same bytes before a match can start (a rule only one side applied would split the game at the first Start press). The
 headless runner takes the same choices as `--net-direct-pause 0|1`, `--net-port-colour A[,B]`, `--net-shield RRGGBB`,
 `--net-skip CODE` and, for tests, `--net-as-slippi` (no build message, the other's ignored). Results: FEATURES.md rows
-"Pause in Direct and Friends", "Online port colours", "Opponent shield colour", "Skip in Unranked". settings.ini comments
+"Pause in Direct and Friends", "Online port colours", "Opponent shield colour", "Skip in Unranked". 0.4.7 (`../patches/net-0011`): two more flags say
+whether a player offers Auto L-cancel (`autolcancel 1`); a Direct match uses it only when every player's build offered it
+(melee-unlocked allows it in Direct; here both must agree), on the local player's own input (FEATURES.md "Auto L-cancel"). settings.ini comments
 now start at a `#` at the start of a line or after a space, so a connect code keeps its `#`.
 
 ### Quick chat (0.4.3)
@@ -730,6 +733,44 @@ held over Bowser: Giga Bowser, in Training and in VS Melee, and a VS match with 
 Destination plays `AF.hps` / `CE.hps` instead of its single song `30.hps`). In VS stock singles upstream's Squad Strike
 took the Z press (it adds the hovered fighter to a squad); `../patches/0005` leaves Z to the pack on its seven paired
 icons when the pack is loaded.
+
+### Audio buffer and Use custom music (0.4.7)
+
+`src/features/audio.cpp`, with `patches/0117` (the output's buffer can be set while it plays), `patches/0118` (melee-unlocked's
+`jukebox.cpp`, compiled from the fetched tree into `gen/jukebox/`) and `patches/0119` (the host asks play mode whether the game's
+music goes through the jukebox). The panel's AUDIO page has the rows.
+
+| settings.ini | |
+|---|---|
+| `audio_mode 0` (default) | Auto: melee-unlocked's `AudioBufferPolicy` (compiled from the fetched tree). Starts at what this output settled on last time (`<app folder>/audio-auto.txt`; the handheld speaker and the TV each keep their own) or 40 ms, grows 4 ms after each gap during a match (gaps over 60 ms are stalls and are left alone), settles back 1 ms per 10 s without one, never under 10 ms. Log: `audio: buffer Auto for the ...`, `audio: Auto buffer N ms after a gap in the match`, `... ends at N ms (kept for the next session)` |
+| `audio_mode 1`, `audio_buffer_ms 5..120` | Low latency: that buffer, fixed (30 when picked from the panel, as upstream) |
+| `musicpacks 1` (default 0) | Use custom music, from the next start: the game hands every song to the jukebox (commands 0xD6, 0xD7, 0xD8, 0xEB), which plays the disc's HPS song or a player's file of the same name from `<app folder>/MusicPacks/audio/` (`name.mp3`, `.wav`, `.flac`, `.ogg` or `.hps`; a folder `name/` or `name+other/` of files: a random one each time). `Tracks.txt` (the disc's song names) and `README.txt` are written into the folder at start. M4A/AAC is not decoded (the disc's song plays). A player's file is capped at five minutes on the console (upstream: ten). Off: the game's own music stream, as before |
+
+The music only reaches the sound output, never the game, so a pack plays online too (upstream's packs play locally). Tests:
+`../tools/music_decode_test.sh` (tones made with ffmpeg in WAV, MP3, OGG, FLAC, mono WAV: rate, length, pitch and level as
+written; M4A refused; the length limit) and `./test-audio-linux.sh DISC auto fixed jukebox packs` (SDL's disk audio driver
+records the output: with `packs` a 440 Hz test tone is in every second of the recording, the menu's song from `menu01.mp3`,
+Onett's from the playlist folder `onetto+onetto2/`).
+
+### Gecko codes, PhobGCC, the lag test and RVZ discs (0.4.7)
+
+- **Your Gecko codes** (`src/features/gecko.cpp`, `patches/0121`, `0122`): `<app folder>/GeckoCodes.ini` in Dolphin's format; each code
+  is a row of GECKO CODES > Your codes, switched there (greyed with melee-unlocked's reason when the Source Port cannot run it),
+  kept as `geckocode NAME` lines and `geckochosen 1` in settings.ini. melee-unlocked's user_gecko.cpp decides and plans each code
+  and the game image's own `mu_user_gecko_write` / `mu_user_gecko_read` store it, offline only (not online, in replays or a
+  vanilla-only session). A code that rewrites a game function is refused here (the console does not let a program rewrite its
+  own code). Test: `./test-mods-linux.sh DISC gecko`.
+- **PhobGCC settings** (`src/phob_adapter.*`, `src/features/phob.cpp`, `patches/0123`): melee-unlocked's firmware port (host/phob.cpp)
+  on the GameCube adapter's raw reports, stepped on the usb:hs reader thread once per millisecond of reports; `PhobGCC/port<N>.ini`;
+  CONTROLS > PhobGCC (port, on/off, the firmware's values, Stick calibration, Notch fix, soft reset). Calibration: the steps on
+  the overlay, A/L/R records, Z back, X/Y turn a notch, B resets it, Start stops; the game gets a resting controller from that
+  port meanwhile. Console only (the Linux build reads no adapter). Test: `../tools/phob_check.sh`.
+- **Lossless adapter lag test**: `lagtestnext 1` (VIDEO > Advanced) or `--lag-test` makes the next start the lag test (the switch
+  goes back to 0), with an empty `LagTestCard` folder. Test: `./test-overlays-linux.sh DISC lagtest`.
+- **RVZ and WIA discs** (`app.cpp` `app_disc_convert`): an .rvz or .wia named by `iso=`, or beside the expected GALE01.iso, is
+  checked and written once as GALE01.iso (melee-unlocked's disc_rvz.cpp). Test: `../tools/rvz_check.sh` (upstream's own test).
+- **Supersampling** (`ssaa 2..4`, upstream's key; the Picture page): the internal resolution rendered 2 to 4 times per axis and
+  scaled down (4x, 9x, 16x SSAA); off by default, heavy on the console's GPU.
 
 ## melee-unlocked's interface
 
@@ -1091,7 +1132,9 @@ Our files are GPL-3.0-or-later, except `src/controls_core.h` and `src/controls_f
 installer, the catalog checks of `src/modinstall/mi_catalog.cpp` follow melee-unlocked's `launcher_mod_catalog.cpp` and the
 DJW decoder in `src/modinstall/mi_vcdiff.cpp` is adapted from xdelta 3.1.0's `xdelta3-djw.h` (both GPL-2.0-or-later, used
 under GPL-3.0-or-later, credited in the files); the LZMA SDK's decoders (public domain) are compiled from the fetched tree
-and zlib is the system's or devkitPro's. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
+and zlib is the system's or devkitPro's. Use custom music compiles melee-unlocked's `jukebox.cpp` (GPL-2.0-or-later) from
+the fetched tree with `patches/0118`, and decodes players' files with minimp3 (CC0 1.0), stb_vorbis (public domain or MIT),
+dr_wav and dr_flac (public domain or MIT No Attribution), fetched by `../fetch.sh` at pinned commits and never committed. The program links this repository's GPL-2.0-or-later GX layer, Aurora, Dawn, SDL3
 and Mesa as the app does, and melee-unlocked's GPL-2.0-or-later host services from the fetched tree. The built NRO
 contains the compiled game and must not be distributed.
 

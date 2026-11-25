@@ -28,6 +28,10 @@ __attribute__((weak)) void cosmetics_view(bool retail_files);
 __attribute__((weak)) bool cosmetics_online_copy(const std::string& slot, const std::vector<uint8_t>& bytes, std::string* reason);
 __attribute__((weak)) int cosmetics_disc_read(uint64_t offset, void* out, size_t bytes);
 __attribute__((weak)) size_t cosmetics_disc_skin_count(const std::string& profile);
+// gecko.cpp (player Gecko codes): the panel's rows and switch.
+__attribute__((weak)) std::vector<GeckoRow> gecko_rows();
+__attribute__((weak)) std::string gecko_file();
+__attribute__((weak)) void gecko_toggle(const std::string& name);
 
 inline bool linked() { return &dispatch_retrace != nullptr; }
 inline void call_tables(MuHostApi* host, MuGameApi* game) { if (&dispatch_tables) dispatch_tables(host, game); }

@@ -53,6 +53,7 @@ const std::vector<Page>& pages() {
       {"freeze_fd", "Frozen Final Destination", Kind::Toggle},
       {"vanilla", "Retail game (no built-in codes)", Kind::Toggle, 0, 1, 1, {}, true, true},
       {"slippi_menus", "Slippi menus (Online Play)", Kind::Toggle, 0, 1, 1, {}, true, true},
+      {"lagtestnext", "Lossless adapter lag test (next start only)", Kind::Toggle, 0, 1, 1, {}, true, true},
     }},
     {"Picture and HUD", {
       {"palstockicons", "PAL stock icons", Kind::Toggle},

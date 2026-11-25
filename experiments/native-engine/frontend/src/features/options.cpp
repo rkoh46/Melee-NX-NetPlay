@@ -14,8 +14,10 @@
 //   - Slippi 3.7.0 input suggestions online (key input_suggestions, default on as upstream; the netplay object asks
 //     mu_net_suggest_setting at each online game's start: patches/net-0001, play_io.cpp mu_net_suggest_read).
 // Upstream's online rules: the input delay, Zelda as Sheik and the Training bits are offline only. Automatic
-// L-cancel is allowed offline and in Direct upstream (host/lcancel_policy.h); here it is offline only,
-// because this host does not know which pad drives the local fighter in a netplay match. Shield colours
+// L-cancel is allowed offline and in Direct upstream (host/lcancel_policy.h); here offline, and in a Direct match when every
+// player's build offered it (0.4.7, patches/net-0011: each side's `autolcancel 1` goes out in the build message): online the
+// press goes on the controller the local inputs come from (the 0xB0's input source) for the local player's fighter only,
+// as upstream keeps only the local fighter in a network match. Never in Unranked, Teams or Party, or against Slippi Dolphin. Shield colours
 // online: this player's shield_color_online (settings.ini, play_main) and the opponent's when their build is a Melee-NX-NetPlay
 // one (patches/net-0004; upstream exchanges them with other melee-unlocked players), else the port's own.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -65,7 +67,7 @@ bool setting(const std::string& key, const std::string& value) {
   if (key.size() == 14 && key.compare(0, 13, "shield_colorp") == 0 && key[13] >= '1' && key[13] <= '4') shield[key[13] - '1'] = colour_value(value);
   else if (key == "offline_delay") offline_delay_on = value == "1";
   else if (key == "offline_delay_frames") offline_delay_frames = std::clamp(n, 1, 9);
-  else if (key == "autolcancel") auto_lcancel = value == "1";
+  else if (key == "autolcancel") { auto_lcancel = value == "1"; netplay_bridge::set_auto_lcancel(auto_lcancel); }
   else if (key == "zelda_as_sheik") zelda_sheik = value == "1";
   else if (key == "squad_strike") squad_strike = value == "1";
   else if (key == "dsp_lowpass") dsp_lowpass = value == "1";
@@ -174,6 +176,8 @@ struct PortState {
 PortState lc_ports[4];
 uint64_t lc_presses = 0;
 bool lc_logged = false;
+std::atomic<int> lc_input_source{0};     // online: the controller port the local inputs come from (the 0xB0's byte 25)
+int lc_online_logged = -1;
 
 void lcancel_apply(MuPadStatus pads[4], const MuLcancelView& view) {
   const PadCal cal = pad_cal_of(view);
@@ -256,8 +260,27 @@ void pad_read(MuPadStatus out[4]) {
     for (const auto& f : view.port) gameplay |= f.present != 0;
   }
   delay_queue.apply(out, offline_delay_on && offline && gameplay, offline_delay_frames, g_retrace, (g_scene_major << 16) | g_scene_minor);
-  if (auto_lcancel && offline && gameplay) {
-    if (!lc_logged) { lc_logged = true; say("options: automatic L-cancel on (offline)"); }
+  // Direct with every player's agreement (patches/net-0011): only the local player's fighter, its press on the input source.
+  bool direct_agreed = false;
+  if (auto_lcancel && online() && !replay && game && game->lcancel_view) {
+    direct_agreed = netplay_bridge::auto_lcancel_agreed();
+    if (lc_online_logged != (direct_agreed ? 1 : 0) && netplay_bridge::search_info().state == 4) {
+      lc_online_logged = direct_agreed ? 1 : 0;
+      say("options: automatic L-cancel %s", direct_agreed ? "on in this Direct match: every player offered it" : "off in this online match (Direct only, and only when every player offers it)");
+    }
+    if (direct_agreed) {
+      MuLcancelView all{};
+      game->lcancel_view(&all);
+      const int local = netplay_bridge::local_slot(), source = std::clamp(lc_input_source.load(), 0, 3);
+      view = all;
+      for (auto& f : view.port) f = MuLcancelFighter{};
+      for (const auto& f : all.port) if (f.present && f.slot == local) { view.port[source] = f; gameplay = true; }
+    }
+  } else if (!online()) {
+    lc_online_logged = -1;
+  }
+  if (auto_lcancel && gameplay && (offline || direct_agreed)) {
+    if (!lc_logged) { lc_logged = true; say("options: automatic L-cancel on (%s)", offline ? "offline" : "Direct, every player agreed"); }
     lcancel_apply(out, view);
   } else {
     for (auto& st : lc_ports) st = PortState{};
@@ -376,7 +399,12 @@ void register_options() {
   add_retrace(on_retrace);
   add_command(0xDE, zelda_as_sheik);
   add_run_end(run_end);
-  add_menu_entry({"Game", "Automatic L-cancel (offline)", [] { return on_off(auto_lcancel); }, [](int) { auto_lcancel = !auto_lcancel; }, nullptr,
+  // The 0xB0's input source (the controller the local inputs come from), for the online press (patches/net-0011).
+  add_exchange([](uint8_t command, const uint8_t* payload, uint32_t size, const uint8_t*, uint32_t, int32_t, bool resim) {
+    if (command == 0xB0 && size >= 26 && !resim && payload[25] < 4) lc_input_source.store(payload[25]);
+  });
+  add_menu_entry({"Game", "Automatic L-cancel (offline; Direct when both agree)", [] { return on_off(auto_lcancel); },
+                  [](int) { auto_lcancel = !auto_lcancel; netplay_bridge::set_auto_lcancel(auto_lcancel); }, nullptr,
                   [](fe::features::MenuEntry::Write w) { w("autolcancel", auto_lcancel ? "1" : "0"); }});
   add_menu_entry({"Game", "Offline input delay", [] { return offline_delay_on ? std::to_string(offline_delay_frames) + " frames" : std::string("Off"); },
                   [](int d) {
@@ -399,3 +427,4 @@ void register_options() {
 
 // The netplay object (patches/net-0001) asks at the start of each online game whether to send and use input suggestions.
 extern "C" int mu_net_suggest_setting(void) { return fe::features::input_suggestions.load() ? 1 : 0; }
+
