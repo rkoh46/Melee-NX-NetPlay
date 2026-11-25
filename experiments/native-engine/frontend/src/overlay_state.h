@@ -32,6 +32,7 @@ struct Config {
   std::string border;                           // borderart: empty none, "grid", or a .bmp file in <folder>/Borders
   int border_edge = 1;                          // borderedge: 1 the picture casts a soft shadow on the art
   int scale = 0;                                // scale: internal resolution, 0 Auto (the display), 1..4 times 640x480
+  int ssaa = 1;                                 // ssaa (upstream's key): 1 off, 2..4 = 4x, 9x, 16x supersampling of that resolution
   uint32_t generation = 0;                      // bumped whenever a picture option changes
 };
 

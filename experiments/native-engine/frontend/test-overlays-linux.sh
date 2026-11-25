@@ -18,6 +18,7 @@
 #   picture   --auto-vs, brightness, contrast, vibrance, sharpening, the home television CRT look, 73:60, grid border art
 #   studio    --auto-vs, the studio monitor CRT look, 4:3, a .bmp border (made here), shadow off
 #   scale1, scale2   --auto-vs with internal resolution 640x480 and 1280x960
+#   ssaa      --auto-vs with ssaa 2 (4x supersampling of the display's resolution)
 # Output: build/native-engine-gfx/run-overlays/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
 # MU_RUN_ENV: more docker arguments (for example "-e MU_TEST_FLASH_FRAMES=60": the L-cancel flash held long enough to be shot).
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -144,6 +145,11 @@ hdr = struct.pack("<2sIHHI", b"BM", 54 + len(data), 0, 0, 54) + struct.pack("<Ii
 open(sys.argv[1], "wb").write(hdr + data)
 PY
     printf '%s\n' "crt_filter 1" "aspect 2" "borderart ramp.bmp" "borderedge 0" > "$dir/settings.ini"
+    run "$dir" 1300 2 "--auto-vs"
+    ;;
+  ssaa)
+    fresh "$dir"
+    printf '%s\n' "ssaa 2" > "$dir/settings.ini"
     run "$dir" 1300 2 "--auto-vs"
     ;;
   scale1|scale2)

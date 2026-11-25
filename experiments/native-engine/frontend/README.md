@@ -291,6 +291,7 @@ on). Play mode and the app; settings.ini keys (upstream's names), also on the me
 | `latencytest 1` | X + D-pad Down paints the picture black, then white; X + D-pad Up ends it |
 | `aspect 0..4` | Auto (4:3, or the screen with the 16:9 code), 73:60, 4:3, 16:9, stretched; live |
 | `scale 0..4` | internal resolution: Auto (the display) or 640x480 times N; live |
+| `ssaa 1..4` | supersampling: that resolution rendered N times per axis and scaled down (off, 4x, 9x, 16x); live |
 | `brightness`, `contrast` 0.5..1.5, `vibrance` 0..2, `sharpness` 0..1 | Aurora's present pass (patches/0109); live |
 | `crt_filter 0/1/2`, `crt_curve 0..3` | off, studio monitor, home television (curved); live |
 | `borderart grid` or `FILE.bmp`, `borderedge 0/1` | art in the side bars (`<folder>/Borders`, the app's folder in the app), soft shadow at the picture's edge |
@@ -750,6 +751,26 @@ The music only reaches the sound output, never the game, so a pack plays online 
 written; M4A refused; the length limit) and `./test-audio-linux.sh DISC auto fixed jukebox packs` (SDL's disk audio driver
 records the output: with `packs` a 440 Hz test tone is in every second of the recording, the menu's song from `menu01.mp3`,
 Onett's from the playlist folder `onetto+onetto2/`).
+
+### Gecko codes, PhobGCC, the lag test and RVZ discs (0.4.7)
+
+- **Your Gecko codes** (`src/features/gecko.cpp`, `patches/0121`, `0122`): `<app folder>/GeckoCodes.ini` in Dolphin's format; each code
+  is a row of GECKO CODES > Your codes, switched there (greyed with melee-unlocked's reason when the Source Port cannot run it),
+  kept as `geckocode NAME` lines and `geckochosen 1` in settings.ini. melee-unlocked's user_gecko.cpp decides and plans each code
+  and the game image's own `mu_user_gecko_write` / `mu_user_gecko_read` store it, offline only (not online, in replays or a
+  vanilla-only session). A code that rewrites a game function is refused here (the console does not let a program rewrite its
+  own code). Test: `./test-mods-linux.sh DISC gecko`.
+- **PhobGCC settings** (`src/phob_adapter.*`, `src/features/phob.cpp`, `patches/0123`): melee-unlocked's firmware port (host/phob.cpp)
+  on the GameCube adapter's raw reports, stepped on the usb:hs reader thread once per millisecond of reports; `PhobGCC/port<N>.ini`;
+  CONTROLS > PhobGCC (port, on/off, the firmware's values, Stick calibration, Notch fix, soft reset). Calibration: the steps on
+  the overlay, A/L/R records, Z back, X/Y turn a notch, B resets it, Start stops; the game gets a resting controller from that
+  port meanwhile. Console only (the Linux build reads no adapter). Test: `../tools/phob_check.sh`.
+- **Lossless adapter lag test**: `lagtestnext 1` (VIDEO > Advanced) or `--lag-test` makes the next start the lag test (the switch
+  goes back to 0), with an empty `LagTestCard` folder. Test: `./test-overlays-linux.sh DISC lagtest`.
+- **RVZ and WIA discs** (`app.cpp` `app_disc_convert`): an .rvz or .wia named by `iso=`, or beside the expected GALE01.iso, is
+  checked and written once as GALE01.iso (melee-unlocked's disc_rvz.cpp). Test: `../tools/rvz_check.sh` (upstream's own test).
+- **Supersampling** (`ssaa 2..4`, upstream's key; the Picture page): the internal resolution rendered 2 to 4 times per axis and
+  scaled down (4x, 9x, 16x SSAA); off by default, heavy on the console's GPU.
 
 ## melee-unlocked's interface
 

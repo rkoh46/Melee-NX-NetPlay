@@ -83,7 +83,15 @@ float text_width(float size, const char* s) { return ImGui::GetFont()->CalcTextS
 uint32_t applied_generation = ~0u;
 bool applied_once = false;
 float applied_aspect = -1.0f;
-void apply_picture(const overlay::Config& c) {
+int applied_window_h = 0;
+// Upstream's SSAA (its `ssaa` 2..4: 4x, 9x, 16x): the internal resolution rendered N times per axis and scaled down to the picture.
+// Aurora takes a fractional scale of 640x480; Auto (the display's height) times N when no resolution is chosen.
+float frame_buffer_scale(const overlay::Config& c, int window_h) {
+  const float base = c.scale ? float(c.scale) : (c.ssaa > 1 && window_h > 0 ? float(window_h) / 480.0f : 0.0f);
+  return c.ssaa > 1 ? std::min(base * float(c.ssaa), 4.5f) : base;
+}
+void apply_picture(const overlay::Config& c, int window_h) {
+  if (c.ssaa > 1 && window_h != applied_window_h) { applied_window_h = window_h; aurora::window::set_frame_buffer_scale(frame_buffer_scale(c, window_h)); }
   if (applied_once && c.generation == applied_generation) {
     const float aspect = picture_aspect(c);   // the shape can follow the scene (True widescreen's opening movie)
     if (aspect != applied_aspect) { applied_aspect = aspect; aurora::window::set_frame_buffer_aspect(aspect); }
@@ -94,7 +102,8 @@ void apply_picture(const overlay::Config& c) {
   aurora_set_picture(&p);
   applied_aspect = picture_aspect(c);
   aurora::window::set_frame_buffer_aspect(applied_aspect);
-  aurora::window::set_frame_buffer_scale(float(c.scale));
+  aurora::window::set_frame_buffer_scale(frame_buffer_scale(c, window_h));
+  if (c.ssaa > 1) say("overlay: picture: %dx supersampling (frame buffer scale %.2f of 640x480)", c.ssaa * c.ssaa, frame_buffer_scale(c, window_h));
   say("overlay: picture: shape %d (%.3f), internal resolution %s, brightness %.2f, contrast %.2f, vibrance %.2f, sharpening %.2f, CRT %d (curve %.2f), border \"%s\"",
       c.aspect, picture_aspect(c), c.scale ? (std::to_string(640 * c.scale) + "x" + std::to_string(480 * c.scale)).c_str() : "auto",
       c.brightness, c.contrast, c.vibrance, c.sharpness, c.crt, c.crt_curve, c.border.c_str());
@@ -648,7 +657,7 @@ void overlay_draw(int ww, int wh) {
   if (!&features::overlay_config || !&features::overlay_snapshot) return;
   if (!ImGui::GetCurrentContext()) return;
   const overlay::Config c = features::overlay_config();
-  apply_picture(c);
+  apply_picture(c, wh);
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const Rect g = game_rect(ww, wh, picture_aspect(c));
   draw_border(dl, c, g, ww, wh);

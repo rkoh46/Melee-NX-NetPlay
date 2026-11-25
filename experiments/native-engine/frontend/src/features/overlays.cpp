@@ -81,6 +81,7 @@ bool setting(const std::string& key, const std::string& value) {
   else if (key == "borderart") { c.border = value == "-" || value == "0" ? std::string() : value; ++c.generation; }
   else if (key == "borderedge") { c.border_edge = on ? 1 : 0; ++c.generation; }
   else if (key == "scale") { c.scale = std::clamp(n, 0, 4); ++c.generation; }
+  else if (key == "ssaa") { c.ssaa = std::clamp(n, 1, 4); ++c.generation; }
   else return false;
   (void)before;
   return true;
@@ -443,6 +444,10 @@ void register_overlays() {
                   [] { const int s = overlay_config().scale; return s == 0 ? std::string("Auto (the display)") : std::to_string(640 * s) + "x" + std::to_string(480 * s); },
                   [](int d) { edit([d](overlay::Config& c) { c.scale = (c.scale + (d < 0 ? 4 : 1)) % 5; ++c.generation; }); }, nullptr,
                   [](Write w) { w("scale", std::to_string(overlay_config().scale)); }});
+  add_menu_entry({"Picture", "Supersampling (SSAA)",
+                  [] { const int a = overlay_config().ssaa; return a <= 1 ? std::string("Off") : std::to_string(a * a) + "x (heavy on the console)"; },
+                  [](int d) { edit([d](overlay::Config& c) { c.ssaa = std::clamp(c.ssaa + (d < 0 ? -1 : 1), 1, 4); ++c.generation; }); }, nullptr,
+                  [](Write w) { w("ssaa", std::to_string(overlay_config().ssaa)); }});
   add_menu_entry({"Picture", "Brightness", [] { return percent(overlay_config().brightness); },
                   [](int d) { edit([d](overlay::Config& c) { c.brightness = std::clamp(std::round((c.brightness + 0.05f * d) * 20.0f) / 20.0f, 0.5f, 1.5f); ++c.generation; }); }, nullptr,
                   [](Write w) { w("brightness", fmt(overlay_config().brightness)); }});
