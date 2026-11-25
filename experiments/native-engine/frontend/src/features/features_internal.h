@@ -26,6 +26,7 @@ void register_egg();                 // egg_command.cpp: the character select fr
 void register_audio();               // audio.cpp: Audio buffer (Auto, Low latency) and Use custom music (the jukebox)
 void register_gecko();               // gecko.cpp: the player's Gecko codes (GeckoCodes.ini), offline
 void register_phob();                // phob.cpp: PhobGCC settings per adapter port (src/phob_adapter.cpp)
+void register_pcsettings();          // pcsettings.cpp: the "PC Settings" row in Melee's Options menu
 
 // options.cpp: the session as the modules see it, updated once per retrace and by the netplay commands.
 bool online();                       // an online flow, search or match: offline-only features stay off
@@ -55,6 +56,9 @@ bool training_practice_display();    // the Practice menu's Tools: projectile hi
 bool training_practice_combo();      // the Practice menu's Tools: combo counter (MU_PC_TOOL_COMBO_COUNTER)
 bool training_advantage(int* frames, int* kind, uint32_t* retrace);   // the newest 0xF4 of this scene (false: none)
 std::vector<uint8_t> training_replay_defense(int setting);   // a takeover's opponents (0xE9): MuPcConfig bytes, empty to follow the recording
+
+// pcsettings.cpp: Z in Melee's Options menu opens the settings panel (the Z is kept from the game)
+void pcsettings_pad_hook(MuPadStatus pads[4]);
 
 // search.cpp: the keep-search question's and the search-again offer's buttons (options.cpp pad_read).
 void search_pad_hook(MuPadStatus pads[4]);

@@ -25,6 +25,8 @@
 #            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
 #   phob     melee-unlocked's PhobGCC menu with a scripted GameCube adapter: PhobVision, setups, PhobScope's plots, the reaction test, the
 #            remap editor, Phob Check, the coordinate viewer (screenshots; see the case)
+#   dolphin  a Dolphin GCPad profile imported onto an SDL virtual gamepad (MU_TEST_VIRTUAL_PAD) from the Controller profiles page
+#   pcsettings  "PC Settings" in Melee's Options menu: Z there opens the settings panel
 #   box      box mode (Mod X bound) on an adapter port: B0XX coordinates, Mod X, second-input priority (the "the game gets" lines)
 #   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
 #            settings search with the software keyboard's test answer
@@ -234,6 +236,42 @@ for case in "$@"; do
       pad "DR"; sleep 0.6; pad "DR DU"; sleep 0.6; pad "DR"; sleep 0.4; pad "DR DL"; sleep 0.6; pad "DR"; sleep 0.6; pad ""; sleep 1
       wait $app'
     grep -E "controls:|menu: (closed|the game gets)" "$dir/console.log" | cut -c1-160 | tail -14
+    ;;
+  dolphin)
+    # Dolphin profile import (controls_files.cpp) onto an SDL controller: an SDL virtual gamepad (MU_TEST_VIRTUAL_PAD=1, no
+    # controller in the container) and a Dolphin GCPad profile in <app folder>/Dolphin/Melee.ini (SDL bindings, sticks swapped,
+    # a dead zone): the panel on Controller profiles, "Import it into this controller"; the import's line and the saved profile.
+    make_app "$dir" 1 2400 - home=0
+    mkdir -p "$dir/melee-nx-netplay/Dolphin"
+    printf '%s\n' '[Profile]' 'Device = SDL/0/Test virtual gamepad' 'Buttons/A = `Button E`' 'Buttons/B = `Button S`' 'Buttons/X = `Button N`' \
+      'Main Stick/Up = `Right Y+`' 'Main Stick/Down = `Right Y-`' 'Main Stick/Left = `Right X-`' 'Main Stick/Right = `Right X+`' \
+      'C-Stick/Up = `Left Y+`' 'C-Stick/Down = `Left Y-`' 'Main Stick/Dead Zone = 12.0' > "$dir/melee-nx-netplay/Dolphin/Melee.ini"
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_TEST_VIRTUAL_PAD=1 MU_CONTROLS_TEST_PAGE="Controller profiles"; pad ""
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
+      # An SDL controller has many binding rows above the profiles: a longer walk than focus allows.
+      for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus Import it into this controller" ] && break; tap DD 0.08 0.25; done
+      sleep 0.5; shot import; tap A; sleep 1; shot imported; tap START
+      wait $app'
+    grep -E "controls:" "$dir/console.log" | cut -c1-200 | tail -6
+    for f in "$dir"/melee-nx-netplay/ControllerProfiles/*.profile; do [ -f "$f" ] && { echo "== $(basename "$f")"; head -5 "$f" | tr '\n' ' '; echo; }; done
+    ;;
+  pcsettings)
+    # The "PC Settings" row in Melee's Options menu (features/pcsettings.cpp): from Online Play (menu 8), B to 1P (menu 1), B to
+    # the main menu (menu 0), down to Options, A (menu 4), down twice, Z: the settings panel opens (the Z is kept from the game).
+    # feature_test=menu-trace logs the menu and row as they change (the fourth slot, upstream's PC Settings row, is skipped).
+    make_app "$dir" 1 3000 - home=0 feature_test=menu-trace
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""; shots 4
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+      tap B; sleep 1.5; tap B; sleep 1.5
+      for i in 1 2 3 4 5 6; do grep -aq "pc settings: menu 0 row 3" /out/console.log && break; tap DD 0.12 0.6; done; tap A; sleep 1.5
+      tap DD; tap DD; sleep 0.5; shot options-row; tap Z; sleep 1.5; shot panel
+      wait $app'
+    grep -E "pc settings:|settings: opened" "$dir/console.log" | cut -c1-160 | tail -12
     ;;
   controls)
     # The controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1), a saved setup
