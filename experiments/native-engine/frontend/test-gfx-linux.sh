@@ -15,6 +15,7 @@
 #   lab       the Lab view's silhouettes, melee-unlocked's fighter packs in place (MU_LAB_ZIP: its content release's zip)
 #   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
 #   video     menu video backgrounds: a made-up clip as sss.mp4 (needs build.sh ffmpeg)
+#   border-png   border art from a PNG (Borders/sunset.png, made here) beside the 4:3 picture
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
@@ -144,6 +145,16 @@ for f in range(90):
       done; ls -la /out/VideoBackgrounds'
     run "$dir" 1100 ""
     echo "== video"; grep -hE "^video backgrounds" "$dir/console.log" | head -12
+    ;;
+  border-png)
+    # Border art in PNG (upstream's picture formats through FFmpeg's decoder; .bmp was the only one before): a made-up picture
+    # in Borders/, the 4:3 picture's side bars show it.
+    fresh "$dir"; mkdir -p "$dir/Borders"
+    timeout 300 docker run --rm --name "mnx-gfx2-png-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
+      convert -size 640x360 gradient:orange-purple -fill white -draw "circle 80,180 80,120" -draw "circle 560,180 560,120" /out/Borders/sunset.png
+    printf '%s\n' "borderart sunset.png" "borderedge 1" "aspect 2" > "$dir/settings.ini"
+    run "$dir" 1100 ""
+    echo "== border-png"; grep -hE "border art" "$dir/console.log" | head -3
     ;;
   fingerprint)
     # A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp): the Akaneia disc of MU_MODS_DIR must be

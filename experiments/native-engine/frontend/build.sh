@@ -410,7 +410,7 @@ build_ffmpeg() {
   dock 3000 "$GFX_IMG" "
     rm -rf $W/ffmpeg-linux-build; mkdir -p $W/ffmpeg-linux-build; cd $W/ffmpeg-linux-build
     /w/build/native-engine/ffmpeg-src/configure --prefix=/w/$W/ffmpeg-linux --cc=/usr/local/bin/gcc --cxx=/usr/local/bin/g++ \\
-      --enable-static --disable-shared --enable-pic --disable-doc --disable-network --disable-autodetect --disable-debug --disable-ffplay --disable-ffprobe \\
+      --enable-static --disable-shared --enable-pic --disable-doc --disable-network --disable-autodetect --enable-zlib --disable-debug --disable-ffplay --disable-ffprobe \\
       --disable-everything --enable-avcodec --enable-avformat --enable-avutil --enable-swscale --enable-swresample --enable-avfilter --enable-ffmpeg \\
       --enable-decoder=h264,hevc,mpeg4,vp8,vp9,png,mjpeg,bmp,webp,rawvideo,aac,mp3,flac,vorbis,pcm_s16le --enable-parser=h264,hevc,mpeg4video,vp8,vp9,png,mjpeg,aac,mpegaudio \\
       --enable-demuxer=mov,matroska,image2,png_pipe,jpeg_pipe,bmp_pipe,webp_pipe,rawvideo,mp3,flac,ogg,wav --enable-protocol=file,pipe \\

@@ -20,4 +20,8 @@ __attribute__((weak)) std::shared_ptr<const Frame> fullscreen_frame();
 __attribute__((weak)) std::string status(int slot);   // 0 character select, 1 stage select
 __attribute__((weak)) void relearn(int slot);
 __attribute__((weak)) void shutdown();
+// A picture file (PNG, JPG, BMP, WebP) as RGBA rows from the top, scaled down to fit max_w x max_h (upstream's
+// linux_media::load_picture on FFmpeg): the border art's other formats (overlay_draw.cpp). False when it cannot be read.
+__attribute__((weak)) bool load_picture(const std::string& path, uint32_t max_w, uint32_t max_h, uint32_t* width, uint32_t* height,
+                                        std::vector<uint8_t>& rgba);
 }  // namespace fe::video_bg

@@ -21,6 +21,7 @@
 #include "proai/practice_state.h"   // practice_menu_draw (weak)
 #include "host.h"                // shim: gcadapter_status
 #include "gfx_live.h"            // the display wave: texture packs, ambient occlusion, readback, Lab view (gfx_render.cpp)
+#include "video_bg.h"            // load_picture: border art in PNG, JPG or WebP (FFmpeg builds)
 
 #include <aurora/aurora.h>
 #include <aurora/imgui.h>
@@ -123,7 +124,17 @@ const Art& art_for(const std::string& name) {
   const std::string folder = (options.app && !options.base_dir.empty() ? options.base_dir : options.out_dir) + "/Borders/";
   const std::string path = name.find('/') != std::string::npos ? name : folder + name;
   SDL_Surface* loaded = SDL_LoadBMP(path.c_str());
-  if (!loaded) { say("overlay: border art %s: %s (a .bmp in the Borders folder)", path.c_str(), SDL_GetError()); return a; }
+  if (!loaded && &video_bg::load_picture) {
+    // Upstream's other picture formats (PNG, JPG, WebP: its load_picture on FFmpeg), at most 2560 x 1440.
+    std::vector<uint8_t> rgba; uint32_t w = 0, h = 0;
+    if (video_bg::load_picture(path, 2560, 1440, &w, &h, rgba)) {
+      a.w = int(w); a.h = int(h);
+      a.id = aurora_imgui_add_texture(w, h, rgba.data());
+      say("overlay: border art %s, %ux%u", path.c_str(), w, h);
+      return a;
+    }
+  }
+  if (!loaded) { say("overlay: border art %s: %s (a .bmp, .png, .jpg or .webp in the Borders folder)", path.c_str(), SDL_GetError()); return a; }
   SDL_Surface* rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
   SDL_DestroySurface(loaded);
   if (!rgba) { say("overlay: border art %s: %s", path.c_str(), SDL_GetError()); return a; }

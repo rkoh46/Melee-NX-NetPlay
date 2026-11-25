@@ -299,4 +299,11 @@ std::shared_ptr<const Frame> fullscreen_frame() { return g_manager ? manager().f
 std::string status(int slot) { return g_manager ? manager().status(slot) : std::string(fe::gfx::live().video_backgrounds.load() ? "Starts with the game" : "Off"); }
 void relearn(int slot) { manager().relearn(slot); }
 void shutdown() { if (g_manager) g_manager->stop(); }
+bool load_picture(const std::string& path, uint32_t max_w, uint32_t max_h, uint32_t* width, uint32_t* height, std::vector<uint8_t>& rgba) {
+  std::vector<uint8_t> bgra;
+  if (!linux_media::load_picture(path, max_w, max_h, width, height, bgra) || bgra.size() < size_t(*width) * *height * 4) return false;
+  rgba.resize(size_t(*width) * *height * 4);
+  for (size_t i = 0; i + 3 < rgba.size(); i += 4) { rgba[i] = bgra[i + 2]; rgba[i + 1] = bgra[i + 1]; rgba[i + 2] = bgra[i]; rgba[i + 3] = bgra[i + 3]; }
+  return true;
+}
 }  // namespace fe::video_bg
