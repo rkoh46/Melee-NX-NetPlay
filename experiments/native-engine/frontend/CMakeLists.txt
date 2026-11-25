@@ -202,7 +202,7 @@ else()
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the
   # Mods screens of melee-unlocked's interface over it (mu_mods.cpp: the home screen's Mods page, the panel's MODS).
-  target_sources(mu_gx PRIVATE "${FE}/mods_service.cpp" "${FE}/mu_mods.cpp")
+  target_sources(mu_gx PRIVATE "${FE}/mods_service.cpp" "${FE}/mu_mods.cpp" "${FE}/modlooks.cpp")   # modlooks: Get mod looks
   target_include_directories(mu_gx PRIVATE "${CMAKE_BINARY_DIR}/gen_mods")
   target_link_libraries(mu_gx PUBLIC mu_modinstall)
   # overlay_imgui.cpp's empty controller list stands aside for app.cpp's (the SDL gamepads Aurora opened).
@@ -400,6 +400,7 @@ function(mu_program target netplay_object suffix)
     target_sources(${target} PRIVATE "${FE}/services_check.cpp")   # the services program's start-up self-check
     if(TARGET mu_proai)
       target_sources(${target} PRIVATE "${FE}/proai/proai_fetch_curl.cpp")   # Fight a pro's downloads (libcurl)
+      target_sources(${target} PRIVATE "${FE}/looks_fetch_curl.cpp")         # Get mod looks' downloads (libcurl)
       set_source_files_properties("${FE}/proai/proai_fetch_curl.cpp" PROPERTIES INCLUDE_DIRECTORIES "${REPO}/port/runtime/host")
     endif()
     if(TARGET mu_app_services)

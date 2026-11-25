@@ -323,6 +323,9 @@ void render_frame() {
 
 // Render thread, before Aurora shuts down: the loader and the writer finish, the read-back channels close.
 extern const int lab_linked;   // lab.cpp: keeps the Lab view in the program (see there)
+}  // namespace fe::gfx
+namespace fe::features { extern const int modlooks_linked; }   // modlooks.cpp: kept in the program the same way
+namespace fe::gfx {
 #if MU_FE_VIDEO
 namespace video_anchor { }
 }  // namespace fe::gfx
@@ -333,7 +336,7 @@ void render_end() {
 #if MU_FE_VIDEO
   if (!fe::video_bg::linked) return;
 #endif
-  if (lab_linked && &lab_end) lab_end();
+  if (lab_linked && fe::features::modlooks_linked && &lab_end) lab_end();
   if (&fe::video_bg::shutdown) fe::video_bg::shutdown();
   if (packs.applied != ~0u) {
     live().dumped.store(aurora::texture::dumped_texture_count());

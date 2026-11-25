@@ -26,6 +26,7 @@
 #include "host_services.h"
 #include "hackpack_source.h"     // melee-unlocked (fetched tree): the Hack Pack's host side, header only
 #include "sha256.h"              // this repository, port/runtime/host
+#include "looks_live.h"          // the Diet and Crystal presets use a built look pack (mods_configure)
 
 #include <algorithm>
 #include <chrono>
@@ -444,9 +445,23 @@ void mods_configure_costumes(const std::string& profile) {
 }
 
 // Before the host starts: which layers, and which memory card folder. Returns that folder (empty: no profile).
-std::string mods_configure(const std::string& profile) {
+std::string mods_configure(const std::string& profile_in) {
   configured = true;
-  if (profile.empty()) return {};
+  std::string profile = profile_in;
+  bool look_pack = false;
+  if (profile.empty()) {
+    // The Diet and Crystal look presets draw with the player's own build of that artwork when Get mod looks has made it
+    // (src/modlooks.cpp: mods/diet-classic, diet-64, crystal): that disc's files over the retail ones, offline (an online session
+    // is given no profile), on the ordinary memory card (it is a look, not a mod). Without it the built-in stand-ins draw them.
+    static const char* const kPack[] = {nullptr, nullptr, nullptr, "diet-classic", "diet-64", "crystal", "crystal"};
+    const int preset = fe::looks::preset_of();
+    if (preset >= 3 && preset <= 6) {
+      const std::string disc = options.out_dir + "/mods/" + kPack[preset] + "/" + kPack[preset] + ".iso";
+      struct stat st{};
+      if (stat(disc.c_str(), &st) == 0) { profile = kPack[preset]; look_pack = true; say("mods: the look preset %d draws with your build of its artwork (%s)", preset, disc.c_str()); }
+    }
+    if (profile.empty()) return {};
+  }
   profile_name = profile;
   mods_dir = options.out_dir + "/mods";
   std::string folder_name = profile;
@@ -459,6 +474,7 @@ std::string mods_configure(const std::string& profile) {
     at = comma + 1;
   }
   if (layers.empty()) { say("mods: profile \"%s\": no layers found under %s (Profiles/<name>.ini or the folder <name>/); playing the retail game", profile.c_str(), mods_dir.c_str()); profile_name.clear(); return {}; }
+  if (look_pack) { say("mods: look pack \"%s\", %zu layers, the ordinary memory card", profile.c_str(), layers.size()); card_dir.clear(); return {}; }
   say("mods: profile \"%s\", %zu layers, memory card folder %s", profile.c_str(), layers.size(), card_dir.c_str());
   return card_dir;
 }
