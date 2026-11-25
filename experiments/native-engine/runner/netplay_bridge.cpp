@@ -189,6 +189,8 @@ void set_chat(int mode, bool pick_previews) {
   config.pick_previews = pick_previews;
 }
 int local_slot() { return slippi::online::local_player_slot(); }
+void set_auto_lcancel(bool offered) { slippi::online::config().auto_lcancel_direct = offered; }
+bool auto_lcancel_agreed() { return slippi::online::auto_lcancel_agreed(); }
 bool search_kept() { return slippi::online::search_info().kept; }
 void end_kept_search(const char* why) { slippi::online::end_kept_search(why); }
 FrameTrace frame_trace() { FrameTrace t; slippi::online::frame_trace(&t.skip, &t.advanced, &t.offset_us); return t; }

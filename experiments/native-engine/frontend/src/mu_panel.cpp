@@ -259,7 +259,7 @@ bool place_row(const std::string& label, int* cat, std::string* title) {
     {"Retail game (no built-in codes)", 6, "Built-in codes"}, {"Slippi menus (Online Play)", 6, "Built-in codes"},
     {"Language", 2, "Language"}, {"Everything unlocked", 2, "Language"},
     {"Frozen Pokemon Stadium", 2, "Stages"}, {"Frozen Final Destination", 2, "Stages"},
-    {"Automatic L-cancel (offline)", 2, "L-cancel"}, {"Offline input delay", 2, "Input delay"},
+    {"Automatic L-cancel (offline; Direct when both agree)", 2, "L-cancel"}, {"Offline input delay", 2, "Input delay"},
     {"Console low-pass on voices (next start)", 1, "Music and sound"}, {"Use custom music (next start)", 1, "Music and sound"},
     // melee-unlocked's VIDEO page has the Arcade look section
     {"Show hitboxes", 0, "Arcade look"}, {"Projectile hitboxes", 0, "Arcade look"}, {"Hitboxes behind fighters", 0, "Arcade look"},

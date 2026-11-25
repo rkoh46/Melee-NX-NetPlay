@@ -586,7 +586,9 @@ side's selections always follow its build message on the same ordered channel, b
 same bytes before a match can start (a rule only one side applied would split the game at the first Start press). The
 headless runner takes the same choices as `--net-direct-pause 0|1`, `--net-port-colour A[,B]`, `--net-shield RRGGBB`,
 `--net-skip CODE` and, for tests, `--net-as-slippi` (no build message, the other's ignored). Results: FEATURES.md rows
-"Pause in Direct and Friends", "Online port colours", "Opponent shield colour", "Skip in Unranked". settings.ini comments
+"Pause in Direct and Friends", "Online port colours", "Opponent shield colour", "Skip in Unranked". 0.4.7 (`../patches/net-0011`): two more flags say
+whether a player offers Auto L-cancel (`autolcancel 1`); a Direct match uses it only when every player's build offered it
+(melee-unlocked allows it in Direct; here both must agree), on the local player's own input (FEATURES.md "Auto L-cancel"). settings.ini comments
 now start at a `#` at the start of a line or after a space, so a connect code keeps its `#`.
 
 ### Quick chat (0.4.3)

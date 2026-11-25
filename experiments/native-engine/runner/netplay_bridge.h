@@ -91,6 +91,10 @@ NETPLAY_API bool search_kept();
 NETPLAY_API void set_chat(int mode, bool pick_previews);
 // This console's player slot in the current online match (0..3).
 NETPLAY_API int local_slot();
+// Auto L-cancel in Direct (patches/net-0011): this player's offer, sent in the build message from the next connection on, and
+// whether a connected Direct match has every player's build offering it (both sides decide from the same exchanged bytes).
+NETPLAY_API void set_auto_lcancel(bool offered);
+NETPLAY_API bool auto_lcancel_agreed();
 NETPLAY_API void end_kept_search(const char* why);
 // The last online frame (after its 0xB0): skip 0 none, 1 waiting for the other player's inputs, 2 halted by time sync; advanced
 // by time sync; the time sync offset as last measured (us, above 0: this side is ahead).
