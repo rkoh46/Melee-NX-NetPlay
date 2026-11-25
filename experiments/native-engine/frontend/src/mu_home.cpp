@@ -207,6 +207,7 @@ struct Home {
   std::thread download;
   // A message over the page (an installed update, an error): OK closes it, or quits
   std::string msg_title; std::vector<std::string> msg_lines; bool msg_quits = false;
+  float msg_progress = -1.0f; std::string msg_progress_text;   // >= 0: a progress bar in place of the button (mu_home_progress)
   // Replay Viewer
   int replay_sel = 0, replay_scroll = 0;
   // Mods
@@ -741,6 +742,15 @@ void paint_message(ImDrawList* d, const Layout& L, const Fonts& f, const Home& h
     text(d, f.body, L.u(12), L.p(x + 18, ly), L.p(x + w - 18, ly + rows[i]), C_DIM, h.msg_lines[i], 0, rows[i] > 22);
     ly += rows[i] + 4;
   }
+  if (h.msg_progress >= 0.0f) {
+    // A long job (the RVZ conversion): its bar and its count where the button would be; no button, nothing to press.
+    const float bx = x + 18, bw = w - 36, by = y + hh - 40, bh = 12;
+    round_rect(d, L.p(bx, by), L.p(bx + bw, by + bh), L.u(6), RGB(0x0B, 0x11, 0x1E), RGB(0x0B, 0x11, 0x1E), C_ACC_LO);
+    const float fill = std::clamp(h.msg_progress, 0.0f, 1.0f) * bw;
+    if (fill > 1.0f) round_rect(d, L.p(bx, by), L.p(bx + fill, by + bh), L.u(6), C_ACC_LO, C_ACC_LO, C_ACC_LO);
+    text(d, f.body, L.u(12), L.p(bx, by - 22), L.p(bx + bw, by - 2), C_TEXT, h.msg_progress_text);
+    return;
+  }
   button(d, L, f, x + w - 140, y + hh - 46, 122, 32, h.msg_quits ? "Close app" : "OK", true, true, false);
 }
 
@@ -1096,6 +1106,55 @@ void message_job(void* frontend_v, void* user) {
   }
 }
 }  // namespace
+
+namespace {
+// A message with a progress bar while `job` runs on its own thread (the RVZ conversion): drawn until it returns; nothing to press.
+struct ProgressScreen {
+  std::string headline; std::vector<std::string> lines;
+  std::atomic<double> fraction{0.0}; std::atomic<bool> done{false};
+  std::mutex mutex; std::string text;
+};
+void progress_job(void* frontend_v, void* user) {
+  auto& p = *static_cast<ProgressScreen*>(user);
+  auto& frontend = *static_cast<host::MetalFrontend*>(frontend_v);
+  Home h; h.msg_title = p.headline; h.msg_lines = p.lines;
+  while (!p.done.load()) {
+    if (!frontend.pump_events()) continue;
+    const host::MetalWindowSize size = frontend.window_size();
+    if (!aurora_begin_frame()) continue;
+    h.msg_progress = float(p.fraction.load());
+    { std::lock_guard<std::mutex> lock(p.mutex); h.msg_progress_text = p.text; }
+    Layout L;
+    L.w = float(size.width ? size.width : 1280); L.h = float(size.height ? size.height : 720);
+    L.s = std::min(L.w / WIN_W, L.h / WIN_H);
+    L.ox = std::floor((L.w - WIN_W * L.s) * 0.5f); L.oy = std::floor((L.h - WIN_H * L.s) * 0.5f);
+    Fonts f{mu_ui::body_font() ? mu_ui::body_font() : ImGui::GetFont(), mu_ui::body_font() ? mu_ui::body_font() : ImGui::GetFont()};
+    ImDrawList* d = ImGui::GetBackgroundDrawList();
+    vgrad(d, ImVec2(0, 0), ImVec2(L.w, L.h), C_CONTENT_TOP, C_CONTENT_BOT);
+    h.page = -1;
+    paint_rail(d, L, f, h);
+    paint_message(ImGui::GetForegroundDrawList(), L, f, h);
+    aurora_end_frame();
+  }
+}
+}  // namespace
+
+// Runs `job` on a thread of its own and shows `headline` and `lines` with a bar of job's progress (report(fraction, text))
+// until it returns; false when the screens are not running (the job then runs here, without a picture).
+bool mu_home_progress(const std::string& headline, const std::vector<std::string>& lines,
+                      const std::function<void(const std::function<void(double, const std::string&)>&)>& job) {
+  ProgressScreen p;
+  p.headline = headline; p.lines = lines;
+  const auto report = [&p](double fraction, const std::string& text) {
+    p.fraction.store(fraction);
+    std::lock_guard<std::mutex> lock(p.mutex); p.text = text;
+  };
+  if (!screens_running()) { job(report); return false; }
+  std::thread worker([&] { job(report); p.done.store(true); });
+  screens_run(progress_job, &p);
+  worker.join();
+  return true;
+}
 
 bool mu_home_message(const std::string& headline, const std::vector<std::string>& lines) {
   Message m{headline, lines};
