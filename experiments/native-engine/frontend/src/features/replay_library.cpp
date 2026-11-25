@@ -484,7 +484,7 @@ void tables(MuHostApi* host, MuGameApi*) {
 void run_end() { stop_worker(); }
 // "As it was played" (upstream replay_control.cpp load_trace / show_trace): the replay's session trace laid out by replay frame,
 // its records shown on the network panel and the picture held where the session waited.
-struct AsPlayed { bool checked = false, on = false; std::string path; net_trace::Schedule schedule; net_trace::Pacer pacer; int32_t last = INT32_MIN;
+struct AsPlayed { bool checked = false, on = false; std::string path; net_trace::Schedule schedule; net_trace::Pacer pacer{nullptr}; int32_t last = INT32_MIN;
                   std::vector<net_trace::Pacer::Step> steps; };
 AsPlayed as;
 }  // namespace
