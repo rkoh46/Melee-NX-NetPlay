@@ -287,7 +287,7 @@ on). Play mode and the app; settings.ini keys (upstream's names), also on the me
 | `adapterrate 1` | the GameCube adapter's measured report rate (console; the Linux build reads no adapter) |
 | `playernicknames 1` | online: the players' Slippi names over the fighters |
 | `arcade_combo_counter 1` | offline: "N HITS" over the attacker's damage |
-| `lcancel_flash_mode 0/1/5/6`, `lcancel_success_flash 0/1/2` | off, missed, made, both; made in no colour, white, green: a ring around the fighter for 10 frames (not a tint of the model: that needs draw-owner tokens this decoder does not read). Online: this console's player only |
+| `lcancel_flash_mode 0..6`, `lcancel_success_flash 0/1/2` | off, MU missed (1), made (5), both (6): the fighter's model tinted red or green (white with success colour 1) for 8 frames (patches/0120, the game marks draw owners while a MU mode is chosen); TE missed (2), made (3), both (4) with the 20XX TE save: TE's own flash from its word 2 bits, the success colour from `lcancel_success_flash`. Online: this console's player only |
 | `latencytest 1` | X + D-pad Down paints the picture black, then white; X + D-pad Up ends it |
 | `aspect 0..4` | Auto (4:3, or the screen with the 16:9 code), 73:60, 4:3, 16:9, stretched; live |
 | `scale 0..4` | internal resolution: Auto (the display) or 640x480 times N; live |

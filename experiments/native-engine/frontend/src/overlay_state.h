@@ -19,7 +19,7 @@ struct Config {
   bool fps = false, graph = false;              // showfps, performance
   bool nicknames = false;                       // playernicknames
   bool combo = false;                           // arcade_combo_counter
-  int lcancel = 0;                              // lcancel_flash_mode: 0 off, 1 missed, 5 made, 6 both (upstream's renderer modes)
+  int lcancel = 0;                              // lcancel_flash_mode: 0 off, 1 missed, 5 made, 6 both (upstream's renderer modes); 2, 3, 4 TE's own (missed, made, both)
   int lcancel_success = 2;                      // lcancel_success_flash: 0 none, 1 white, 2 green
   bool latency_test = false;                    // latencytest: X + D-pad Down paints black, then white, X + D-pad Up ends
   bool adapter_rate = false;                    // adapterrate: the GameCube adapter's measured report rate on screen

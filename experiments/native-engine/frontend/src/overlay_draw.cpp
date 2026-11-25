@@ -5,7 +5,7 @@
 //     frame advantage the game measures, command 0xF4);
 //   - frame counter and performance graph (showfps, performance), the GameCube adapter's report rate (adapterrate);
 //   - players' names over the fighters online (playernicknames), the Arcade look's combo counter (arcade_combo_counter),
-//     the L-cancel flash (lcancel_flash_mode) as a ring over the fighter, the display latency test (latencytest);
+//     the display latency test (latencytest) (the L-cancel flash is the fighter's model tinted: features/overlays.cpp, patches/0120);
 //   - the replay viewer (replay_view.h, src/features/replays.cpp): where playback is on a timeline with the coach's tips,
 //     the speed, the player A takes over or the live takeover, the newest frame data reading, a tip's banner at its moment,
 //     a try's result, the buttons (the look follows upstream's gx/replay_hud.cpp: dark plates fading into the picture);
@@ -488,28 +488,6 @@ void draw_combos(ImDrawList* dl, const overlay::Snapshot& s, const Rect& g) {
   }
 }
 
-// The L-cancel flash: the renderer cannot tint one fighter's model here (melee-unlocked does it per draw through its
-// owner tokens, which this decoder does not read), so a ring flashes around the fighter for ten frames instead.
-void draw_lcancel(ImDrawList* dl, const overlay::Config& c, const overlay::Snapshot& s, const Rect& g) {
-  for (int slot = 0; slot < 4; ++slot) {
-    const overlay::Flash& f = s.flashes[slot];
-    if (!f.on || (f.success && c.lcancel_success == 0)) continue;
-    const overlay::Player& p = s.players[slot];
-    if (!std::isfinite(p.tag_x) || !std::isfinite(p.tag_y)) continue;
-    const uint32_t age = s.retrace - f.start;
-    if (age >= 10) continue;
-    const float fade = age < 6 ? 1.0f : 1.0f - float(age - 6) / 4.0f;
-    const ImU32 col = !f.success ? IM_COL32(255, 40, 30, 255) : c.lcancel_success == 1 ? IM_COL32(255, 255, 255, 255) : IM_COL32(40, 255, 60, 255);
-    const ImVec2 centre(to_x(g, p.tag_x), to_y(g, p.tag_y + 56.0f));   // the tag sits over the head: the ring goes on the body
-    const float r = g.h() * 0.075f * (1.0f + 0.04f * float(age));
-    dl->AddCircleFilled(centre, r, with_alpha(col, 0.22f * fade), 40);
-    dl->AddCircle(centre, r, with_alpha(col, 0.95f * fade), 40, std::max(3.0f, g.h() / 160.0f));
-    const char* label = f.success ? "L-CANCEL" : "MISSED L-CANCEL";
-    const float size = std::clamp(g.h() / 34.0f, 12.0f, 26.0f);
-    text(dl, size, ImVec2(centre.x - text_width(size, label) * 0.5f, centre.y - r - size - 2), with_alpha(col, fade), label);
-  }
-}
-
 // ---- the replay viewer (replay_view.h) ----
 std::vector<std::string> wrap(const std::string& s, float size, float width) {
   std::vector<std::string> lines;
@@ -688,7 +666,6 @@ void overlay_draw(int ww, int wh) {
   if (s.latency_fill >= 0) dl->AddRectFilled(ImVec2(g.x0, g.y0), ImVec2(g.x1, g.y1), s.latency_fill ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255));
   if (s.match) {
     dl->PushClipRect(ImVec2(g.x0, g.y0), ImVec2(g.x1, g.y1), true);
-    if (c.lcancel) draw_lcancel(dl, c, s, g);
     if (c.nicknames) draw_names(dl, s, g);
     if (c.combo || s.practice_combo) draw_combos(dl, s, g);
     dl->PopClipRect();
