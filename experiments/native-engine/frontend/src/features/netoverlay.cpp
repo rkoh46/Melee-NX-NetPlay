@@ -199,9 +199,19 @@ void net_trace_replay_saved(const std::string& slp_path) {
   say("nettrace: session trace %s %s (%zu rows; %u marks, %u long waits)", ok ? "saved to" : "WRITE FAILED for", path.c_str(), written, marks, waits6);
 }
 
+// A replay shown "as it was played" (replay_library.cpp): its trace's records go to the ring, and the panel shows them.
+std::atomic<double> replay_shown_at{0};
+void net_trace_show_replay_record(const void* record) {
+  net_trace::Record r = *static_cast<const net_trace::Record*>(record);
+  r.wall = now_s();
+  std::lock_guard<std::mutex> lock(mutex);
+  ring.push(r);
+  replay_shown_at.store(r.wall, std::memory_order_relaxed);
+}
+
 // The overlay drawer (src/overlay_draw.cpp, render thread): the newest records while the panel is on.
 bool net_overlay_samples(std::vector<overlay::NetSample>& out) {
-  if (!enabled) return false;
+  if (!enabled && now_s() - replay_shown_at.load(std::memory_order_relaxed) > 2.0) return false;
   static net_trace::Record recs[600];      // the render thread only
   size_t n;
   { std::lock_guard<std::mutex> lock(mutex); n = ring.copy(recs, 600); }

@@ -497,6 +497,7 @@ bool open_replay(const std::string& given) {
   }
   pb = Playback{};
   pb.path = path;
+  library_replay_opened(given);   // its session trace, for "as it was played" (replay_library.cpp)
   for (int w = 0; w < 3; ++w) pb.words[w] = read_word(bytes, w);
   const std::string profile = read_mod_profile(bytes);
   // As upstream's set_replay: a vanilla-only session does not play a replay recorded with gameplay mods.
@@ -657,6 +658,9 @@ void h_replay_finished() {
   pb.finished = true;
   report_check(pb.take_port >= 0 ? "finished (during a takeover)" : "finished");
   snapshot_store::release("the replay ended");
+  // The watch queue (replay_library.cpp): the next replay starts at the next retrace (play mode's restart), else the run ends.
+  const std::string next = library_queue_next();
+  if (!next.empty()) { say("replay: the watch queue goes on with %s", next.c_str()); replay_watch(next); return; }
   linux_host::request_stop(0);
 }
 
@@ -969,6 +973,7 @@ int replay_gate(uint8_t, const uint8_t* p, uint32_t n, std::vector<uint8_t>& rep
   }
   pb.frame = frame;
   if (pb.seek_target != INT32_MIN && frame >= pb.seek_target) { pb.seek_target = INT32_MIN; say("replay: at frame %d", frame); }
+  if (!pb.analyze && pb.take_port < 0) library_replay_frame(frame, !pb.fast && pb.seek_target == INT32_MIN && !pb.paused);
   keep_if_due(frame);
   // Analyze (the Replays page, or the test): run to the end unseen so the game measures every moment, then come back.
   if (analyze_request.exchange(false) && !pb.analyze && pb.take_port < 0) {
@@ -1118,6 +1123,7 @@ std::string online_replay_for_report() {
 }
 
 bool replay_playing() { return playing; }
+bool replays_compress_on() { return compress_replays; }
 bool replay_word(int which, uint32_t* value) {
   if (!playing || which < 0 || which > 2) return false;
   *value = pb.words[which];
