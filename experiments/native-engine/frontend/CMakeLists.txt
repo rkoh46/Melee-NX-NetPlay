@@ -268,6 +268,22 @@ if(TARGET mu_features)
   endif()
 endif()
 
+# melee-unlocked's full-screen PhobGCC menu (features/phob.cpp opens it; src/phob_menu_glue.cpp): its gx/phob_menu.cpp (with
+# patches/0140) and host/phob_store.cpp from build.sh sync's copies in gen/phob, host/phobscope.cpp from the fetched tree, on
+# src/phob_shim's headers and the Practice menu's drawing (gen/proai practice_menu.h). Needs Aurora's ImGui: picture variants.
+if(TARGET mu_practice_menu AND EXISTS "${GEN}/phob/phob_menu.cpp")
+  add_library(mu_phob_menu OBJECT "${GEN}/phob/phob_menu.cpp" "${GEN}/phob/phob_store.cpp" "${MU}/port/runtime/host/phobscope.cpp"
+    "${FE}/phob_menu_glue.cpp")
+  set_target_properties(mu_phob_menu PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
+  target_include_directories(mu_phob_menu BEFORE PRIVATE "${FE}/phob_shim")
+  target_include_directories(mu_phob_menu PRIVATE "${GEN}/phob" "${GEN}/proai" "${FE}" "${MU}/port/runtime/host")
+  target_compile_options(mu_phob_menu PRIVATE -O2 -g -Wall -fno-strict-aliasing -Wno-unused-function -Wno-unused-variable)
+  target_link_libraries(mu_phob_menu PRIVATE aurora::core)
+  if(MU_FE_VARIANT STREQUAL "switch")
+    target_include_directories(mu_phob_menu SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include" "${DEVKITPRO}/libnx/include")
+  endif()
+endif()
+
 # The app's screens before the game, for the services program with a picture: the self-update from the player's build
 # computer (self_update*.cpp) and the Slippi sign-in (switch_signin.cpp with patches/0105, slippi_login.cpp, HTTPS
 # through libcurl). The netplay object has its own copies of the last two, local to it.
@@ -332,6 +348,10 @@ endif()
 # src/gecko_shim/gecko_host_shim.h; its variable table (user_gecko_targets.h) and function tables from the fetched tree.
 if(EXISTS "${GEN}/gecko/user_gecko.cpp")
   add_library(mu_gecko OBJECT "${GEN}/gecko/user_gecko.cpp")
+  # Codes agreed online between two of this app's builds (patches/net-0014): the session (with patches/0141) and the messages.
+  if(EXISTS "${GEN}/gecko/gecko_session.cpp")
+    target_sources(mu_gecko PRIVATE "${GEN}/gecko/gecko_session.cpp" "${MU}/port/runtime/host/gecko_online.cpp")
+  endif()
   set_target_properties(mu_gecko PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS ON)
   target_include_directories(mu_gecko BEFORE PRIVATE "${FE}/gecko_shim")
   target_include_directories(mu_gecko PRIVATE "${MU}/port/runtime/host" "${REPO}/build/native-engine/mu/sourceport/game/shim")   # the function tables (the fetched tree)
@@ -394,6 +414,9 @@ function(mu_program target netplay_object suffix)
   endif()
   if(TARGET mu_practice_menu)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_practice_menu>)
+  endif()
+  if(TARGET mu_phob_menu)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:mu_phob_menu>)
   endif()
   target_include_directories(${target} PRIVATE "${FE}" "${RUN}")
   target_link_libraries(${target} PRIVATE mu_gx mu_host mu_gx "${netplay_object}")
@@ -480,7 +503,7 @@ else()
 endif()
 if(MU_FE_SANITIZE)
   set(_san_flags -fsanitize=${MU_FE_SANITIZE} -fno-omit-frame-pointer)
-  foreach(_t mu_host mu_gx mu_present mu_features mu_jukebox mu_gecko mu_app_services mu_native_gfx mu_native_gfx_services)
+  foreach(_t mu_host mu_gx mu_present mu_features mu_jukebox mu_gecko mu_phob_menu mu_app_services mu_native_gfx mu_native_gfx_services)
     if(TARGET ${_t})
       target_compile_options(${_t} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:${_san_flags}>)
     endif()

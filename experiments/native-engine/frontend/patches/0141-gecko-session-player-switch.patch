@@ -1,0 +1,26 @@
+melee-unlocked's Gecko session (port/runtime/host/gecko_session.cpp, GPL-2.0-or-later) as a build-time copy (Melee-NX-NetPlay 0.4.8,
+gen/gecko): its host header is frontend/src/gecko_shim/gecko_host_shim.h, and upstream's constant switch (kOnlineCodes = false) becomes
+the player's setting (set_online_codes, settings.ini gecko_online 1, off by default). The rules are unchanged. LF line ends.
+--- a/port/runtime/host/gecko_session.cpp
++++ b/port/runtime/host/gecko_session.cpp
+@@ -1,7 +1,7 @@
+ // Gecko codes in a network match: one connection's offer, answer and lock (gecko_session.h).
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "gecko_session.h"
+-#include "host.h"
++#include "gecko_host_shim.h"   // Melee-NX-NetPlay: the host log (frontend/src/gecko_shim)
+ #include "user_gecko.h"
+ 
+ #include <algorithm>
+@@ -46,7 +46,10 @@
+ 
+ // Off until two games have played agreed codes through matches side by side (rollback included)
+ // without a desync: until then no offer is sent, no lock either, and matches run no codes.
+-constexpr bool kOnlineCodes = false;
++// Melee-NX-NetPlay: a player's switch (settings.ini gecko_online 1, off by default), between two of its own builds only (the
++// build message says so); the codes run at every simulated frame's input exchange, rollbacks included (features/gecko.cpp).
++bool kOnlineCodes = false;
++void set_online_codes(bool on) { kOnlineCodes = on; }
+ 
+ void connected(bool consent) {
+   g = State{};

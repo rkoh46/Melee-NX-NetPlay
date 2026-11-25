@@ -1,0 +1,13 @@
+The PhobGCC menu (melee-unlocked's gx/phob_menu.cpp, GPL-3.0-only) as a build-time copy (Melee-NX-NetPlay 0.4.8, gen/phob):
+opening it reads the socket's settings again, because the panel's PhobGCC rows (features/phob.cpp) may have changed them since
+the menu was last open. Nothing else changes.
+--- a/port/runtime/gx/phob_menu.cpp
++++ b/port/runtime/gx/phob_menu.cpp
+@@ -1140,6 +1140,7 @@
+ void phob_native_request(int port, bool scopes_only) {
+   g_open = true;
+   g_port = std::clamp(port, 0, 3);
++  g_menu[g_port].loaded = false;   // Melee-NX-NetPlay: the panel's PhobGCC rows may have changed the settings since the last visit
+   g_prev = 0xFFFF;
+   g_socket_armed = false;
+   g_changed_at = ImGui::GetTime();

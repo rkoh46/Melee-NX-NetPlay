@@ -23,6 +23,8 @@
 #            saved setup in launcher.ini (X and Y swapped): Start + D-pad Down + Z opens the panel on Controller profiles
 #            (MU_CONTROLS_TEST_PAGE), "Save as a new profile", the A binding pressed onto Z, stick left/right inverted, Stick radius 90
 #            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
+#   phob     melee-unlocked's PhobGCC menu with a scripted GameCube adapter: PhobVision, setups, PhobScope's plots, the reaction test, the
+#            remap editor, Phob Check, the coordinate viewer (screenshots; see the case)
 #   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
 #            settings search with the software keyboard's test answer
 #   launcher the home screen's What's new, Language (Deutsch), launcher colour wheel and a rail picture (screenshots)
@@ -139,6 +141,74 @@ for case in "$@"; do
     echo "launcher.ini after the menu:"; grep -E "^(volume|hud|keyboard)=" "$dir/melee-nx-netplay/launcher.ini" || true
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true
     grep -E "launcher.ini:|music [0-9]+%" "$dir/console2.log" | cut -c1-200 | head -3
+    ;;
+  phob)
+    # melee-unlocked's PhobGCC menu (src/phob_menu_glue.cpp, features/phob.cpp) with a scripted GameCube adapter in socket 1
+    # (MELEE_TEST_ADAPTER_SCRIPT, upstream's test aid: raw adapter reports at 1 kHz through src/phob_adapter.cpp). Each run opens the
+    # panel on the PhobGCC page (Start + D-pad Down + Z with MU_CONTROLS_TEST_PAGE) and presses "Open the PhobGCC menu" or "Controller
+    # test"; MELEE_TEST_PHOB=<screen> (upstream's aid) starts it on that screen and logs its screen and controller ("phob test:").
+    #   nav       PhobVision's top screen: PhobGCC Settings on (A), Setups > Save New Setup (PhobGCC/Setups/Setup 1.ini), PhobScope >
+    #             Input Viewer, back (B) to the top and back to the panel, Start
+    #   scope     Value vs Time Plots (snapback on the left stick X, then dashback): flicks from the script, the results, then Phob Check
+    #   stickmap  Stickmap Plots: Start records, the script rolls the stick around; then the Gate Visualizer
+    #   reaction  Reaction Time Test: Start, the square, the script's press; the delay logged
+    #   remap     Button Remapping, listening for A (upstream's remap:0): the script presses B, so B presses A (port1.ini remap)
+    #   coord     Controller test (PhobScope as the top screen): Coordinate Viewer at 4x with the stick in a notch
+    # MU_PHOB_RUNS="nav scope ..." runs only those.
+    phob_run() {   # $1 name, $2 MELEE_TEST_PHOB screen, $3 action, $4 the open row, $5 adapter script, $6 the taps once it is open
+      case " ${MU_PHOB_RUNS:-nav scope stickmap reaction remap coord} " in *" $1 "*) ;; *) return 0 ;; esac
+      local sub="$dir/$1"; make_app "$sub" 1 3600 - home=0
+      printf '%s\n' "$5" > "$sub/adapter.txt"
+      run "$sub" 'export MELEE_PAD_FILE=/out/pad.txt MU_CONTROLS_TEST_PAGE=PhobGCC MELEE_TEST_ADAPTER_SCRIPT=/out/adapter.txt MELEE_TEST_PHOB='"$2"' MELEE_TEST_PHOB_ACTION="'"$3"'"
+        [ "'"$1"'" = coord ] && export MELEE_TEST_CONTROLLER_TEST=1
+        pad ""
+        cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+        app=$!
+        wait_log /out/console.log "online menu: row 1" 120 && sleep 3
+        pad "START DD Z"; sleep 0.3; pad ""; sleep 1.5
+        focus "'"$4"'"; shot panel; tap A; sleep 2; shot open
+        '"$6"'
+        wait $app'
+      echo "== $1"; grep -aE "phob|gc adapter: test|exit code" "$sub/console.log" | grep -v "menu pad" | cut -c1-200 | tail -25
+      grep -a "phob test: menu pad" "$sub/console.log" | awk '{print $NF}' | uniq | tr '\n' ' '; echo "(screens visited)"
+    }
+    mkdir -p "$dir"
+    phob_run nav 0 "" "Open the PhobGCC menu (PhobVision, setups, remap)" "60000 128 128 128 128 0 0" \
+      'tap DD; tap A; sleep 0.5; shot settings-on; for i in 1 2 3 4 5; do tap DD; done; tap A; sleep 0.8; shot setups
+       tap DD; tap DD; tap A; sleep 0.8; shot setup-saved; tap B; sleep 0.5; tap DU; tap DU; tap A; sleep 0.5; tap A; sleep 2; shot inputview
+       tap B; sleep 0.4; tap B; sleep 0.4; tap B; sleep 2; shot back-to-panel; tap START; sleep 1'
+    echo "setups: $(ls "$dir/nav/melee-nx-netplay/PhobGCC/Setups" 2>/dev/null | tr '\n' ' ')"; echo "port1.ini: $(grep -iE '^(enabled|phob_hardware)' "$dir/nav/melee-nx-netplay/PhobGCC/port1.ini" 2>/dev/null | tr '\n' ' ')"
+    # Flicks: from the rim (X 230) let go to the centre with an overshoot the other way (snapback), every 1.5 s; then dashes.
+    flicks=""; for i in 1 2 3 4 5 6; do flicks="$flicks
+1200 128 128 128 128 0 0
+250 230 128 128 128 0 0
+4 175 128 128 128 0 0
+4 110 128 128 128 0 0
+5 92 128 128 128 0 0
+6 118 128 128 128 0 0"; done
+    phob_run scope 27 "input:0" "Open the PhobGCC menu (PhobVision, setups, remap)" "4000 128 128 128 128 0 0$flicks
+2000 128 128 128 128 0 0" \
+      'sleep 12; shot snapback; tap B; sleep 0.4; tap B; sleep 0.4; for i in 1 2 3 4 5; do tap DD; done; tap A; sleep 1.5; shot phobcheck; tap START'
+    circle=""; for a in 0 30 60 90 120 150 180 210 240 270 300 330 360; do x=$(python3 -c "import math;print(int(128+100*math.cos(math.radians($a))))"); y=$(python3 -c "import math;print(int(128+100*math.sin(math.radians($a))))"); circle="$circle
+40 $x $y 128 128 0 0"; done
+    phob_run stickmap 26 "map:2" "Open the PhobGCC menu (PhobVision, setups, remap)" "6000 128 128 128 128 0 0$circle$circle$circle
+8000 128 128 128 128 0 0$circle$circle$circle$circle
+3000 128 128 128 128 0 0" \
+      'tap START; sleep 4; shot stickmap; tap B; sleep 0.4; for i in 1 2 3 4 5 6; do tap DD; done; tap A; sleep 4; shot gate; tap START'
+    presses=""; for i in $(seq 70); do presses="$presses
+60 128 128 128 128 0 0 A
+140 128 128 128 128 0 0"; done
+    phob_run reaction 29 "" "Open the PhobGCC menu (PhobVision, setups, remap)" "3000 128 128 128 128 0 0$presses" \
+      'tap START; sleep 11; shot reaction; tap B; sleep 0.5; tap START'
+    phob_run remap 18 "remap:0" "Open the PhobGCC menu (PhobVision, setups, remap)" "3000 128 128 128 128 0 0
+120 128 128 128 128 0 0 B
+30000 128 128 128 128 0 0" \
+      'sleep 5; shot remap; tap START'
+    echo "port1.ini after the remap: $(grep -i 'remap' "$dir/remap/melee-nx-netplay/PhobGCC/port1.ini" 2>/dev/null | tr '\n' ' ')"
+    phob_run coord 35 "zoom:2" "Controller test (PhobScope, Phob Check)" "3000 128 128 128 128 0 0
+2500 200 185 128 128 0 0
+30000 128 128 128 128 0 0" \
+      'sleep 2; shot coord; sleep 1.5; tap B; sleep 0.5; shot scope-top; tap START'
     ;;
   controls)
     # The controller setup (src/controls.cpp) on port 1 read as GameCube adapter port 1 (MU_CONTROLS_TEST_ADAPTER=1), a saved setup

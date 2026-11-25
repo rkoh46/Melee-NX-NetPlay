@@ -38,6 +38,7 @@ namespace fe::features {
 __attribute__((weak)) bool practice_menu_chord(int port);
 __attribute__((weak)) bool practice_menu_open();
 __attribute__((weak)) void practice_menu_pads(MuPadStatus pads[4]);
+__attribute__((weak)) void phob_menu_pads(MuPadStatus pads[4]);   // features/phob.cpp: the full-screen PhobGCC menu
 }
 
 namespace fe {
@@ -278,6 +279,8 @@ void controls_chords(void* pads_v) {
   // While the Practice menu is open its controller is the menu's and the game gets neutral pads (features/proai.cpp).
   static_assert(sizeof(host::PadState) == sizeof(MuPadStatus), "the two pad structures have the same fields in the same order");
   if (&features::practice_menu_pads) features::practice_menu_pads(reinterpret_cast<MuPadStatus*>(pads));
+  // While the PhobGCC menu is open the controllers drive it and the game gets resting controllers (features/phob.cpp).
+  if (&features::phob_menu_pads) features::phob_menu_pads(reinterpret_cast<MuPadStatus*>(pads));
 }
 
 void controls_saved(void (*put)(const std::string&, const std::string&)) {
