@@ -30,6 +30,7 @@
 #include "self_update.h"
 #include "switch_signin.h"
 
+#include <SDL3/SDL.h>
 #include <aurora/aurora.h>
 #include <dolphin/pad.h>
 #include <imgui.h>
@@ -47,6 +48,7 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -227,8 +229,9 @@ struct Home {
   bool browse_open = false, browse_files = false; std::string browse_dir; std::vector<std::string> browse_list; int browse_sel = 0, browse_scroll = 0;
   bool theme_open = false; int theme_row = 0; double theme_h = 268, theme_s = .65, theme_v = .93; COLORREF theme_before = 0;
   // Multiplayer Lobby (mu_home_lobby.inl): the tab, the picked player and friend, the request that already took the focus
-  int lobby_tab = 0, lobby_player = 0, lobby_scroll = 0, lobby_friend = 0;
-  std::string lobby_seen_request, lobby_focus_said, lobby_name, lobby_code;
+  int lobby_tab = 0, lobby_player = 0, lobby_scroll = 0, lobby_friend = 0, lobby_action = 0;   // lobby_action: a player row's Left / Right
+  std::string lobby_seen_request, lobby_focus_said, lobby_name, lobby_code, lobby_room;   // lobby_room: "" the public chat
+  std::set<std::string> lobby_rooms_seen;
 };
 
 std::string read_account(const std::string& user_dir, bool* ok) {
@@ -348,10 +351,10 @@ void open_notes(Home& h) {
 // A picture of the player's own on the rail in Bailey's place (upstream's rail-image.*): rail-image.png or .bmp in the app
 // folder; none, or one that cannot be read: Bailey.
 const mu_ui::Art& rail_art() {
-  static bool loaded = false;
+  static int loaded = -1;
   static mu_ui::Art art;
-  if (!loaded) {
-    loaded = true;
+  if (loaded != mu_ui::ui_generation()) {   // once per Aurora (the home screen comes back after a lobby match)
+    loaded = mu_ui::ui_generation(); art = mu_ui::Art{};
     for (const char* ext : {".png", ".bmp"}) {
       const std::string path = options.base_dir + "/rail-image" + ext;
       if (FILE* f = std::fopen(path.c_str(), "rb")) {
@@ -1004,7 +1007,7 @@ void home_job(void* frontend_v, void* user) {
           else { h.page = h.focus; h.rail = false; h.focus = h.page == PAGE_PLAY ? 1 : 0; }
         }
       } else if (h.page == PAGE_LOBBY) {
-        const bool took_left = lobby_input(h, e);
+        const bool took_left = lobby_input(h, e, true);
         if ((e.left && !took_left) || e.b) { h.rail = true; h.focus = h.page; }
       } else {
         int count = 1;
@@ -1039,6 +1042,8 @@ void home_job(void* frontend_v, void* user) {
     }
     mu_ui::panel_service(false);
     if (mu_ui::panel_take_quit()) { h.result = AppStart::Quit; h.done = true; }
+    // A new request rings and private chat requests come to the front whatever page shows (upstream's process_invites).
+    if (!(h.page == PAGE_LOBBY && !h.rail)) lobby_input(h, Edges{}, false);
     // An accepted lobby match: the home screen closes and the game starts it (lobby.cpp hands it over).
     {
       lobby::Match m;
@@ -1239,6 +1244,8 @@ AppStart mu_home_run(const std::string& user_dir, bool update_check) {
     struct stat st{};
     lobby::start(options.base_dir + "/Lobby", h.lobby_name, h.lobby_code, h.signed_in && stat(options.iso.c_str(), &st) == 0);
   }
+  // Back from a lobby match (play_main.cpp's visits): on the lobby page, as upstream's launcher shows again after its game.
+  if (lobby::returning()) { h.page = PAGE_LOBBY; h.rail = false; h.focus = 0; say("home: back on the lobby page after the lobby match"); }
   say("home: melee-unlocked's launcher (Play, Settings, Multiplayer Lobby, Replay Viewer, Mods)%s", h.signed_in ? "" : "; no Slippi account on this console");
   if (!screens_run(home_job, &h)) return h.signed_in ? AppStart::Play : AppStart::PlayOffline;
   return h.result;

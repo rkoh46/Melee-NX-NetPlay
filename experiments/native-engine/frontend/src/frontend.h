@@ -76,6 +76,7 @@ void settings_force_vanilla_only();      // --vanilla-only
 bool settings_lag_test_take();           // settings.ini lagtestnext 1: this start is the Lossless adapter lag test (cleared for the next)
 void settings_online(bool on);       // the option words follow the online rules while this is on
 void settings_deactivate();          // the host's own words again (the netplay runs that boot straight into a match)
+void settings_reactivate();          // the file's words again after such a run (the app back on its home screen)
 int settings_online_delay();         // frames; 0: automatic
 void settings_net_prefs(bool* direct_pause, int port_colour[2], uint32_t* shield_online, std::string skip[3]);   // patches/net-0004
 bool settings_widescreen();

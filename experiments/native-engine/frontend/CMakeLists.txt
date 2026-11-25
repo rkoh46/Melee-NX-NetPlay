@@ -351,7 +351,7 @@ if(NOT MU_FE_VARIANT STREQUAL "null")
     target_include_directories(mu_app_services PRIVATE "${REPO}/switch/src")
   endif()
   # The home screen's Multiplayer Lobby (src/lobby.cpp): melee-unlocked's peer lobby (gen/lobby/launcher_lobby_p2p.cpp, build.sh
-  # sync with patches/0142) on src/lobby_shim (POSIX sockets, its launcher_lang.h stand-in), its DHT (jech/dht, MIT) and Monocypher
+  # sync, as fetched) on src/lobby_shim (POSIX sockets, its launcher_lang.h stand-in), its DHT (jech/dht, MIT) and Monocypher
   # (BSD-2-Clause or CC0-1.0) from the fetched tree's port/third_party. The build string is melee-unlocked's version and the Source
   # Port, as its Linux launcher announces it.
   file(STRINGS "${REPO}/build/native-engine/mu/VERSION" _mu_version LIMIT_COUNT 1)
@@ -361,7 +361,7 @@ if(NOT MU_FE_VARIANT STREQUAL "null")
   target_include_directories(mu_lobby BEFORE PRIVATE "${FE}/lobby_shim" "${GEN}/lobby")
   target_include_directories(mu_lobby PRIVATE "${FE}" "${FE}/features" "${RUN}" "${MU}/port/runtime/abi" "${MU}/port/third_party/dht"
     "${MU}/port/third_party/monocypher" "${REPO}/port/third_party")
-  target_compile_definitions(mu_lobby PRIVATE MU_LOBBY_HOSTED_ONLY MU_LOBBY_BUILD="${_mu_version}:source")
+  target_compile_definitions(mu_lobby PRIVATE MU_LOBBY_BUILD="${_mu_version}:source")
   target_compile_options(mu_lobby PRIVATE -O2 -g -Wall -fno-strict-aliasing)
   set_source_files_properties("${MU}/port/third_party/dht/dht.c" "${MU}/port/third_party/monocypher/monocypher.c"
     "${MU}/port/third_party/monocypher/monocypher-ed25519.c" PROPERTIES COMPILE_OPTIONS "-w")

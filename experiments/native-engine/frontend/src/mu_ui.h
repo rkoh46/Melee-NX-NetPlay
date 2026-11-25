@@ -15,6 +15,9 @@ namespace fe::mu_ui {
 // Render thread, once, after Aurora is up and before its first frame: ImGui's own font stays the default (every other
 // overlay keeps its look); melee-unlocked's Source Sans 3 Black (headings) and Bold (body) are added beside it.
 void fonts_init();
+// Counts Aurora's ImGui contexts (fonts_init raises it when the context is a new one: Aurora started again after a game, the app
+// back on its home screen). Pictures uploaded under an earlier one are uploaded again.
+int ui_generation();
 ImFont* heading_font();          // Source Sans 3 Black, 28 px (melee-unlocked's heading font)
 ImFont* body_font();             // Source Sans 3 Bold, 16 px (its body font is the system's Segoe UI / Source Sans 3 Regular)
 // The launcher's artwork (Bailey, the Melee Unlocked mark), decoded from the embedded BMPs and uploaded on first use.

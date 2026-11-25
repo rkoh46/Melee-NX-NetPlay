@@ -16,6 +16,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
 #include "overlay_state.h"
+#include "mu_ui.h"
 #include "looks_live.h"   // True widescreen: the opening movie stays 4:3
 #include "replay_view.h"
 #include "proai/practice_state.h"   // practice_menu_draw (weak)
@@ -121,6 +122,8 @@ void apply_picture(const overlay::Config& c, int window_h) {
 struct Art { ImTextureID id = 0; int w = 0, h = 0; bool tried = false; };
 std::map<std::string, Art> arts;
 const Art& art_for(const std::string& name) {
+  static int gen = -1;
+  if (gen != mu_ui::ui_generation()) { gen = mu_ui::ui_generation(); arts.clear(); }   // textures of an earlier Aurora
   Art& a = arts[name];
   if (a.tried) return a;
   a.tried = true;
@@ -159,7 +162,8 @@ bool is_video(const std::string& name) {
   return ext == ".mp4";
 }
 const Art& video_art(const std::string& name) {
-  static Art art; static uint64_t serial = 0; static std::string shown; static bool said = false;
+  static Art art; static uint64_t serial = 0; static std::string shown; static bool said = false; static int gen = -1;
+  if (gen != mu_ui::ui_generation()) { gen = mu_ui::ui_generation(); art = Art{}; serial = 0; }
   if (!&video_bg::border_frame) {
     if (!said) { said = true; say("overlay: border art %s: this build plays no video (no FFmpeg)", name.c_str()); }
     return art;

@@ -1,20 +1,24 @@
 // The home screen's Multiplayer Lobby page (included by mu_home.cpp, inside its namespace): melee-unlocked's Multiplayer Lobby tab
 // (port/app/launcher_lobby.cpp and launcher_lobby_ui.inl) on a controller and the launcher's 720 x 480 layout. Its parts:
 //   Go Online / Leave (upstream's GO_ONLINE), the network state under the title;
-//   tabs: Players (its roster card: avatar, name, Game Build, status / location / ping, mains, stocks in a match), Lobby chat,
-//   Friends (and friend requests), Your profile (name, the Slippi code read from the account, location, three mains);
+//   tabs: Players (its roster card: avatar, name, Game Build, status / location / ping, mains, stocks in a match; Send match request
+//   for Slippi Direct, Peer-to-peer match for melee-unlocked's own, Private chat, Add friend), Lobby chat (the public chat and a tab
+//   per private room, upstream's room tabs), Friends (and friend requests), Match history (its W/L record and games), Your profile
+//   (name, the Slippi code read from the account, location, three mains, auto reject invites, the request sound and its volume);
 //   the request bar (Accept / Decline, or Cancel, with the time left and the measured ping), and the status line (its notices).
-// Upstream's empty states and their words: "Find your next match", "Ready for a few games?", "Friends, one click away.". Added for
-// the console: "Looking for players" while the lobby network has found nobody yet, and the reason when the lobby cannot start.
-// Left out: private chat rooms, the match history and its W/L, auto reject and the request sound (see FEATURES.md).
+// Upstream's empty states and their words: "Find your next match", "Ready for a few games?", "Friends, one click away.", "Match
+// history". Added for the console: "Looking for players" while the lobby network has found nobody yet, and the reason when the
+// lobby cannot start. The request chime is upstream's (660 Hz then 880 Hz, 0.3 s), played through SDL's audio output.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using LobbyJson = nlohmann::json;
 
-enum LobbyItem { LI_GO, LI_TABS, LI_PLAYER, LI_REQUEST, LI_ADD_FRIEND, LI_WRITE, LI_FRIEND, LI_FRIEND_A, LI_FRIEND_B, LI_FRIEND_CODE,
-                 LI_NAME, LI_LOCATION, LI_MAIN, LI_ACCEPT, LI_DECLINE, LI_CANCEL };
+enum LobbyItem { LI_GO, LI_TABS, LI_PLAYER, LI_REQUEST, LI_P2P, LI_PM, LI_ADD_FRIEND, LI_ROOM, LI_WRITE, LI_PM_ACCEPT, LI_PM_DECLINE,
+                 LI_PM_CLOSE, LI_FRIEND, LI_FRIEND_A, LI_FRIEND_B, LI_FRIEND_CODE, LI_NAME, LI_LOCATION, LI_MAIN, LI_AUTO_REJECT,
+                 LI_SOUND, LI_VOLUME, LI_ACCEPT, LI_DECLINE, LI_CANCEL };
 struct LobbyFocus { int kind; int index; std::string label; };
-constexpr const char* kLobbyTabs[4] = {"Players", "Lobby chat", "Friends", "Your profile"};
+constexpr int kLobbyTabCount = 5;
+constexpr const char* kLobbyTabs[kLobbyTabCount] = {"Players", "Lobby chat", "Friends", "Match history", "Your profile"};
 
 // Account name and code from user.json (never its key), for the profile.
 void account_parts(const std::string& user_dir, std::string* name, std::string* code) {
@@ -23,6 +27,33 @@ void account_parts(const std::string& user_dir, std::string* name, std::string* 
   const LobbyJson j = LobbyJson::parse(ss.str(), nullptr, false);
   *name = j.is_object() ? j.value("displayName", std::string()) : std::string();
   *code = j.is_object() ? j.value("connectCode", std::string()) : std::string();
+}
+
+// Upstream's request_chime: two tones, 660 Hz then 880 Hz, 0.3 s, at the player's volume, on its own thread.
+void request_chime(int volume) {
+  if (volume <= 0) return;
+  std::thread([volume] {
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { say("home: lobby request sound: no audio output (%s)", SDL_GetError()); return; }
+    constexpr int rate = 22050, frames = rate * 3 / 10;
+    std::vector<int16_t> samples(frames);
+    for (int i = 0; i < frames; ++i) {
+      const double time = double(i) / rate, frequency = i < frames / 2 ? 660.0 : 880.0;
+      const double envelope = std::min(1.0, time * 35.0) * std::min(1.0, (frames - i) / 1800.0);
+      samples[size_t(i)] = int16_t(std::sin(time * frequency * 6.283185307179586) * envelope * 7500 * volume / 100);
+    }
+    const SDL_AudioSpec spec{SDL_AUDIO_S16, 1, rate};
+    SDL_AudioStream* stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (!stream) { say("home: lobby request sound: the audio output did not open (%s)", SDL_GetError()); return; }
+    SDL_AudioSpec device{}; int device_frames = 0;
+    SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(stream), &device, &device_frames);
+    SDL_PutAudioStreamData(stream, samples.data(), int(samples.size() * sizeof samples[0]));
+    SDL_FlushAudioStream(stream);
+    SDL_ResumeAudioStreamDevice(stream);
+    std::this_thread::sleep_for(std::chrono::milliseconds(450));
+    SDL_DestroyAudioStream(stream);
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    say("home: lobby request sound played (volume %d%%; output %d Hz, %d channels, format %04X)", volume, device.freq, device.channels, unsigned(device.format));
+  }).detach();
 }
 
 const LobbyJson* pending_request(const LobbyJson& snap, const std::string& self, bool* incoming) {
@@ -41,6 +72,17 @@ LobbyJson lobby_friends(const LobbyJson& snap) {
   for (const auto& f : snap.value("friends", LobbyJson::array())) list.push_back(f);
   return list;
 }
+// The chat tab's rooms: the public chat ("") and each private room, as upstream's room tabs list them.
+std::vector<std::string> lobby_rooms(const LobbyJson& snap) {
+  std::vector<std::string> rooms{""};
+  for (const auto& r : snap.value("private", LobbyJson::array())) rooms.push_back(r.value("id", std::string()));
+  return rooms;
+}
+const LobbyJson* lobby_room(const LobbyJson& snap, const std::string& id) {
+  static LobbyJson keep;
+  for (const auto& r : snap.value("private", LobbyJson::array())) if (r.value("id", std::string()) == id) { keep = r; return &keep; }
+  return nullptr;
+}
 
 std::vector<LobbyFocus> lobby_items(const Home& h, const LobbyJson& snap) {
   std::vector<LobbyFocus> v;
@@ -55,10 +97,19 @@ std::vector<LobbyFocus> lobby_items(const Home& h, const LobbyJson& snap) {
   v.push_back({LI_TABS, 0, std::string("Tab ") + kLobbyTabs[h.lobby_tab]});
   if (h.lobby_tab == 0) {
     const auto players = snap.value("players", LobbyJson::array());
+    // A player's row: Left / Right pick the action under the list (Send match request, Peer-to-peer match, Private chat, Add friend),
+    // A does it for that player (upstream: select a player, then press one of the buttons under the list).
     for (size_t i = 0; i < players.size(); ++i) v.push_back({LI_PLAYER, int(i), "Player " + players[i].value("name", std::string("?"))});
-    if (!players.empty()) { v.push_back({LI_REQUEST, 0, "Send match request"}); v.push_back({LI_ADD_FRIEND, 0, "Add friend"}); }
   } else if (h.lobby_tab == 1) {
-    v.push_back({LI_WRITE, 0, "Write a message"});
+    v.push_back({LI_ROOM, 0, "Room"});
+    const LobbyJson* room = h.lobby_room.empty() ? nullptr : lobby_room(snap, h.lobby_room);
+    const std::string state = room ? room->value("state", std::string()) : std::string("public");
+    if (state == "incoming") { v.push_back({LI_PM_ACCEPT, 0, "Accept private chat"}); v.push_back({LI_PM_DECLINE, 0, "Decline private chat"}); }
+    else if (state == "outgoing") v.push_back({LI_PM_CLOSE, 0, "Cancel private chat"});
+    else {
+      v.push_back({LI_WRITE, 0, "Write a message"});
+      if (room) v.push_back({LI_PM_CLOSE, 0, "Close private chat"});
+    }
   } else if (h.lobby_tab == 2) {
     const LobbyJson list = lobby_friends(snap);
     for (size_t i = 0; i < list.size(); ++i) v.push_back({LI_FRIEND, int(i), "Friend " + list[i].value("name", std::string("?"))});
@@ -68,10 +119,13 @@ std::vector<LobbyFocus> lobby_items(const Home& h, const LobbyJson& snap) {
       v.push_back({LI_FRIEND_B, 0, inc ? "Decline friend" : "Remove friend"});
     }
     v.push_back({LI_FRIEND_CODE, 0, "Add friend by code"});
-  } else {
+  } else if (h.lobby_tab == 4) {
     v.push_back({LI_NAME, 0, "Name"});
     v.push_back({LI_LOCATION, 0, "Location"});
     for (int i = 0; i < 3; ++i) v.push_back({LI_MAIN, i, "Main " + std::to_string(i + 1)});
+    v.push_back({LI_AUTO_REJECT, 0, "Auto reject invites"});
+    v.push_back({LI_SOUND, 0, "Request sound"});
+    v.push_back({LI_VOLUME, 0, "Volume"});
   }
   return v;
 }
@@ -106,8 +160,12 @@ void lobby_card(ImDrawList* d, const Layout& L, const Fonts& f, float x, float y
   std::string third;
   const auto stocks = p.value("stocks", LobbyJson::array());
   if (!stocks.empty()) { third = "Stocks:"; for (const auto& s : stocks) if (s.is_number_integer()) third += " " + std::to_string(s.get<int>()); }
-  else if (selected && !p.value("code", std::string()).empty()) third = p.value("code", std::string());
-  else for (const auto& m : mains) if (m.is_number_integer()) third += (third.empty() ? "" : " / ") + std::string(lobby::character_name(m.get<int>()));
+  else if (selected && !p.value("code", std::string()).empty()) {
+    // Upstream's selected card: their record (W / L, from their profile) and code; and this console's own record against them.
+    const auto mine = lobby::record(p.value("code", std::string()));
+    third = "W " + std::to_string(p.value("wins", 0)) + "  /  L " + std::to_string(p.value("losses", 0)) + "   " + p.value("code", std::string()) +
+            "   You vs them: " + std::to_string(mine.first) + " - " + std::to_string(mine.second);
+  } else for (const auto& m : mains) if (m.is_number_integer()) third += (third.empty() ? "" : " / ") + std::string(lobby::character_name(m.get<int>()));
   text(d, f.body, L.u(10), L.p(x + 44, y + 35), L.p(x + w - 10, y + hh - 2), selected && stocks.empty() ? launcher::theme::glow() : C_FAINT, third);
 }
 
@@ -120,6 +178,24 @@ void lobby_empty(ImDrawList* d, const Layout& L, const Fonts& f, float x, float 
   else { d->AddRect(L.p(x + 9, y + 10), L.p(x + 31, y + 27), glow, L.u(4), 0, L.u(1.6f)); d->AddLine(L.p(x + 14, y + 27), L.p(x + 14, y + 33), glow, L.u(1.6f)); d->AddLine(L.p(x + 14, y + 33), L.p(x + 20, y + 27), glow, L.u(1.6f)); }
   text(d, f.bold, L.u(17), L.p(x, y + 50), L.p(x + w, y + 74), C_TEXT, heading);
   text(d, f.body, L.u(12), L.p(x, y + 78), L.p(x + w, y + 120), C_DIM, detail, 0, true);
+}
+
+// Chat lines, newest at the bottom: the name in the accent's glow, the time, the text (upstream's CHATLOG item).
+void lobby_messages(ImDrawList* d, const Layout& L, const Fonts& f, float ix, float iw, float top, float bottom, const LobbyJson& messages) {
+  const int rows = std::max(1, int((bottom - top) / 34));
+  const int first = std::max(0, int(messages.size()) - rows);
+  for (int i = first, n = 0; i < int(messages.size()); ++i, ++n) {
+    const auto& m = messages[size_t(i)];
+    const float y = top + n * 34;
+    text(d, f.bold, L.u(11), L.p(ix + 4, y), L.p(ix + iw - 70, y + 15), launcher::theme::glow(), m.value("name", std::string("Player")));
+    const long long wall = m.value("wall_time", 0LL);
+    if (wall > 1000000000) {
+      std::time_t seconds = std::time_t(wall); std::tm local{}; char stamp[16] = {};
+      localtime_r(&seconds, &local); std::strftime(stamp, sizeof stamp, "%I:%M %p", &local);
+      text(d, f.body, L.u(10), L.p(ix + iw - 70, y), L.p(ix + iw - 4, y + 15), C_FAINT, stamp, 2);
+    }
+    text(d, f.body, L.u(12), L.p(ix + 4, y + 15), L.p(ix + iw - 4, y + 32), C_TEXT, m.value("text", std::string()));
+  }
 }
 
 void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
@@ -137,6 +213,7 @@ void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
   std::string line; COLORREF dotc = C_FAINT, ink = C_DIM;
   if (phase == "error") { line = snap.value("error", std::string("The lobby could not start.")); dotc = C_BAD; ink = C_BAD; }
   else if (phase == "starting") { line = "Connecting to the lobby network..."; dotc = C_WARN; }
+  else if (phase == "held") { line = "In a match: the lobby is closed until it ends."; dotc = C_WARN; }
   else if (online && players.empty()) { line = "Online. Looking for players on the lobby network..."; dotc = C_WARN; }
   else if (online) { line = "Online. " + std::to_string(players.size()) + (players.size() == 1 ? " player" : " players") + " in the lobby."; dotc = C_OK; }
   else line = "Offline. Go Online to show your name in other players' lobbies.";
@@ -144,15 +221,20 @@ void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
   text(d, f.body, L.u(11), L.p(CX + 14, 45), L.p(CX + CW, 63), ink, line);
   button(d, L, f, CX + CW - 130, 18, 130, 26, online ? "Leave" : "Go Online", !online, is(LI_GO), phase == "starting");
   // Tabs (upstream's TAB_CHAT .. TAB_PROFILE).
-  const float tw = (CW - 3 * 6) / 4.0f;
-  for (int i = 0; i < 4; ++i) {
-    const float x = CX + i * (tw + 6);
+  const float tw = (CW - (kLobbyTabCount - 1) * 5) / float(kLobbyTabCount);
+  const auto rooms_unread = [&] {
+    for (const auto& r : snap.value("private", LobbyJson::array())) if (r.value("state", std::string()) == "incoming") return true;
+    return false;
+  }();
+  for (int i = 0; i < kLobbyTabCount; ++i) {
+    const float x = CX + i * (tw + 5);
     const bool on = h.lobby_tab == i;
     round_rect(d, L.p(x, 68), L.p(x + tw, 92), L.u(7), on ? C_ACC_HI : C_BTN, on ? C_ACC_LO : C_BTN, on ? NO_FILL : C_BTN_BORDER);
     if (is(LI_TABS) && on) round_rect(d, L.p(x + 2, 70), L.p(x + tw - 2, 90), L.u(5), NO_FILL, NO_FILL, C_PLAY_TEXT);
     std::string label = kLobbyTabs[i];
     if (i == 2 && !snap.value("friend_requests", LobbyJson::array()).empty()) label += " (" + std::to_string(snap["friend_requests"].size()) + ")";
     text(d, f.bold, L.u(11), L.p(x, 68), L.p(x + tw, 92), on ? C_PLAY_TEXT : C_DIM, label, 1);
+    if (i == 1 && rooms_unread) d->AddCircleFilled(L.p(x + tw - 9, 75), L.u(3), col(launcher::theme::glow()), 12);   // upstream's unread dot
   }
   // The card.
   bool incoming = false;
@@ -182,30 +264,58 @@ void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
         const int k = h.lobby_scroll + i;
         lobby_card(d, L, f, ix, card_top + 8 + i * (row + 4), iw, row, players[size_t(k)], k == h.lobby_player, is(LI_PLAYER, k), pings);
       }
+      const bool p2p_ok = players[size_t(h.lobby_player)].value("p2p", false);
       const float by = card_bottom - 36;
-      button(d, L, f, ix, by, 200, 28, "Send match request", true, is(LI_REQUEST), !online || request != nullptr);
-      button(d, L, f, ix + 208, by, 120, 28, "Add friend", false, is(LI_ADD_FRIEND), !online);
+      const bool on_row = fo && fo->kind == LI_PLAYER;
+      button(d, L, f, ix, by, 150, 28, "Send match request", true, on_row && h.lobby_action == 0, !online || request != nullptr);
+      button(d, L, f, ix + 156, by, 132, 28, "Peer-to-peer match", false, on_row && h.lobby_action == 1, !online || request != nullptr || !p2p_ok);
+      button(d, L, f, ix + 294, by, 92, 28, "Private chat", false, on_row && h.lobby_action == 2, !online);
+      button(d, L, f, ix + 392, by, iw - 392, 28, "Add friend", false, on_row && h.lobby_action == 3, !online);
+      text(d, f.body, L.u(10), L.p(ix, by - 16), L.p(ix + iw, by - 2), C_FAINT, "On a player: Left / Right pick the action, A does it.");
     }
   } else if (h.lobby_tab == 1) {
-    const auto messages = snap.value("messages", LobbyJson::array());
-    if (messages.empty()) lobby_empty(d, L, f, ix + 8, card_top + 16, iw - 16, "Ready for a few games?", "Join the lobby, say hello, and send a match request when you're ready.", false);
-    else {
-      const int rows = int((card_bottom - card_top - 52) / 34);
-      const int first = std::max(0, int(messages.size()) - rows);
-      for (int i = first, n = 0; i < int(messages.size()); ++i, ++n) {
-        const auto& m = messages[size_t(i)];
-        const float y = card_top + 8 + n * 34;
-        text(d, f.bold, L.u(11), L.p(ix + 4, y), L.p(ix + iw - 70, y + 15), launcher::theme::glow(), m.value("name", std::string("Player")));
-        const long long wall = m.value("wall_time", 0LL);
-        if (wall > 1000000000) {
-          std::time_t seconds = std::time_t(wall); std::tm local{}; char stamp[16] = {};
-          localtime_r(&seconds, &local); std::strftime(stamp, sizeof stamp, "%I:%M %p", &local);
-          text(d, f.body, L.u(10), L.p(ix + iw - 70, y), L.p(ix + iw - 4, y + 15), C_FAINT, stamp, 2);
-        }
-        text(d, f.body, L.u(12), L.p(ix + 4, y + 15), L.p(ix + iw - 4, y + 32), C_TEXT, m.value("text", std::string()));
+    // Upstream's room tabs: the public chat, then each private room (its state; a dot for a request to answer).
+    const std::vector<std::string> rooms = lobby_rooms(snap);
+    if (std::find(rooms.begin(), rooms.end(), h.lobby_room) == rooms.end()) h.lobby_room.clear();
+    float rx = ix;
+    for (const auto& id : rooms) {
+      const LobbyJson* r = id.empty() ? nullptr : lobby_room(snap, id);
+      const std::string label = r ? r->value("name", std::string("?")) : std::string("Public");
+      const float rw = std::min(140.0f, f.bold->CalcTextSizeA(L.u(11), FLT_MAX, 0, label.c_str()).x / L.s + 28);
+      if (rx + rw > ix + iw) break;
+      const bool front = id == h.lobby_room;
+      round_rect(d, L.p(rx, card_top + 8), L.p(rx + rw, card_top + 30), L.u(7), front ? launcher::theme::mix(launcher::theme::accent, RGB(12, 18, 33), .45) : RGB(33, 43, 66),
+                 front ? launcher::theme::mix(launcher::theme::accent, RGB(12, 18, 33), .45) : RGB(33, 43, 66), front && is(LI_ROOM) ? C_PLAY_TEXT : NO_FILL);
+      text(d, f.bold, L.u(11), L.p(rx, card_top + 8), L.p(rx + rw, card_top + 30), front ? C_TEXT : C_DIM, label, 1);
+      if (r && r->value("state", std::string()) == "incoming") d->AddCircleFilled(L.p(rx + rw - 7, card_top + 13), L.u(3), col(launcher::theme::glow()), 12);
+      rx += rw + 6;
+    }
+    const LobbyJson* room = h.lobby_room.empty() ? nullptr : lobby_room(snap, h.lobby_room);
+    const float mtop = card_top + 38, mbottom = card_bottom - 44;
+    if (!room) {
+      const auto messages = snap.value("messages", LobbyJson::array());
+      if (messages.empty()) lobby_empty(d, L, f, ix + 8, mtop + 6, iw - 16, "Ready for a few games?", "Join the lobby, say hello, and send a match request when you're ready.", false);
+      else lobby_messages(d, L, f, ix, iw, mtop, mbottom, messages);
+      button(d, L, f, ix, card_bottom - 36, 200, 28, "Write a message", true, is(LI_WRITE), !online);
+    } else {
+      const std::string state = room->value("state", std::string()), name = room->value("name", std::string("?"));
+      const auto messages = room->value("messages", LobbyJson::array());
+      if (state == "incoming") {
+        lobby_empty(d, L, f, ix + 8, mtop + 6, iw - 16, name + " wants to chat privately", "Only the two of you see a private chat. It ends when either of you closes it.", true);
+        button(d, L, f, ix, card_bottom - 36, 150, 28, "Accept", true, is(LI_PM_ACCEPT), false);
+        button(d, L, f, ix + 156, card_bottom - 36, 120, 28, "Decline", false, is(LI_PM_DECLINE), false);
+      } else if (state == "outgoing") {
+        lobby_empty(d, L, f, ix + 8, mtop + 6, iw - 16, "Waiting for " + name, "The private chat opens when they accept (" + std::to_string(room->value("remaining", 0)) + " s left).", true);
+        button(d, L, f, ix, card_bottom - 36, 150, 28, "Cancel", false, is(LI_PM_CLOSE), false);
+      } else {
+        if (messages.empty()) text(d, f.body, L.u(12), L.p(ix + 8, mtop + 8), L.p(ix + iw - 8, mtop + 60), C_DIM,
+                                   "A private chat with " + name + ". Only the two of you see it.", 0, true);
+        else lobby_messages(d, L, f, ix, iw, mtop, mbottom, messages);
+        if (state == "closed") text(d, f.body, L.u(11), L.p(ix + 220, card_bottom - 36), L.p(ix + iw, card_bottom - 8), C_FAINT, name + " closed this chat.");
+        button(d, L, f, ix, card_bottom - 36, 200, 28, "Write a message", true, is(LI_WRITE), state != "open");
+        button(d, L, f, ix + iw - 130, card_bottom - 36, 130, 28, "Close", false, is(LI_PM_CLOSE), false);
       }
     }
-    button(d, L, f, ix, card_bottom - 36, 200, 28, "Write a message", true, is(LI_WRITE), !online);
   } else if (h.lobby_tab == 2) {
     const LobbyJson list = lobby_friends(snap);
     if (list.empty()) lobby_empty(d, L, f, ix + 8, card_top + 16, iw - 16, "Friends, one click away.", "Add a player to see when they're online and ready for another game.", true);
@@ -220,6 +330,28 @@ void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
       button(d, L, f, ix + 148, card_bottom - 36, 120, 28, inc ? "Decline" : "Remove Friend", false, is(LI_FRIEND_B), false);
     }
     button(d, L, f, ix + iw - 150, card_bottom - 36, 150, 28, "Add friend by code", false, is(LI_FRIEND_CODE), !online);
+  } else if (h.lobby_tab == 3) {
+    // Upstream's Match history page: the record over all games, then the games, newest first.
+    const LobbyJson games = lobby::history();
+    const auto total = lobby::record();
+    if (games.empty()) lobby_empty(d, L, f, ix + 8, card_top + 16, iw - 16, "Match history", "Completed lobby games appear here, with your wins and losses.", false);
+    else {
+      text(d, f.bold, L.u(13), L.p(ix + 4, card_top + 8), L.p(ix + iw, card_top + 30), C_TEXT,
+           "Record: " + std::to_string(total.first) + " wins, " + std::to_string(total.second) + " losses   (" + std::to_string(games.size()) + " games)");
+      const int rows = int((card_bottom - card_top - 44) / 28);
+      for (int i = 0; i < rows && i < int(games.size()); ++i) {
+        const auto& g = games[size_t(i)];
+        const float y = card_top + 36 + i * 28;
+        const std::string result = g.value("result", std::string());
+        round_rect(d, L.p(ix, y), L.p(ix + iw, y + 24), L.u(6), C_FIELD, C_FIELD, NO_FILL);
+        text(d, f.bold, L.u(11), L.p(ix + 8, y), L.p(ix + 80, y + 24), result == "win" ? C_OK : result == "loss" ? C_BAD : C_FAINT,
+             result == "win" ? "Win" : result == "loss" ? "Loss" : "Incomplete");
+        text(d, f.body, L.u(11), L.p(ix + 84, y), L.p(ix + iw - 150, y + 24), C_TEXT,
+             g.value("opponent", std::string("Unknown")) + " (" + g.value("code", std::string()) + ")" +
+             (g.value("transport", std::string()) == "p2p" ? "  peer to peer" : "  Slippi Direct"));
+        text(d, f.body, L.u(10), L.p(ix + iw - 150, y), L.p(ix + iw - 8, y + 24), C_FAINT, g.value("when", std::string()), 2);
+      }
+    }
   } else {
     const lobby::Profile p = lobby::profile();
     const std::string account = snap.value("account", h.lobby_code);
@@ -230,17 +362,20 @@ void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
     for (int i = 0; i < 3; ++i)
       rows.push_back({LI_MAIN, i, i == 0 ? "Main (your fighter)" : "Main " + std::to_string(i + 1),
                       i < int(p.mains.size()) ? std::string(lobby::character_name(p.mains[size_t(i)])) : std::string("None"), true});
+    rows.push_back({LI_AUTO_REJECT, 0, "Auto reject invites", p.auto_reject ? "On" : "Off", true});
+    rows.push_back({LI_SOUND, 0, "Request sound", p.request_sound ? "On" : "Off", true});
+    rows.push_back({LI_VOLUME, 0, "Volume", std::to_string(p.request_volume) + "%", true});
     for (size_t i = 0; i < rows.size(); ++i) {
-      const float y = card_top + 10 + float(i) * 40;
+      const float y = card_top + 8 + float(i) * 34;
       const bool focused = rows[i].kind >= 0 && is(rows[i].kind, rows[i].index);
-      round_rect(d, L.p(ix, y), L.p(ix + iw, y + 34), L.u(7), C_FIELD, C_FIELD, focused ? C_ACC_HI : C_FIELD_BORDER);
-      text(d, f.bold, L.u(10), L.p(ix + 10, y), L.p(ix + 150, y + 34), C_FAINT, rows[i].label);
+      round_rect(d, L.p(ix, y), L.p(ix + iw, y + 30), L.u(7), C_FIELD, C_FIELD, focused ? C_ACC_HI : C_FIELD_BORDER);
+      text(d, f.bold, L.u(10), L.p(ix + 10, y), L.p(ix + 150, y + 30), C_FAINT, rows[i].label);
       std::string value = rows[i].value;
-      if (rows[i].kind == LI_MAIN && focused) value = "<  " + value + "  >";
-      text(d, f.body, L.u(12), L.p(ix + 150, y), L.p(ix + iw - 10, y + 34), rows[i].edit ? C_TEXT : C_DIM, value);
+      if ((rows[i].kind == LI_MAIN || rows[i].kind == LI_VOLUME) && focused) value = "<  " + value + "  >";
+      text(d, f.body, L.u(12), L.p(ix + 150, y), L.p(ix + iw - 10, y + 30), rows[i].edit ? C_TEXT : C_DIM, value);
     }
-    text(d, f.body, L.u(10), L.p(ix, card_bottom - 40), L.p(ix + iw, card_bottom - 6), C_FAINT,
-         "Name and location are self-reported. Your first main is your fighter in a lobby match. A edits a field (the keyboard), Left / Right change a main.", 0, true);
+    text(d, f.body, L.u(10), L.p(ix, card_bottom - 22), L.p(ix + iw, card_bottom - 4), C_FAINT,
+         "Self-reported. Your first main is your fighter in a lobby match. A edits or switches, Left / Right change a main or the volume.");
   }
   // The request bar.
   if (request) {
@@ -249,10 +384,11 @@ void paint_lobby(ImDrawList* d, const Layout& L, const Fonts& f, Home& h) {
                launcher::theme::mix(launcher::theme::accent, RGB(12, 18, 33), .7), C_ACC_LO);
     const LobbyJson who = request->value("peer", LobbyJson::object());
     const std::string name = who.value("name", std::string("Player")), state = request->value("state", std::string());
+    const bool p2p = request->value("transport", std::string()) == "p2p";
     std::string what;
-    if (state == "accepted") what = "Match accepted. Starting Slippi Direct against " + name + "...";
-    else if (incoming) what = name + " wants to play";
-    else what = "Match request sent to " + name;
+    if (state == "accepted") what = p2p ? "Match accepted. Starting the peer-to-peer match against " + name + "..." : "Match accepted. Starting Slippi Direct against " + name + "...";
+    else if (incoming) what = name + (p2p ? " wants a peer-to-peer match" : " wants to play");
+    else what = (p2p ? "Peer-to-peer match request sent to " : "Match request sent to ") + name;
     if (state == "pending") {
       what += "   " + std::to_string(request->value("remaining", 0)) + " s";
       const std::string other = incoming ? request->value("from", std::string()) : request->value("to", std::string());
@@ -285,35 +421,61 @@ void lobby_activate(Home& h, const LobbyFocus& fo) {
   const std::string self = snap.count("self") ? snap["self"].value("id", std::string()) : std::string();
   bool incoming = false;
   const LobbyJson* request = pending_request(snap, self, &incoming);
+  const auto picked = [&]() -> LobbyJson { return players.empty() ? LobbyJson::object() : players[size_t(std::clamp(h.lobby_player, 0, int(players.size()) - 1))]; };
   switch (fo.kind) {
     case LI_GO:
       if (online) { lobby::leave(); say("home: lobby Leave"); }
       else if (snap.value("phase", std::string()) != "starting") { lobby::go_online(); say("home: lobby Go Online"); }
       break;
-    case LI_TABS: h.lobby_tab = (h.lobby_tab + 1) % 4; say("home: lobby tab %s", kLobbyTabs[h.lobby_tab]); break;
-    case LI_PLAYER:   // A on a player: Send match request to them (the buttons under the list act on the last one picked)
+    case LI_TABS: h.lobby_tab = (h.lobby_tab + 1) % kLobbyTabCount; say("home: lobby tab %s", kLobbyTabs[h.lobby_tab]); break;
+    case LI_PLAYER: {   // A on a player: the action picked with Left / Right, for them
+      h.lobby_player = fo.index;
+      static const int kinds[4] = {LI_REQUEST, LI_P2P, LI_PM, LI_ADD_FRIEND};
+      static const char* const names[4] = {"Send match request", "Peer-to-peer match", "Private chat", "Add friend"};
+      lobby_activate(h, LobbyFocus{kinds[std::clamp(h.lobby_action, 0, 3)], 0, names[std::clamp(h.lobby_action, 0, 3)]});
+      break;
+    }
     case LI_REQUEST:
-      if (fo.kind == LI_PLAYER) h.lobby_player = fo.index;
+    case LI_P2P:
       if (online && !players.empty() && !request) {
-        const auto& p = players[size_t(std::clamp(h.lobby_player, 0, int(players.size()) - 1))];
-        lobby::command("request", {{"target", p.value("id", std::string())}, {"mode", "vanilla"}});
-        say("home: lobby match request to %s", p.value("name", std::string("?")).c_str());
+        const LobbyJson p = picked();
+        LobbyJson data = {{"target", p.value("id", std::string())}, {"mode", "vanilla"}};
+        if (fo.kind == LI_P2P) data["transport"] = "p2p";   // upstream's kP2pTransport
+        lobby::command("request", data);
+        say("home: lobby %s to %s", fo.kind == LI_P2P ? "peer-to-peer match request" : "match request", p.value("name", std::string("?")).c_str());
+      }
+      break;
+    case LI_PM:
+      if (online && !players.empty()) {
+        const LobbyJson p = picked();
+        lobby::command("pm_request", {{"target", p.value("id", std::string())}});
+        say("home: lobby private chat request to %s", p.value("name", std::string("?")).c_str());
       }
       break;
     case LI_ADD_FRIEND:
       if (online && !players.empty()) {
-        const auto& p = players[size_t(std::clamp(h.lobby_player, 0, int(players.size()) - 1))];
+        const LobbyJson p = picked();
         lobby::command("friend", {{"target", p.value("id", std::string())}});
         say("home: lobby friend request to %s", p.value("name", std::string("?")).c_str());
       }
       break;
+    case LI_ROOM: {   // A steps to the next room, as Right does
+      const auto rooms = lobby_rooms(snap);
+      const auto it = std::find(rooms.begin(), rooms.end(), h.lobby_room);
+      h.lobby_room = rooms[size_t(((it == rooms.end() ? 0 : it - rooms.begin()) + 1) % int(rooms.size()))];
+      break;
+    }
     case LI_WRITE:
       if (online) {
         std::string line;
-        lobby_edit(h, "Lobby chat", "A message for everyone in the lobby (up to 300 characters)", line);
-        if (!line.empty()) { lobby::command("chat", {{"text", line}}); say("home: lobby chat message (%zu bytes)", line.size()); }
+        lobby_edit(h, h.lobby_room.empty() ? "Lobby chat" : "Private chat", "A message (up to 300 characters)", line);
+        if (!line.empty() && h.lobby_room.empty()) { lobby::command("chat", {{"text", line}}); say("home: lobby chat message (%zu bytes)", line.size()); }
+        else if (!line.empty()) { lobby::command("pm", {{"room", h.lobby_room}, {"text", line}}); say("home: lobby private message (%zu bytes)", line.size()); }
       }
       break;
+    case LI_PM_ACCEPT: lobby::command("pm_accept", {{"room", h.lobby_room}}); say("home: lobby private chat accepted"); break;
+    case LI_PM_DECLINE: lobby::command("pm_decline", {{"room", h.lobby_room}}); say("home: lobby private chat declined"); break;
+    case LI_PM_CLOSE: lobby::command("pm_close", {{"room", h.lobby_room}}); say("home: lobby private chat closed"); h.lobby_room.clear(); break;
     case LI_FRIEND_A: case LI_FRIEND_B: {
       const LobbyJson list = lobby_friends(snap);
       if (list.empty()) break;
@@ -341,7 +503,14 @@ void lobby_activate(Home& h, const LobbyFocus& fo) {
       say("home: lobby profile %s changed", fo.kind == LI_NAME ? "name" : "location");
       break;
     }
-    case LI_MAIN: break;   // Left / Right
+    case LI_AUTO_REJECT: case LI_SOUND: {
+      lobby::Profile p = lobby::profile();
+      if (fo.kind == LI_AUTO_REJECT) p.auto_reject = !p.auto_reject; else p.request_sound = !p.request_sound;
+      lobby::set_profile(p);
+      say("home: lobby %s %s", fo.kind == LI_AUTO_REJECT ? "auto reject invites" : "request sound", (fo.kind == LI_AUTO_REJECT ? p.auto_reject : p.request_sound) ? "on" : "off");
+      break;
+    }
+    case LI_MAIN: case LI_VOLUME: break;   // Left / Right
     case LI_ACCEPT: case LI_DECLINE: case LI_CANCEL:
       if (request) {
         lobby::command(fo.kind == LI_ACCEPT ? "accept" : "cancel", {{"request", request->value("id", std::string())}});
@@ -377,11 +546,11 @@ void lobby_main_step(int slot, int dir) {
 }
 
 // One frame of the page's controller: returns true when it handled Left (so the home screen does not go back to the rail).
-bool lobby_input(Home& h, const Edges& e) {
+// Also watches for new requests whatever page shows: the chime (upstream's request_chime) and, on this page, Accept takes the focus.
+bool lobby_input(Home& h, const Edges& e, bool on_page) {
   const LobbyJson snap = lobby::snapshot();
   const std::vector<LobbyFocus> items = lobby_items(h, snap);
   const int n = int(items.size());
-  // An incoming request takes the focus once, to Accept (upstream shows Accept and Decline at once beside the chat).
   {
     bool incoming = false;
     const std::string self = snap.count("self") ? snap["self"].value("id", std::string()) : std::string();
@@ -389,10 +558,23 @@ bool lobby_input(Home& h, const Edges& e) {
     const std::string rid = r && incoming && r->value("state", std::string()) == "pending" ? r->value("id", std::string()) : std::string();
     if (!rid.empty() && rid != h.lobby_seen_request) {
       h.lobby_seen_request = rid;
-      for (int i = 0; i < n; ++i) if (items[size_t(i)].kind == LI_ACCEPT) { h.focus = i; h.rail = false; }
-      say("home: lobby request from %s: Accept focused", r->value("peer", LobbyJson::object()).value("name", std::string("?")).c_str());
+      const lobby::Profile p = lobby::profile();
+      if (!p.auto_reject) {
+        if (p.request_sound) request_chime(p.request_volume);
+        if (on_page) { for (int i = 0; i < n; ++i) if (items[size_t(i)].kind == LI_ACCEPT) { h.focus = i; h.rail = false; } }
+        say("home: lobby request from %s%s: Accept focused", r->value("peer", LobbyJson::object()).value("name", std::string("?")).c_str(),
+            r->value("transport", std::string()) == "p2p" ? " (peer to peer)" : "");
+      }
+    }
+    // A private chat request: its room is put in front on the chat tab (upstream: a notice and the room's tab with a dot).
+    for (const auto& room : snap.value("private", LobbyJson::array())) {
+      const std::string id = room.value("id", std::string());
+      if (room.value("state", std::string()) != "incoming" || h.lobby_rooms_seen.count(id)) continue;
+      h.lobby_rooms_seen.insert(id); h.lobby_room = id;
+      say("home: lobby private chat request from %s", room.value("name", std::string("?")).c_str());
     }
   }
+  if (!on_page) return false;
   h.focus = std::clamp(h.focus, 0, n - 1);
   if (e.up) h.focus = std::max(0, h.focus - 1);
   if (e.down) h.focus = std::min(n - 1, h.focus + 1);
@@ -402,11 +584,29 @@ bool lobby_input(Home& h, const Edges& e) {
   if (fo.label != h.lobby_focus_said) { h.lobby_focus_said = fo.label; say("home: lobby focus %s", fo.label.c_str()); }
   bool took_left = false;
   if (fo.kind == LI_TABS && (e.left || e.right)) {
-    h.lobby_tab = (h.lobby_tab + (e.left ? 3 : 1)) % 4;
+    h.lobby_tab = (h.lobby_tab + (e.left ? kLobbyTabCount - 1 : 1)) % kLobbyTabCount;
     say("home: lobby tab %s", kLobbyTabs[h.lobby_tab]);
+    took_left = e.left;
+  } else if (fo.kind == LI_PLAYER && (e.right || (e.left && h.lobby_action > 0))) {
+    static const char* const names[4] = {"Send match request", "Peer-to-peer match", "Private chat", "Add friend"};
+    h.lobby_action = std::clamp(h.lobby_action + (e.left ? -1 : 1), 0, 3);
+    say("home: lobby action %s", names[h.lobby_action]);
     took_left = e.left;
   } else if (fo.kind == LI_MAIN && (e.left || e.right)) {
     lobby_main_step(fo.index, e.left ? -1 : 1);
+    took_left = e.left;
+  } else if (fo.kind == LI_VOLUME && (e.left || e.right)) {
+    lobby::Profile p = lobby::profile();
+    p.request_volume = std::clamp(p.request_volume + (e.left ? -5 : 5), 0, 100);
+    lobby::set_profile(p);
+    say("home: lobby request volume %d%%", p.request_volume);
+    took_left = e.left;
+  } else if (fo.kind == LI_ROOM && (e.left || e.right)) {
+    const auto rooms = lobby_rooms(snap);
+    const auto it = std::find(rooms.begin(), rooms.end(), h.lobby_room);
+    const int at = it == rooms.end() ? 0 : int(it - rooms.begin()), count = int(rooms.size());
+    h.lobby_room = rooms[size_t(((at + (e.left ? -1 : 1)) % count + count) % count)];
+    say("home: lobby room %s", h.lobby_room.empty() ? "Public" : "private");
     took_left = e.left;
   }
   if (e.a) lobby_activate(h, fo);

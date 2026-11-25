@@ -364,6 +364,7 @@ bool settings_lag_test_take() {
 }
 void settings_online(bool on) { online.store(on, std::memory_order_relaxed); }
 void settings_deactivate() { active = false; }
+void settings_reactivate() { active = !file_path.empty(); }
 void settings_net_prefs(bool* direct_pause, int port_colour[2], uint32_t* shield_online, std::string skip[3]) {
   *direct_pause = settings.direct_pause; port_colour[0] = settings.port_colour[0]; port_colour[1] = settings.port_colour[1];
   *shield_online = settings.shield_online;

@@ -39,6 +39,12 @@
 extern "C" const uint8_t mu_embedded_game[], mu_embedded_game_end[];
 
 namespace fe::mu_ui { __attribute__((weak)) void note_session(bool fighting, bool online); }
+// lobby.cpp (the services program with a picture): a peer-to-peer lobby match's game arguments, and after a run whether the app
+// goes back to its home screen (a lobby match is over, as melee-unlocked's game process ends and its launcher shows again).
+namespace fe::lobby {
+__attribute__((weak)) bool session_args(std::vector<std::string>* args);
+__attribute__((weak)) bool take_return_home();
+}
 namespace fe {
 std::string home_replay;   // a replay the home screen (mu_home.cpp) asked to watch: the game starts with it
 namespace {
@@ -50,6 +56,7 @@ bool net_on = false;          // the netplay host answers the game's online comm
 bool direct = false;          // --net or --online on the command line: straight into a match, the runner's game, seed and clock
 bool menu_online = false;     // the services program with Slippi's menus and a user file: a search starts from the game's own menu
 bool searching = false;       // between the game's "find a match" and its "clean the connection up" (simulation thread)
+bool lobby_p2p = false;       // this session is a peer-to-peer lobby match (lobby.cpp): its own memory card folder, the direct run's rules
 bool online_now = false, in_match = false, tracked = false;
 std::atomic<bool> online_flag{false};   // online_now for other threads (the menu and the HUD)
 std::vector<std::string> restart_args;   // a feature module asked for the game to start again with these
@@ -257,6 +264,9 @@ void* play_thread(void* user) {
   // A session that can go online: skins in their online form, and of a mod profile only its look-only costumes (cosmetics.cpp).
   if (net_on) { mods_session_can_go_online(); if (!direct && !vanilla_only && !settings_profile().empty()) mods_configure_costumes(settings_profile()); }
   config.card_dir = !profile_card.empty() ? profile_card : !options.card_dir.empty() ? options.card_dir : options.out_dir + "/card-play";
+  // A peer-to-peer lobby match boots straight into the match on a fresh card, as both games of a direct run must: a folder of its
+  // own, never the player's card.
+  if (lobby_p2p) config.card_dir = options.out_dir + "/LobbyMatchCard";
   if (options.app && profile_card.empty() && !direct && !vanilla_only) app_backup_card();   // the earlier app's card, copied once before it is used
   if (vanilla_only) {
     mkdir(config.card_dir.c_str(), 0777);
@@ -429,8 +439,28 @@ int play_main() {
   // can use them (nothing is contacted). A failure leaves this session offline with the reason in the log.
   // The app's screens before the game (render thread, which then draws the game): an update from the player's build
   // computer, then the Slippi sign-in when there is no user.json yet, as port/app/main_switch.cpp does it.
+  // The app goes back to its home screen after a lobby match (lobby.cpp take_return_home): each pass of this loop is one visit
+  // of the home screen and the game it starts. What one session changes is put back before the next.
+  const net_host::Options net_base = net;
+  const bool direct_base = direct, pace_base = options.pace, fresh_card_base = options.fresh_card;
+  const std::vector<std::string> rest_base = options.rest;
+  Run run;
+  bool clocks_set = false;
+#ifdef __SWITCH__
+  bool clock_service = false;
+  SwitchClockResult before{};
+#endif
+  for (int visit = 0;; ++visit) {
+  if (visit) {
+    net = net_base; direct = direct_base; options.pace = pace_base; options.fresh_card = fresh_card_base; options.rest = rest_base;
+    net_on = false; menu_online = false; searching = false; lobby_p2p = false; home_replay.clear();
+    online_now = false; online_flag = false; in_match = false; tracked = false; scene_major = 0xFFFFFFFF; last_match_frame = 0;
+    settings_online(false); settings_reactivate();
+    run = Run{};
+    say("---- back to the home screen (a lobby match is over) ----");
+  }
   bool offline_chosen = options.offline;
-  bool menu_ready = false;
+  bool menu_ready = visit > 0;
   if (options.app && !direct) {
     const bool online_wanted = !options.offline && settings_slippi_menus() && netplay_bridge::has_services();
     const bool signed_in = net.fake_user || file_exists(user_dir + "/user.json");
@@ -438,7 +468,8 @@ int play_main() {
     if (app_services_run && screens_start()) {
       // melee-unlocked's launcher comes first (mu_home.cpp): its Settings page is the in-game panel, so the panel's
       // rows are set up before it.
-      app_menu_setup(); menu_ready = true;
+      if (!visit) app_menu_setup();
+      menu_ready = true;
       const AppStart start = app_services_run(!options.offline, online_wanted && !signed_in, user_dir);
       if (start == AppStart::Quit) { say("---- done: the player left before the game started ----"); screens_stop(); log_close(); return 0; }
       if (start == AppStart::PlayOffline && !file_exists(user_dir + "/user.json")) offline_chosen = true;
@@ -451,6 +482,18 @@ int play_main() {
         const int frames = options.online_delay >= 0 ? options.online_delay : settings_online_delay();
         net.delay_auto = frames <= 0;
         if (frames > 0) net.delay = frames;
+      }
+      // A peer-to-peer lobby match: melee-unlocked's game arguments for it (its launcher's p2p_arguments), a direct run as the
+      // runner's --p2p-* mode plays it (no menus, the retail game, the session's own delay).
+      std::vector<std::string> lobby_args;
+      if (&lobby::session_args && lobby::session_args(&lobby_args)) {
+        for (size_t i = 0; i < lobby_args.size(); ++i) {
+          const auto next = [&]() -> std::string { return i + 1 < lobby_args.size() ? lobby_args[++i] : std::string(); };
+          net_host::parse_option(lobby_args[i], next, &net);
+        }
+        direct = net_host::wanted(net);
+        lobby_p2p = direct;
+        if (lobby_p2p) { settings_deactivate(); say("play: a peer-to-peer lobby match (%zu arguments): straight into the match", lobby_args.size()); }
       }
     }
   }
@@ -494,17 +537,16 @@ int play_main() {
   }
 #ifdef __SWITCH__
   // Clocks as the app sets them; the frontend adds GPU and memory when it attaches and restores those.
-  const bool clock_service = switch_clocks_init();
-  SwitchClockResult before{};
-  if (clock_service) before = switch_clocks_read();
-  if (options.overclock && clock_service) {
+  if (!clocks_set) { clocks_set = true; clock_service = switch_clocks_init(); if (clock_service) before = switch_clocks_read(); }
+  if (options.overclock && clock_service && visit == 0) {
     SwitchClockRequest request; request.cpu_mhz = kSwitchClocksErista.cpu_mhz;
     const SwitchClockResult now = switch_clocks_apply(request);
     say("play: clocks: cpu %u -> %u MHz reported (%s); the core measures %u MHz", before.cpu_hz / 1000000u, now.cpu_hz / 1000000u, now.cpu_ok ? "accepted" : "REFUSED", switch_measure_cpu_mhz());
   }
+#else
+  (void)clocks_set;
 #endif
   if (options.app && !menu_ready) app_menu_setup();        // the app's in-game menu (Aurora builds)
-  Run run;
   for (;;) {
     // The game runs its own main loop and expects a desktop-sized stack.
     pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 8u << 20);
@@ -521,6 +563,8 @@ int play_main() {
     run = Run{};
     say("---- the game starts again ----");
   }
+  if (!(options.app && &lobby::take_return_home && lobby::take_return_home())) break;
+  }   // the visits of the home screen
   screens_stop();                                           // the game never attached (it could not start): Aurora shuts down
   fixedmap_release_all();
 #ifdef __SWITCH__
