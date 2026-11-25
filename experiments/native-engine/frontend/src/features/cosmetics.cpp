@@ -530,6 +530,19 @@ void cosmetics_disc_ready(bool can_go_online, const std::string& active_profile)
         say("cosmetics: verdict %s \"%s\": %s online (%s)", slot.c_str(), s.name.c_str(), s.online_ok ? "stays on" : "the standard costume", s.reason.c_str());
       }
   if (costumes || stages) say("cosmetics: %zu costume skins and %zu stage skins; %zu picks kept", costumes, stages, picks.size());
+  // The Mods page's skin count before the game (upstream: Mods/.cache/disc-skins.txt): each mod disc's costume skins.
+  {
+    std::map<std::string, size_t> per_disc;
+    for (const auto& [slot, list] : skins) for (const auto& s : list) {
+      if (s.stage || s.name.size() < 5 || s.name.compare(s.name.size() - 5, 5, " disc") != 0) continue;
+      ++per_disc[s.name.substr(0, s.name.size() - 5)];
+    }
+    mkdir((options.out_dir + "/mods-cache").c_str(), 0777);
+    if (FILE* f = std::fopen((options.out_dir + "/mods-cache/disc-skins.txt").c_str(), "wb")) {
+      for (const auto& [profile, n] : per_disc) std::fprintf(f, "%s=%zu\n", profile.c_str(), n);
+      std::fclose(f);
+    }
+  }
 }
 // After the mod layers are on the table: the picks over them.
 void cosmetics_apply_picks() {
@@ -605,7 +618,62 @@ uint32_t cosmetics_off_online(uint32_t* stages) {
   return off;
 }
 
+// "Choose skins" (upstream's Mods page button, Settings > Mods): two rows on the panel's MODS category, the costume (each that
+// has skins, in the families' order) and its skin (the standard file, then each skin), as the character select's own cycle.
+std::string chooser_slot;
+std::vector<std::string> chooser_slots_locked() {
+  std::vector<std::string> out;
+  for (const auto& [slot, list] : skins) {
+    bool any = false;
+    for (const auto& s : list) any = any || (!s.stage && !s.button);
+    if (any) out.push_back(slot);
+  }
+  return out;
+}
+std::string slot_label(const std::string& slot) {   // "/plfxgr.dat" -> "Fox, costume gr"
+  for (const auto& family : families) {
+    const std::string code = lower(std::string("/pl") + family.file_code);
+    if (slot.rfind(code, 0) == 0 && slot.size() >= code.size() + 2) return std::string(family.display_name) + ", costume " + slot.substr(code.size(), 2);
+  }
+  return slot;
+}
+std::string chooser_costume_value() {
+  std::lock_guard<std::mutex> lock(mu);
+  if (!ready) return "Start the game to choose skins";
+  const auto slots = chooser_slots_locked();
+  if (slots.empty()) return "No skins (put .dat files in Cosmetics, or install a mod disc)";
+  if (std::find(slots.begin(), slots.end(), chooser_slot) == slots.end()) chooser_slot = slots.front();
+  return slot_label(chooser_slot) + "  (" + std::to_string(std::find(slots.begin(), slots.end(), chooser_slot) - slots.begin() + 1) + " of " + std::to_string(slots.size()) + ")";
+}
+void chooser_costume_change(int d) {
+  std::lock_guard<std::mutex> lock(mu);
+  const auto slots = chooser_slots_locked();
+  if (slots.empty()) return;
+  size_t at = size_t(std::find(slots.begin(), slots.end(), chooser_slot) - slots.begin());
+  if (at >= slots.size()) at = 0;
+  chooser_slot = slots[(at + slots.size() + (d < 0 ? size_t(-1) : 1)) % slots.size()];
+}
+std::string chooser_skin_value() {
+  std::lock_guard<std::mutex> lock(mu);
+  if (!ready || chooser_slot.empty()) return "";
+  const auto it = picks.find(chooser_slot);
+  std::string v = it == picks.end() ? std::string("Standard") : it->second;
+  if (online() || replay_playing()) v += "  (not now: online or a replay)";
+  return v;
+}
+void chooser_skin_change(int d) {
+  std::lock_guard<std::mutex> lock(mu);
+  if (chooser_slot.empty() || !may_change()) return;
+  const std::string next = step_pick(chooser_slot, d);
+  if (next.empty()) picks.erase(chooser_slot); else picks[chooser_slot] = next;
+  if (!apply(chooser_slot)) { publish(chooser_slot, nullptr); if (!next.empty()) picks.erase(chooser_slot); }
+  save_picks();
+  say("cosmetics: Choose skins picked %s for %s", picks.count(chooser_slot) ? picks[chooser_slot].c_str() : "the standard costume", chooser_slot.c_str());
+}
+
 void register_cosmetics() {
+  add_menu_entry({"Skins", "Costume", chooser_costume_value, chooser_costume_change, nullptr});
+  add_menu_entry({"Skins", "Skin", chooser_skin_value, chooser_skin_change, nullptr});
   add_setting(setting);
   add_command(0xF9, skin_cycle);
   add_command(0xFB, stage_cycle);

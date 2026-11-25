@@ -59,6 +59,10 @@ class Manager {
   bool catalog_ok() const { return catalog_error_.empty(); }
   const std::string& catalog_error() const { return catalog_error_; }
   const std::vector<CatalogMod>& catalog() const { return catalog_; }
+  // A newer catalog (upstream's refresh from its raw catalog URL): taken when it passes the same rules as the built-in one;
+  // a mod's credits and note are kept from the old entry when the new one has none (upstream's merge). Call it from the
+  // thread that reads list()/status()/install(), and not while a job runs (false then, nothing changed).
+  bool replace_catalog(const std::string& json, std::string* error);
   std::vector<ModStatus> list();
   ModStatus status(const std::string& id);
   // Install or Update (a job on the worker thread). False with *why set when it cannot start.

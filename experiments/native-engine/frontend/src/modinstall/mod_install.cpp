@@ -84,6 +84,19 @@ Manager::Manager(Config config) : config_(std::move(config)) {
   }
 }
 
+bool Manager::replace_catalog(const std::string& json, std::string* error) {
+  if (busy_.load()) { *error = "a mod is being installed"; return false; }
+  std::vector<CatalogMod> newer;
+  std::string why;
+  if (!parse_catalog(json, &newer, &why)) { *error = why.empty() ? "it could not be read" : why; return false; }
+  for (auto& m : newer)
+    for (const auto& old : catalog_)
+      if (m.id == old.id) { if (m.credits.empty()) m.credits = old.credits; if (m.note.empty()) m.note = old.note; }
+  catalog_ = std::move(newer);
+  catalog_error_.clear();
+  return true;
+}
+
 Manager::~Manager() {
   cancel();
   if (worker_.joinable()) worker_.join();

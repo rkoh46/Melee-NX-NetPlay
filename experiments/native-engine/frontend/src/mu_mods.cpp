@@ -31,6 +31,7 @@ const modinstall::ModStatus* find_locked(const std::string& id) {
 std::vector<Card> cards(std::string* error) {
   std::lock_guard<std::mutex> lock(mu);
   auto& manager = mod_manager();
+  mod_catalog_poll();
   if (!manager.catalog_ok()) { if (error) *error = "The mod catalog was refused: " + manager.catalog_error(); return {}; }
   refresh_locked(false);
   const std::string next = mod_profile_next();

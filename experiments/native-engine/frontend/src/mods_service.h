@@ -11,7 +11,8 @@
 
 namespace fe {
 modinstall::Manager& mod_manager();                     // created on first use (after the app's folders are known)
-bool mod_downloads_available();                         // this program can fetch (the services program, with libcurl)
+bool mod_downloads_available();
+void mod_catalog_poll();                                // the screens' thread: starts the online refresh once, applies it when ready                         // this program can fetch (the services program, with libcurl)
 std::string mod_profile_next();                         // settings.ini mod_profile: the profile the next start loads ("" none)
 bool mod_profile_set(const std::string& profile);       // writes it (takes effect at the next start)
 std::vector<std::string> mod_profile_choices();         // "" (none) first, then the profiles mods.cpp can load
