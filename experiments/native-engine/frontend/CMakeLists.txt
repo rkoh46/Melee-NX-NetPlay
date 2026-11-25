@@ -150,6 +150,10 @@ target_include_directories(mu_gx PRIVATE "${GEN}")   # app/game_menu.h: the buil
 target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 # The app (app.cpp: folders, launcher.ini, controllers, HUD; app_menu.cpp: the in-game menu) and the feature hooks' calls.
 target_sources(mu_gx PRIVATE "${FE}/app.cpp" "${FE}/software_keyboard.cpp")
+# A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp over its source_mod_overlay.cpp and
+# layer_fingerprint.h from the fetched tree): the 2D-style m-ex build is known by it (mods.cpp).
+target_sources(mu_gx PRIVATE "${FE}/mod_fingerprint.cpp" "${MU}/port/runtime/host/source_mod_overlay.cpp")
+set_source_files_properties("${MU}/port/runtime/host/source_mod_overlay.cpp" PROPERTIES COMPILE_OPTIONS "-std=gnu++17")   # upstream's u8string is a std::string there
 target_compile_definitions(mu_gx PRIVATE MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
 if(MU_FE_VARIANT STREQUAL "null")
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=0)

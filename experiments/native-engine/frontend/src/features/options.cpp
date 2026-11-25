@@ -92,6 +92,10 @@ uint32_t (*orig_display)() = nullptr;
 uint32_t w_display() {
   uint32_t v = orig_display ? orig_display() : 0u;
   if (!online() && !replay_playing() && !vanilla() && training_practice_display()) v |= MU_DISPLAY_OPTION_PROJECTILE_HITBOXES;
+  // The 2D-style m-ex build (upstream's set_arcade_display from its pack source): its hitbox code is the Arcade look's hitbox
+  // switches and its camera the 2D camera, offline (not its grid: its stages carry their own).
+  if (!online() && !vanilla() && mods_arcade_pack())
+    v |= MU_DISPLAY_OPTION_HITBOXES | MU_DISPLAY_OPTION_PROJECTILE_HITBOXES | MU_DISPLAY_OPTION_HITBOXES_BEHIND | MU_DISPLAY_OPTION_ARCADE_CAMERA;
   return v;
 }
 // The game's only way to read a host variable (MuHostApi.test_getenv). Answered: MU_SQUAD_STRIKE (patches/0006), "1" when the player
@@ -100,7 +104,15 @@ const char* w_test_getenv(const char* name) {
   if (name && std::strcmp(name, "MU_SQUAD_STRIKE") == 0) return (squad_strike && !online() && !vanilla()) || replay_playing() ? "1" : "0";
   return nullptr;
 }
-uint32_t w_options2() { uint32_t v = 0; return replay_word(1, &v) ? v : orig_options2 ? orig_options2() : 0u; }
+uint32_t w_options2() {
+  uint32_t v = 0;
+  if (replay_word(1, &v)) return v;
+  v = orig_options2 ? orig_options2() : 0u;
+  // The 2D-style m-ex build's codes run natively while its disc is the profile, offline (upstream's h_game_options2); a replay
+  // recorded with it carries the bit in its word.
+  if (!online() && !vanilla() && mods_arcade_pack()) v |= MU_GAME_OPTION2_ARCADE_PACK;
+  return v;
+}
 uint32_t w_options3() { uint32_t v = 0; return replay_word(2, &v) ? v : orig_options3 ? orig_options3() : 0u; }
 
 // ---- shield colours ----

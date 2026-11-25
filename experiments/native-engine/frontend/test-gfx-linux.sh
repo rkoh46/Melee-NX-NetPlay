@@ -14,6 +14,7 @@
 #             Capsules and Minimal presets; blobs in the player's own colours on a hidden stage)
 #   lab       the Lab view's silhouettes, melee-unlocked's fighter packs in place (MU_LAB_ZIP: its content release's zip)
 #   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
+#   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -28,7 +29,8 @@ cases=("$@"); [ "${#cases[@]}" -eq 0 ] || [ "${cases[0]}" = all ] && cases=(text
 # $1 case folder, $2 frames, $3 extra docker arguments, $4 extra play-mode arguments
 run() {
   local dir=$1 frames=$2 env=$3 extra=${4:---auto-vs}
-  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "mnx-gfx2-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" $env \
+  local mods=(); [ -n "${MODS:-}" ] && mods=(-v "$MODS:/out/mods:ro")
+  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "mnx-gfx2-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} $env \
     -e FRAMES="$frames" -e EXTRA="$extra" -e BIN="${BIN:-mu-native-gfx-linux}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
@@ -117,6 +119,13 @@ for c in "${cases[@]}"; do
     rm -rf "$dir/mirror"
     echo "== lab-download"; show "$dir"
     echo "packs: $(ls "$dir/Lab" 2>/dev/null | grep -c '\.lab$')"
+    ;;
+  fingerprint)
+    # A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp): the Akaneia disc of MU_MODS_DIR must be
+    # recognised as "Akaneia 1.0.1" by upstream's own table, the check that the 2D-style build (no disc here) is found the same way.
+    fresh "$dir"; printf '%s\n' "mod_profile ${MU_FP_PROFILE:-akaneia}" > "$dir/settings.ini"
+    MODS="${MU_MODS_DIR:?MU_MODS_DIR: the mods folder}" run "$dir" 400 "" ""
+    echo "== fingerprint"; grep -hE "^mods: (content|fingerprinted|.*found)" "$dir/console.log" | head
     ;;
   *) echo "unknown case $c" >&2; exit 2 ;;
   esac

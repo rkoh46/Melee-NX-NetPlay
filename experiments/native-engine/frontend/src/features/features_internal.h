@@ -105,6 +105,7 @@ bool replays_compress_on();
 
 namespace fe {
 bool mods_tmce();                    // the profile holds Training Mode CE's event menu (/tm/eventmenu.dat)
+bool mods_arcade_pack();             // the profile is the 2D-style m-ex build melee-unlocked knows by its fingerprint (mods.cpp)
 std::string mods_fingerprint();      // the replay's "modProfile": empty for the retail files
 }
 
