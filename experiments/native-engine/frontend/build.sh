@@ -168,6 +168,23 @@ sync_tree() {
     [ -f "$src/mu/$f" ] || { echo "missing $f in the fetched tree" >&2; exit 1; }
     cmp -s "$src/mu/$f" "$gen/mu_ui/$(basename "$f")" || cp "$src/mu/$f" "$gen/mu_ui/$(basename "$f")"
   done
+  # The GD Melee menu style's kit pictures and font pages (port/runtime/gx/ui_sources/gd_melee/assets/kit, GPL-2.0-or-later, see its
+  # ORIGIN.md), embedded as PNG and decoded on first use (src/mu_panel.cpp); gd_assets.inc names them for cosmetic_preview.
+  mkdir -p "$gen/mu_ui/gd"
+  : > "$gen/mu_ui/gd_assets.inc.new"
+  for f in "$src"/mu/port/runtime/gx/ui_sources/gd_melee/assets/kit/*.png; do n=$(basename "$f" .png)
+    cmp -s "$f" "$gen/mu_ui/gd/$n.png" || cp "$f" "$gen/mu_ui/gd/$n.png"
+    echo "MU_GD_ASSET($n)" >> "$gen/mu_ui/gd_assets.inc.new"
+  done
+  if cmp -s "$gen/mu_ui/gd_assets.inc.new" "$gen/mu_ui/gd_assets.inc"; then rm -f "$gen/mu_ui/gd_assets.inc.new"; else mv "$gen/mu_ui/gd_assets.inc.new" "$gen/mu_ui/gd_assets.inc"; fi
+  # The launcher's translations (lang/*.txt, GPL-2.0-or-later) for the home screen's language picker (src/mu_lang.cpp).
+  mkdir -p "$gen/mu_ui/lang"
+  : > "$gen/mu_ui/lang_files.inc.new"
+  for f in "$src"/mu/lang/*.txt; do n=$(basename "$f" .txt); id=$(echo "$n" | tr -c 'A-Za-z0-9\n' '_')
+    cmp -s "$f" "$gen/mu_ui/lang/$n.txt" || cp "$f" "$gen/mu_ui/lang/$n.txt"
+    echo "MU_LANG_FILE($id, \"$n\")" >> "$gen/mu_ui/lang_files.inc.new"
+  done
+  if cmp -s "$gen/mu_ui/lang_files.inc.new" "$gen/mu_ui/lang_files.inc"; then rm -f "$gen/mu_ui/lang_files.inc.new"; else mv "$gen/mu_ui/lang_files.inc.new" "$gen/mu_ui/lang_files.inc"; fi
   # The NRO's icon: melee-unlocked's own (port/app/launcher.ico, its largest picture), as a 256x256 JPEG (build_nro).
   mu_icon
   # Skins (src/features/cosmetics.cpp): melee-unlocked's skeleton and drawing checks and its costume families, taken from
@@ -223,6 +240,14 @@ sync_tree() {
       n=${pair%%:*}; f=${pair#*:}
       echo ".balign 8"; echo ".global mu_ui_$n"; echo "mu_ui_$n: .incbin \"$W/gen/mu_ui/$f\""
       echo ".global mu_ui_${n}_end"; echo "mu_ui_${n}_end:"
+    done
+    for f in "$gen"/mu_ui/gd/*.png; do n=$(basename "$f" .png)
+      echo ".balign 8"; echo ".global mu_gd_$n"; echo "mu_gd_$n: .incbin \"$W/gen/mu_ui/gd/$n.png\""
+      echo ".global mu_gd_${n}_end"; echo "mu_gd_${n}_end:"
+    done
+    for f in "$gen"/mu_ui/lang/*.txt; do n=$(basename "$f" .txt); id=$(echo "$n" | tr -c 'A-Za-z0-9\n' '_')
+      echo ".balign 8"; echo ".global mu_lang_$id"; echo "mu_lang_$id: .incbin \"$W/gen/mu_ui/lang/$n.txt\""
+      echo ".global mu_lang_${id}_end"; echo "mu_lang_${id}_end:"
     done
     echo '.section .note.GNU-stack,"",%progbits'
   } > "$gen/embedded.S"

@@ -6,6 +6,7 @@
 // functions they expect from the rest of the app.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "frontend.h"
+#include "mu_ui.h"                // the settings panel's menu sounds
 
 #include "host_services.h"       // melee-unlocked: linux_host, MuPadStatus
 #include "host.h"                // shim
@@ -25,6 +26,7 @@ namespace host { void audio_set_speed(double speed); }   // patches/0110: the bu
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <vector>
 #include "mu_host.h"
 #if MU_FE_AURORA
 #include "input_script.h"        // the app's script reader: the input-suggestion test's look ahead
@@ -243,6 +245,9 @@ extern "C" void mu_frontend_audio(const int16_t* rl, uint32_t frames) {
     ++fe::refills;
     for (int i = 0; i < 8; ++i) { host::audio_push(silence, sizeof silence); fe::refill_ms += 5; }
   }
+  // The settings panel's menu sounds (mu_panel.cpp), mixed into this block of the game's output; the game's own samples are untouched.
+  static std::vector<int16_t> with_tick;
+  if (fe::mu_ui::ui_sound_pending()) { with_tick.assign(rl, rl + frames * 2); fe::mu_ui::ui_sound_mix(with_tick.data(), frames, 32000); rl = with_tick.data(); }
   for (uint32_t i = 0; i < frames * 2; ++i) {
     fe::block[fe::block_fill++] = uint8_t(uint16_t(rl[i]) >> 8);
     fe::block[fe::block_fill++] = uint8_t(rl[i]);

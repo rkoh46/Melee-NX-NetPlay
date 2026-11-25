@@ -37,5 +37,12 @@ void panel_close();
 // The Practice menu (features/proai.cpp's practice_menu_chord, weak): the panel's GAME > Training section has a
 // "Practice menu" row when it is linked; Start + D-pad Up + Z goes to it directly (controls.cpp).
 bool practice_available();
+// The home screen's Settings: the panel, in the legacy menu when "Enable Legacy Menu" is on (upstream's launcher Settings).
+void panel_open_from_launcher();
+// Simulation thread, once per retrace: a match is on (the reminder hides), the session is online (the note about skins).
+void note_session(bool fighting, bool online);
+// Menu sounds (upstream's menusounds): play_io.cpp mixes the panel's tick into the game's 32 kHz output, R/L pairs.
+bool ui_sound_pending();
+void ui_sound_mix(int16_t* rl, uint32_t frames, uint32_t rate);
 }  // namespace fe::mu_ui
 

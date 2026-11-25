@@ -23,6 +23,8 @@
 #            saved setup in launcher.ini (X and Y swapped): Start + D-pad Down + Z opens the panel on Controller profiles
 #            (MU_CONTROLS_TEST_PAGE), "Save as a new profile", the A binding pressed onto Z, stick left/right inverted, Stick radius 90
 #            with the inverted stick, Start closes; the game gets Y for X, A for Z, the stick inverted and scaled; a second start loads it
+#   styles   melee-unlocked's six menu styles in the game and its two legacy menus from the home screen (screenshots); the
+#            settings search with the software keyboard's test answer
 #   online   two apps, made-up users, the loopback stand-in for matchmaking: each player's controller script goes through
 #            the menus to Unranked and plays the match (no generated inputs); the HUD (ping, delay, frame time) is on
 # MU_APP_SETTINGS="key value;key value" gives each app folder a settings.ini with those lines (the overlays' online check:
@@ -234,6 +236,39 @@ for case in "$@"; do
       done
       tap START; sleep 2; shot game-after
       wait $app'
+    ;;
+  styles)
+    # melee-unlocked's menu styles (CUSTOMIZE > Menu style, launcher.ini overlaystyle 0..5) in the game, one start each: the
+    # panel's first page, a category entered (A), two rows down; then the legacy menus (legacymenu=1, legacymenustyle 6 and 7)
+    # from the home screen's Settings. Screenshots shots/style-N-*.png. The search (MU_TEST_KEYBOARD answers the software
+    # keyboard): "dead" typed on the first style's VIDEO page.
+    make_app "$dir" 1 2400 - home=0
+    run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt MU_TEST_KEYBOARD="dead"; pad ""
+      tap() { pad "$1"; sleep ${2:-0.15}; pad ""; sleep 0.8; }
+      for style in 0 1 2 3 4 5; do
+        sed -i -e "/^overlaystyle=/d" -e "/^frames=/d" /out/melee-nx-netplay/launcher.ini
+        printf "overlaystyle=%s\nframes=2400\n" $style >> /out/melee-nx-netplay/launcher.ini
+        LOG=/out/console-$style.log
+        cd /out && (/b/$BIN > $LOG 2>&1; echo "exit code $?" >> $LOG) &
+        app=$!
+        wait_log $LOG "online menu: row 1" 120 && sleep 3
+        pad "L R START"; sleep 1.2; pad ""; sleep 2; shot style-$style-home
+        tap A; sleep 2; shot style-$style-page
+        if [ $style = 0 ]; then tap A; sleep 2; shot style-0-search; fi
+        tap DD; tap DD; sleep 0.8; shot style-$style-down
+        tap B; sleep 1; tap START; sleep 1
+        kill $app 2>/dev/null; wait $app 2>/dev/null
+      done
+      for legacy in 6 7; do
+        sed -i -e "/^legacymenu/d" -e "/^home=/d" -e "/^frames=/d" -e "/^overlaystyle=/d" /out/melee-nx-netplay/launcher.ini
+        printf "legacymenu=1\nlegacymenustyle=%s\nframes=900\n" $legacy >> /out/melee-nx-netplay/launcher.ini
+        LOG=/out/console-legacy-$legacy.log
+        cd /out && (/b/$BIN > $LOG 2>&1; echo "exit code $?" >> $LOG) &
+        app=$!
+        wait_log $LOG "home: drawn" 120 && { sleep 2; tap B; tap DD; tap A; sleep 2.5; shot style-$legacy-home; tap DD; tap DD; sleep 1; shot style-$legacy-down; }
+        kill $app 2>/dev/null; wait $app 2>/dev/null
+      done'
+    grep -hE "settings: (opened|search|focus|VIDEO|categories)|keyboard:" "$dir"/console-*.log | cut -c1-160 | head -60
     ;;
   explore)
     # Diagnosis: walks every category of the panel row by row (the log's "settings: focus" lines name each row in order).

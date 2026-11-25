@@ -36,6 +36,7 @@
 
 extern "C" const uint8_t mu_embedded_game[], mu_embedded_game_end[];
 
+namespace fe::mu_ui { __attribute__((weak)) void note_session(bool fighting, bool online); }
 namespace fe {
 std::string home_replay;   // a replay the home screen (mu_home.cpp) asked to watch: the game starts with it
 namespace {
@@ -110,6 +111,7 @@ void observer(const MuStatePod& state, const linux_host::Counters& counters, voi
     features::call_retrace(info);
   }
   app_retrace(counters.retraces, fighting, online);
+  if (&mu_ui::note_session) mu_ui::note_session(fighting, online);   // mu_panel.cpp (builds with a picture)
   // The Replays page's "Watch it": the game is started again with the arguments the module returns.
   if (restart_args.empty() && features::call_take_restart(&restart_args)) {
     say("play: the game starts again with %zu more argument(s) (asked for by a feature module)", restart_args.size());

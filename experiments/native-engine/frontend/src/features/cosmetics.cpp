@@ -585,6 +585,26 @@ size_t cosmetics_disc_skin_count(const std::string& profile) {
   return n;
 }
 
+// The note when skins are off online (mu_panel.cpp, upstream's draw_skin_online_notice): the picked skins served as the
+// standard costume in this online session, and the picked stage skins (always offline only). Render thread; 0 offline.
+uint32_t cosmetics_off_online(uint32_t* stages) {
+  std::lock_guard<std::mutex> lock(mu);
+  uint32_t off = 0, off_stages = 0;
+  if (enabled && online_form()) {
+    for (const auto& [slot, name] : picks) {
+      const auto it = skins.find(slot);
+      if (it == skins.end()) continue;
+      for (const Skin& s : it->second) {
+        if (s.name != name) continue;
+        if (s.stage) ++off_stages;
+        else if (s.checked && !s.online_ok) ++off;
+      }
+    }
+  }
+  if (stages) *stages = off_stages;
+  return off;
+}
+
 void register_cosmetics() {
   add_setting(setting);
   add_command(0xF9, skin_cycle);

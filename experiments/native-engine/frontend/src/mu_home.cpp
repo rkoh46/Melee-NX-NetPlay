@@ -19,6 +19,7 @@
 #include "feature_hooks.h"
 #include "feature_calls.h"
 #include "mu_mods.h"
+#include "mu_lang.h"
 
 #include "host.h"
 #include "metal_frontend.h"
@@ -94,8 +95,11 @@ void round_rect(ImDrawList* d, ImVec2 a, ImVec2 b, float radius, COLORREF top, C
   if (border != NO_FILL) d->AddRect(a, b, col(border), radius, 0, 1.0f);
 }
 // draw_text in a box: left, centred or right, vertically centred, ellipsis when it does not fit.
-void text(ImDrawList* d, ImFont* f, float size, ImVec2 a, ImVec2 b, COLORREF c, const std::string& s, int align = 0, bool wrap = false) {
-  if (s.empty()) return;
+// Fixed English text shows in the chosen language (mu_lang.cpp, upstream's lookup by wording); paths, names and the lines the
+// Switch app adds come back unchanged.
+void text(ImDrawList* d, ImFont* f, float size, ImVec2 a, ImVec2 b, COLORREF c, const std::string& english, int align = 0, bool wrap = false) {
+  if (english.empty()) return;
+  const std::string s = mu_lang::tx(english);
   if (wrap) { d->AddText(f, size, a, col(c), s.c_str(), nullptr, b.x - a.x); return; }
   std::string t = s;
   float w = f->CalcTextSizeA(size, FLT_MAX, 0, t.c_str()).x;
@@ -603,7 +607,7 @@ void home_job(void* frontend_v, void* user) {
         if (e.down) h.focus = (h.focus + 1) % PAGE_COUNT;
         if (e.up || e.down) { if (h.focus != PAGE_SETTINGS) h.page = h.focus; }
         if (e.a || e.right) {
-          if (h.focus == PAGE_SETTINGS) { mu_ui::panel_open_on(""); say("home: Settings"); }
+          if (h.focus == PAGE_SETTINGS) { mu_ui::panel_open_from_launcher(); say("home: Settings"); }
           else { h.page = h.focus; h.rail = false; h.focus = h.page == PAGE_PLAY ? 1 : 0; }
         }
       } else {

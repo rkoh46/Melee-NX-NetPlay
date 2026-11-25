@@ -149,7 +149,7 @@ target_include_directories(mu_gx PRIVATE "${REPO}/port/runtime/hle" "${REPO}/nat
 target_include_directories(mu_gx PRIVATE "${GEN}")   # app/game_menu.h: the build-time copy with patches/0104
 target_compile_options(mu_gx PRIVATE -O2 -g -Wall -fno-strict-aliasing)
 # The app (app.cpp: folders, launcher.ini, controllers, HUD; app_menu.cpp: the in-game menu) and the feature hooks' calls.
-target_sources(mu_gx PRIVATE "${FE}/app.cpp")
+target_sources(mu_gx PRIVATE "${FE}/app.cpp" "${FE}/software_keyboard.cpp")
 target_compile_definitions(mu_gx PRIVATE MU_APP_VERSION="${MU_APP_VERSION}" MU_SLIPPI_VERSION="${MU_SLIPPI_VERSION}")
 if(MU_FE_VARIANT STREQUAL "null")
   target_compile_definitions(mu_gx PRIVATE MU_FE_AURORA=0)
@@ -266,7 +266,7 @@ endif()
 # computer (self_update*.cpp) and the Slippi sign-in (switch_signin.cpp with patches/0105, slippi_login.cpp, HTTPS
 # through libcurl). The netplay object has its own copies of the last two, local to it.
 if(NOT MU_FE_VARIANT STREQUAL "null")
-  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${FE}/mu_home.cpp" "${GEN}/app/switch_signin.cpp"
+  add_library(mu_app_services OBJECT "${FE}/app_services.cpp" "${FE}/mu_home.cpp" "${FE}/mu_lang.cpp" "${GEN}/app/switch_signin.cpp"
     "${APPSRC}/self_update.cpp" "${APPSRC}/self_update_curl.cpp" "${REPO}/port/runtime/hle/slippi_login.cpp" "${REPO}/port/runtime/hle/slippi_http_curl.cpp"
     "${FE}/modinstall/mi_fetch_curl.cpp")   # the mod installer's downloads (mods_service.cpp finds it through a weak reference)
   target_include_directories(mu_app_services PRIVATE "${FE}/shim" "${FE}" "${GXSRC}" "${RUN}" "${REPO}/port/runtime/ppc" "${APPSRC}"
