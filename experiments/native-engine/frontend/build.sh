@@ -97,6 +97,13 @@ sync_tree() {
   cp "$stage/mu/port/linux/host_services.cpp" "$gen/host_services.base.cpp"     # what patches/0101 is a diff against
   patch -s -p1 -d "$stage/mu" < "$here/patches/0101-host-frontend-hooks.patch"
   patch -s -p1 -d "$stage/mu" < "$here/patches/0119-host-jukebox-hook.patch"   # Use custom music: the host jukebox (features/audio.cpp)
+  patch -s -p1 -d "$stage/mu" < "$here/patches/0121-host-game-symbol.patch"   # the game's Gecko writer and reader (features/gecko.cpp)
+  # melee-unlocked's player Gecko codes (user_gecko.cpp), LF, with patches/0122: the shim host header and the include paths of a copy.
+  rm -rf "$gen/geckosrc"; mkdir -p "$gen/geckosrc/port/runtime/host" "$gen/gecko"
+  perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/host/user_gecko.cpp" > "$gen/geckosrc/port/runtime/host/user_gecko.cpp"
+  patch -s -p1 -d "$gen/geckosrc" < "$here/patches/0122-user-gecko-on-the-switch.patch"
+  cmp -s "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp" || cp "$gen/geckosrc/port/runtime/host/user_gecko.cpp" "$gen/gecko/user_gecko.cpp"
+  rm -rf "$gen/geckosrc"
   # melee-unlocked's jukebox (Use custom music, features/audio.cpp), LF line ends, with patches/0118: the app's MusicPacks folder.
   rm -rf "$gen/jukeboxsrc"; mkdir -p "$gen/jukeboxsrc/port/runtime/hle" "$gen/jukebox"
   perl -pe 's/\r$//; s/^\xEF\xBB\xBF// if $. == 1' "$stage/mu/port/runtime/hle/jukebox.cpp" > "$gen/jukeboxsrc/port/runtime/hle/jukebox.cpp"

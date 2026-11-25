@@ -1,0 +1,44 @@
+melee-unlocked's player Gecko codes (port/runtime/host/user_gecko.cpp, GPL-2.0-or-later) compiled as a build-time copy (Melee-NX-NetPlay
+0.4.7): its host header is frontend/src/gecko_shim/gecko_host_shim.h, and the game's function tables are found on the include path.
+Nothing else changes: the native writes of game variables (types 00-06, 08, 10-18, 20-2E, 42-4C, 80-88) as upstream; code
+rewrites and function patches stay refused (the console does not let a program rewrite its own code). LF line ends.
+--- a/port/runtime/host/user_gecko.cpp
++++ b/port/runtime/host/user_gecko.cpp
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "user_gecko.h"
+ #include "gameplay_policy.h"
+-#include "host.h"
++#include "gecko_host_shim.h"   // Melee-NX-NetPlay: the few host services this file names (frontend/src/gecko_shim)
+ // port/tests/user_gecko_test.cpp includes this file with a small made-up table of its own in place
+ // of the generated one, so the rules below are tested on an image the test controls.
+ #ifndef USER_GECKO_TEST_TARGETS
+@@ -43,9 +43,9 @@
+ const FunctionRow kFunctionRows[] = {
+ #define MU_GECKO_FN(addr, name, kind) {addr, kind},
+ #ifdef _WIN32
+-#include "../../../sourceport/game/shim/mu_gecko_functions.inc"
++#include "mu_gecko_functions.inc"
+ #else
+-#include "../../../sourceport/game/shim/mu_gecko_functions_linux.inc"
++#include "mu_gecko_functions_linux.inc"
+ #endif
+ #undef MU_GECKO_FN
+     {0xFFFFFFFFu, 0},
+@@ -554,6 +554,16 @@
+ // with the code's bytes in place (gecko_function_patch.h). Waits for the disc (set_native_functions).
+ void judge_functions(Code& c) {
+   if (c.fn_judged || !c.supported || c.fn_bytes.empty()) { c.fn_judged = c.fn_judged || c.fn_bytes.empty(); return; }
++#ifdef MNX_NO_FUNCTION_PATCHES
++  // Melee-NX-NetPlay: the console does not let a program rewrite its own machine code, so a code that would make a native
++  // function return at once is refused, by name, as one this engine cannot run.
++  {
++    c.fn_judged = true;
++    const ConsoleSymbol* s = symbol_at(c.fn_bytes.front().first);
++    return refuse_functions(c, "rewrites " + (s ? std::string(s->name) : hex8(c.fn_bytes.front().first)) +
++                                   ": the console does not let a program rewrite its own code");
++  }
++#endif
+   if (!g_dol_read) return;
+   c.fn_judged = true;
+   c.fn_patches.clear();

@@ -411,7 +411,16 @@ void settings_load(const std::string& path) {
     while (std::fgets(line, sizeof line, in)) {
       strip_comment(line);
       char key[64], value[256];
-      if (std::sscanf(line, " %63s %255s", key, value) == 2) { set(key, value); given.insert(key); ++count; }
+      if (std::sscanf(line, " %63s %255s", key, value) == 2) {
+        // A Gecko code's name may have spaces (upstream's `geckocode NAME` lines): the rest of the line.
+        if (std::strcmp(key, "geckocode") == 0) {
+          std::string rest(std::strstr(line, key) + std::strlen(key));
+          rest.erase(0, rest.find_first_not_of(" \t"));
+          while (!rest.empty() && (rest.back() == '\n' || rest.back() == '\r' || rest.back() == ' ' || rest.back() == '\t')) rest.pop_back();
+          std::snprintf(value, sizeof value, "%s", rest.c_str());
+        }
+        set(key, value); given.insert(key); ++count;
+      }
     }
     std::fclose(in);
     say("play: settings: %d lines read from %s", count, path.c_str());

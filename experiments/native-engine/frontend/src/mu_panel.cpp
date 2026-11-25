@@ -81,6 +81,12 @@ extern "C" const uint8_t mu_ui_font_black[], mu_ui_font_black_end[], mu_ui_font_
 extern "C" const uint8_t mu_ui_bailey[], mu_ui_bailey_end[], mu_ui_mark[], mu_ui_mark_end[];
 
 namespace fe::features { __attribute__((weak)) bool practice_menu_chord(int port); }   // features/proai.cpp: the Practice menu
+#include "feature_hooks.h"
+namespace fe::features {   // features/gecko.cpp: the player's Gecko codes (GECKO CODES > Your codes)
+__attribute__((weak)) std::vector<GeckoRow> gecko_rows();
+__attribute__((weak)) std::string gecko_file();
+__attribute__((weak)) void gecko_toggle(const std::string& name);
+}
 
 namespace fe {
 namespace {
@@ -123,7 +129,7 @@ bool g_step_armed = false;
 enum ControlsRow { C_DEVICE, C_REMAP, C_STICK_DZ, C_CSTICK_DZ, C_TRIGGER, C_SWAP, C_RUMBLE, C_TEST_RUMBLE, C_MODIFIER, C_RESET };
 
 // What the panel asked for, applied on the simulation thread (panel_service).
-enum class Act { Main, Extra, Controls, Remap, Quit, Ini, Setting, Practice, ModPrimary, ModRemove, ModProfile };
+enum class Act { Main, Extra, Controls, Remap, Quit, Ini, Setting, Practice, ModPrimary, ModRemove, ModProfile, Gecko };
 struct Action { Act act; int a = 0, b = 0, value = 0; std::string key, text; };
 std::vector<Action> g_actions;
 
@@ -433,6 +439,21 @@ std::array<Category, 8> build_rows(bool in_game) {
     where.text = "switch/melee-nx-netplay/mods: a mod per folder, Profiles/<name>.ini, and Downloads/ for files you fetch yourself.";
     n.rows.push_back(where);
   }
+  // GECKO CODES > Your codes (features/gecko.cpp): each code of GeckoCodes.ini, switched here; one the Source Port cannot run is
+  // greyed with upstream's reason.
+  if (&fe::features::gecko_rows) {
+    Section& g = section(cats[6], "Your codes");
+    const std::vector<fe::features::GeckoRow> rows = fe::features::gecko_rows();
+    for (const auto& c : rows) {
+      Row r = toggle(c.name + "###gecko-" + c.name, c.enabled, Action{Act::Gecko});
+      r.action.key = c.name; r.enabled = c.supported && !session_online();
+      r.hint = !c.reason.empty() ? c.reason : session_online() ? "Your codes run offline only." : "Offline only.";
+      g.rows.push_back(r);
+    }
+    Row where; where.kind = Kind::Info; where.label = rows.empty() ? "No codes yet" : "Codes file";
+    where.text = "switch/melee-nx-netplay/GeckoCodes.ini, in Dolphin's format ([Gecko], $Name, then XXXXXXXX YYYYYYYY lines). Read at each start.";
+    g.rows.push_back(where);
+  }
   // melee-unlocked's rows the Switch does not have, greyed under each page, with the reason (FEATURES.md has each one).
   static const struct { int cat; const char* label; const char* why; } kAbsent[] = {
     {0, "Frame rate, VSync, Display, Window size", "The console's display runs at 60 Hz with its own sync; there is no window."},
@@ -447,7 +468,8 @@ std::array<Category, 8> build_rows(bool in_game) {
     {3, "Keyboard and HID controller editors, PhobGCC menu", "The Switch's controllers come through the system and the GameCube adapter: the rows above."},
     {4, "Controller overlay placement (dragging)", "No pointer: the overlays have fixed places."},
     {5, "Menu styles (Dashboard, GD Melee, Radial, Wide, Simple, legacy), custom accent wheel, transparency", "The Clean side style only (melee-unlocked's default)."},
-    {6, "Your codes (add, edit, import)", "Needs a keyboard, and the codes run on the Static Recomp: not on the Switch."},
+    {6, "Add, edit or import a code here", "Needs a keyboard: put codes in GeckoCodes.ini on the SD card (above)."},
+    {6, "Codes that inject PowerPC (C2) or rewrite game functions", "The Source Port runs no PowerPC, and the console does not let a program rewrite its own code."},
     {7, "Cosmetic mods (costumes, stages, effects), the mods catalog", "Mod discs load as profiles (above), built on the PC."},
   };
   for (const auto& a : kAbsent) {
@@ -921,6 +943,7 @@ void panel_service(bool in_game) {
   for (const Action& a : actions) {
     if (a.act == Act::Ini) { fe::app_ini_set(a.key, std::to_string(a.value)); say("menu: %s %d", a.key.c_str(), a.value); }
     if (a.act == Act::ModPrimary) mu_mods::primary(a.key);
+    if (a.act == Act::Gecko && &fe::features::gecko_toggle) fe::features::gecko_toggle(a.key);
     if (a.act == Act::ModRemove) mu_mods::remove(a.key);
     if (a.act == Act::ModProfile) {
       const std::vector<std::string> choices = mu_mods::profile_choices();
