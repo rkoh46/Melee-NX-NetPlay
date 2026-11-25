@@ -13,6 +13,7 @@
 #include "frontend.h"
 #include "flicker_scan.h"        // gen/gfx: melee-unlocked's glitch detector (patches/0127)
 #include "video_bg.h"
+#include "user_shader.h"     // RetroArch shader presets (builds with glslang)
 #include "app/game_menu.h"       // host::menu_is_open (patches/0104): a capture asked for from the menu starts after it closes
 
 #include <aurora/aurora.h>
@@ -316,6 +317,7 @@ void dump_texture(const std::string& name, uint32_t width, uint32_t height, cons
 
 // Render thread, from overlay_draw() each frame.
 void render_frame() {
+  if (&fe::shaders::frame) fe::shaders::frame();   // the chosen shader preset (compiled on a thread of its own)
   textures_frame();
   readback_frame();
   test_flash();
@@ -332,10 +334,19 @@ namespace video_anchor { }
 namespace fe::video_bg { extern const int linked; }   // video_bg.cpp: keeps it in the program (see there)
 namespace fe::gfx {
 #endif
+#if MU_FE_SHADERS
+}  // namespace fe::gfx
+namespace fe::shaders { extern const int shaders_linked; }   // user_shader.cpp: keeps it in the program (see there)
+namespace fe::gfx {
+#endif
 void render_end() {
 #if MU_FE_VIDEO
   if (!fe::video_bg::linked) return;
 #endif
+#if MU_FE_SHADERS
+  if (!fe::shaders::shaders_linked) return;
+#endif
+  if (&fe::shaders::shutdown) fe::shaders::shutdown();
   if (lab_linked && fe::features::modlooks_linked && &lab_end) lab_end();
   if (&fe::video_bg::shutdown) fe::video_bg::shutdown();
   if (packs.applied != ~0u) {

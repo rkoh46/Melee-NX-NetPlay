@@ -1,0 +1,75 @@
+A host's filter over the presented picture (Melee-NX-NetPlay 0.4.9): webgpu::set_present_filter, called on the render worker with the frame's encoder, the picture (after the picture adjustments) and its size on screen, returning the texture to show (RetroArch shader presets, src/user_shader.cpp); the instance asks for SPIR-V shader sources (Dawn's SPIR-V reader). After 0109, 0125 and 0126.
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -1,5 +1,6 @@
+ #include <aurora/aurora.h>
+ #include <aurora/time.hpp>
++#include <algorithm>   // patches/0134
+ #include <array>
+ #include <cmath>
+ #include <mutex>
+@@ -531,11 +532,21 @@
+       wgpu::BindGroup presentBindGroup;
+       if (rmlBindGroup && !rmlOverlay) {
+         presentBindGroup = rmlBindGroup;
+-      } else if (webgpu::get_resampler() == SAMPLER_BILINEAR && !webgpu::picture_active()) {
+-        presentBindGroup = webgpu::g_CopyBindGroup;
+       } else {
+-        const auto& resampledSource = webgpu::resample_present_source(encoder, viewport);
+-        presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
++        const bool plain = webgpu::get_resampler() == SAMPLER_BILINEAR && !webgpu::picture_active();
++        const webgpu::TextureWithSampler& picture = plain ? webgpu::present_source() : webgpu::resample_present_source(encoder, viewport);
++        // patches/0134: the host's present filter (shader presets) over the picture, at its size on screen.
++        const webgpu::TextureWithSampler* filtered = nullptr;
++        if (const auto filter = webgpu::present_filter()) {
++          filtered = filter(encoder, picture, static_cast<uint32_t>(std::max(1.f, viewport.width)), static_cast<uint32_t>(std::max(1.f, viewport.height)));
++        }
++        if (filtered) {
++          presentBindGroup = webgpu::create_copy_bind_group(*filtered);
++        } else if (plain) {
++          presentBindGroup = webgpu::g_CopyBindGroup;
++        } else {
++          presentBindGroup = webgpu::create_copy_bind_group(picture);
++        }
+       }
+       encode_readbacks(encoder, presentBindGroup, static_cast<uint32_t>(viewport.width), static_cast<uint32_t>(viewport.height));
+       {
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -550,6 +550,11 @@
+   std::lock_guard lock{g_pictureMutex};
+   g_picture = p;
+ }
++
++// patches/0134: the host's present filter.
++static std::atomic<PresentFilter> g_presentFilter{nullptr};
++void set_present_filter(PresentFilter filter) noexcept { g_presentFilter.store(filter, std::memory_order_release); }
++PresentFilter present_filter() noexcept { return g_presentFilter.load(std::memory_order_acquire); }
+ 
+ bool picture_active() noexcept {
+   std::lock_guard lock{g_pictureMutex};
+@@ -1010,6 +1015,7 @@
+     Log.info("Creating WebGPU instance");
+     const std::array requiredInstanceFeatures{
+         wgpu::InstanceFeatureName::TimedWaitAny,
++        wgpu::InstanceFeatureName::ShaderSourceSPIRV,   // patches/0134: the host's shader presets arrive as SPIR-V
+     };
+     wgpu::InstanceDescriptor instanceDescriptor{
+         .requiredFeatureCount = requiredInstanceFeatures.size(),
+--- a/lib/webgpu/gpu.hpp
++++ b/lib/webgpu/gpu.hpp
+@@ -72,6 +72,14 @@
+ Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
+                                     uint32_t content_height) noexcept;
+ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport);
++// Melee-NX-NetPlay frontend/patches/0134: a host's filter over the presented picture (RetroArch shader presets, the frontend's
++// user_shader.cpp). Called on the render worker with the frame's command encoder, the picture about to be shown (after the
++// picture adjustments when they are on) and the picture's size on screen; it records its own passes and returns the texture
++// to show instead, or null to show the picture as it is. Set from any thread; null removes it.
++using PresentFilter = const TextureWithSampler* (*)(const wgpu::CommandEncoder& encoder, const TextureWithSampler& source,
++                                                    uint32_t width, uint32_t height);
++void set_present_filter(PresentFilter filter) noexcept;
++PresentFilter present_filter() noexcept;
+ void draw_clear(const wgpu::RenderPassEncoder& pass, bool clearColor, bool clearAlpha, bool clearDepth,
+                 const Vec4<float>& clearColorValue, float clearDepthValue);
+ 

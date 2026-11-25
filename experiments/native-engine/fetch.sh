@@ -74,4 +74,17 @@ if [ "$(git -C "$ff" rev-parse HEAD 2>/dev/null)" != "$ff_commit" ]; then
 else
   echo "have  FFmpeg n7.1"
 fi
+# glslang for RetroArch shader presets (frontend/src/user_shader.cpp compiles their slang GLSL to SPIR-V on the device;
+# frontend/build.sh glslang builds it for Linux and the console): release 15.1.0 from Khronos' own repository, pinned by the
+# archive's SHA-256. BSD-3-Clause, BSD-2-Clause, MIT and Apache-2.0 (its LICENSE.txt). Never committed.
+gl="$work/glslang-src"; gl_tag=15.1.0; gl_sha=4bdcd8cdb330313f0d4deed7be527b0ac1c115ff272e492853a6e98add61b4bc
+if [ "$(cat "$gl/.mnx-sha256" 2>/dev/null)" != "$gl_sha" ]; then
+  dl="$work/glslang-download"; rm -rf "$dl" "$gl"; mkdir -p "$dl"
+  curl -fsSL --max-time 300 -o "$dl/glslang.tar.gz" "https://github.com/KhronosGroup/glslang/archive/refs/tags/$gl_tag.tar.gz"
+  [ "$(shasum -a 256 "$dl/glslang.tar.gz" | cut -d' ' -f1)" = "$gl_sha" ] || { rm -rf "$dl"; echo "fetch: glslang $gl_tag is not the pinned archive" >&2; exit 1; }
+  tar -xzf "$dl/glslang.tar.gz" -C "$dl" && mv "$dl/glslang-$gl_tag" "$gl" && rm -rf "$dl"
+  echo "$gl_sha" > "$gl/.mnx-sha256"; echo "fetch glslang $gl_tag"
+else
+  echo "have  glslang $gl_tag"
+fi
 echo "tree: $tree"

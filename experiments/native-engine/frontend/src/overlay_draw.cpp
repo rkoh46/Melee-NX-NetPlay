@@ -32,6 +32,7 @@ namespace fe::phob_adapter { double rate_hz(); }   // src/phob_adapter.cpp: adap
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -148,6 +149,40 @@ const Art& art_for(const std::string& name) {
   say("overlay: border art %s, %dx%d", path.c_str(), a.w, a.h);
   return a;
 }
+// A looping video in the bars (upstream's Border: an .mp4 in the Borders folder), decoded by src/video_bg.cpp's border_frame while
+// the bars show; its newest frame goes into one ImGui texture (Aurora's aurora_imgui_update_texture, patches/0133), made again
+// only when the size changes.
+bool is_video(const std::string& name) {
+  if (name.size() < 4) return false;
+  std::string ext = name.substr(name.size() - 4);
+  for (char& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+  return ext == ".mp4";
+}
+const Art& video_art(const std::string& name) {
+  static Art art; static uint64_t serial = 0; static std::string shown; static bool said = false;
+  if (!&video_bg::border_frame) {
+    if (!said) { said = true; say("overlay: border art %s: this build plays no video (no FFmpeg)", name.c_str()); }
+    return art;
+  }
+  const std::string folder = (options.app && !options.base_dir.empty() ? options.base_dir : options.out_dir) + "/Borders/";
+  const std::string path = name.find('/') != std::string::npos ? name : folder + name;
+  if (path != shown) { shown = path; serial = 0; said = false; }
+  const auto f = video_bg::border_frame(path);
+  if (!f) {
+    const std::string e = &video_bg::border_error ? video_bg::border_error() : std::string();
+    if (!e.empty() && !said) { said = true; say("overlay: border art %s: %s", path.c_str(), e.c_str()); }
+    return art;   // the last frame stays until the next one (none yet: the bars stay as they are)
+  }
+  if (f->serial == serial && art.id) return art;
+  serial = f->serial;
+  if (!art.id || art.w != int(f->width) || art.h != int(f->height) ||
+      !aurora_imgui_update_texture(art.id, f->width, f->height, f->rgba.data())) {
+    art.id = aurora_imgui_add_texture(f->width, f->height, f->rgba.data());
+    art.w = int(f->width); art.h = int(f->height);
+    say("overlay: border art %s, video %ux%u", path.c_str(), f->width, f->height);
+  }
+  return art;
+}
 void draw_border(ImDrawList* dl, const overlay::Config& c, const Rect& g, int ww, int wh) {
   if (c.border.empty() || (g.x0 <= 0.5f && g.y0 <= 0.5f)) return;
   const float W = float(ww), H = float(wh);
@@ -165,7 +200,7 @@ void draw_border(ImDrawList* dl, const overlay::Config& c, const Rect& g, int ww
         if (y >= r.y0 && y <= r.y1) dl->AddLine(ImVec2(r.x0, y), ImVec2(r.x1, y), IM_COL32(40, 80, 170, 110), 1.0f);
     }
   } else {
-    const Art& a = art_for(c.border);
+    const Art& a = is_video(c.border) ? video_art(c.border) : art_for(c.border);
     if (!a.id) return;
     // The picture covers the whole screen (cut to fill, aspect kept); only the bars show it.
     const float s = std::max(W / float(a.w), H / float(a.h));

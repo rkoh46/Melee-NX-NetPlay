@@ -14,8 +14,13 @@
 #             Capsules and Minimal presets; blobs in the player's own colours on a hidden stage)
 #   lab       the Lab view's silhouettes, melee-unlocked's fighter packs in place (MU_LAB_ZIP: its content release's zip)
 #   lab-download   the services program fetching those packs from a local stand-in of the release (MU_LAB_ZIP), then drawing them
-#   video     menu video backgrounds: a made-up clip as sss.mp4 (needs build.sh ffmpeg)
+#   video     menu video backgrounds: made-up clips as css.mp4 and sss.mp4 (needs build.sh ffmpeg)
 #   border-png   border art from a PNG (Borders/sunset.png, made here) beside the 4:3 picture
+#   border-video  border art from a looping MP4 (Borders/loop.mp4, made here; needs build.sh ffmpeg): the bars change between shots
+#   shader    a RetroArch preset written here (Shaders/scanlines: two passes, an alias, a float framebuffer, a LUT picture,
+#             OriginalHistory1, the last pass's own feedback, parameters set by the preset; needs build.sh glslang): compiled, running, screenshots; then the same match without it, and the
+#             render thread's aurora_end_frame median of both (the present pass's cost on Mesa's software Vulkan driver)
+#   shader-bad  a preset naming a missing file and a shader that does not compile: the reasons logged, the game drawn as usual
 #   fingerprint   mod_profile akaneia (MU_MODS_DIR): melee-unlocked's content fingerprint recognises the disc as Akaneia 1.0.1
 #   all       every case above
 # Output: build/native-engine-gfx/run-gfx/<case>/ (console.log, picture.log, shots/). MU_TEST_LIMIT: time limit in s.
@@ -32,7 +37,7 @@ cases=("$@"); [ "${#cases[@]}" -eq 0 ] || [ "${cases[0]}" = all ] && cases=(text
 run() {
   local dir=$1 frames=$2 env=$3 extra=${4:---auto-vs}
   local mods=(); [ -n "${MODS:-}" ] && mods=(-v "$MODS:/out/mods:ro")
-  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "mnx-gfx2-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} $env \
+  timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-$(basename "$dir")-$$" --network none -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$dir:/out" ${mods[@]+"${mods[@]}"} $env ${MU_TEST_ENV:-} \
     -e FRAMES="$frames" -e EXTRA="$extra" -e BIN="${BIN:-mu-native-gfx-linux}" -e SDL_AUDIODRIVER=dummy "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp
@@ -61,7 +66,7 @@ for c in "${cases[@]}"; do
     echo "dumped: $n PNG files"
     # A pack made from the dumps: every texture with its colours inverted (alpha kept), under the dump's own names.
     mkdir -p "$dir/TexturePacks/inverted"
-    timeout 600 docker run --rm --name "mnx-gfx2-pack-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    timeout 600 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-pack-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       cd /out/dump/Dump/Textures/GALE01 && ls | head -4000 | while read f; do convert "$f" -channel RGB -negate +channel "/out/TexturePacks/inverted/$f"; done'
     echo "pack: $(ls "$dir/TexturePacks/inverted" | wc -l | tr -d ' ') files"
     printf '%s\n' "customtextures 1" > "$dir/settings.ini"
@@ -125,9 +130,9 @@ for c in "${cases[@]}"; do
   video)
     # Looping menu video backgrounds: two made-up clips (a moving colour pattern, MPEG-4 in MP4, made by build.sh ffmpeg's ffmpeg
     # from frames this script writes) as VideoBackgrounds/css.mp4 and sss.mp4; --auto-vs passes the stage select (its background
-    # learned, then the clip in its place). css.mp4 is left alone (the character select's layer is not in this renderer).
+    # learned, then the clip in its place); css.mp4 is drawn as a full-screen layer behind the character select's foreground.
     fresh "$dir"; mkdir -p "$dir/VideoBackgrounds"; printf '%s\n' "videobackgrounds 1" > "$dir/settings.ini"
-    timeout 600 docker run --rm --name "mnx-gfx2-clips-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+    timeout 600 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-clips-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
       for clip in css:0 sss:1; do name=${clip%%:*}; tint=${clip##*:}
         python3 -I -c "
 import sys
@@ -150,11 +155,135 @@ for f in range(90):
     # Border art in PNG (upstream's picture formats through FFmpeg's decoder; .bmp was the only one before): a made-up picture
     # in Borders/, the 4:3 picture's side bars show it.
     fresh "$dir"; mkdir -p "$dir/Borders"
-    timeout 300 docker run --rm --name "mnx-gfx2-png-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
+    timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-png-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
       convert -size 640x360 gradient:orange-purple -fill white -draw "circle 80,180 80,120" -draw "circle 560,180 560,120" /out/Borders/sunset.png
     printf '%s\n' "borderart sunset.png" "borderedge 1" "aspect 2" > "$dir/settings.ini"
     run "$dir" 1100 ""
     echo "== border-png"; grep -hE "border art" "$dir/console.log" | head -3
+    ;;
+  border-video)
+    # Border art as a looping video (upstream's Border: an .mp4 in Borders plays in the bars): a made-up clip of moving colour bands.
+    fresh "$dir"; mkdir -p "$dir/Borders"
+    timeout 600 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-loop-$$" --network none -v "$work/ffmpeg-linux:/f:ro" -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      python3 -I -c "
+w, h = 320, 180
+out = open(\"/tmp/loop.rgb\", \"wb\")
+for f in range(120):
+    row = bytearray()
+    for y in range(h):
+        for x in range(w):
+            band = ((x + f * 4) // 20) % 3
+            row += bytes((255, 60, 30) if band == 0 else (30, 200, 80) if band == 1 else (40, 90, 255))
+    out.write(bytes(row))
+" && /f/bin/ffmpeg -loglevel error -f rawvideo -pix_fmt rgb24 -s 320x180 -r 30 -i /tmp/loop.rgb -c:v mpeg4 -q:v 3 -pix_fmt yuv420p /out/Borders/loop.mp4; ls -la /out/Borders'
+    printf '%s\n' "borderart loop.mp4" "aspect 2" > "$dir/settings.ini"
+    run "$dir" 900 ""
+    echo "== border-video"; grep -hE "border art" "$dir/console.log" | head -4
+    # The left bar in two shots a few seconds apart: a playing video makes them differ.
+    timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-cmp-$$" --network none -v "$dir:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      a=$(ls /out/shots | sed -n 4p); b=$(ls /out/shots | sed -n 6p)
+      echo "left bar, $a vs $b: $(compare -metric AE -crop 140x700+5+10 /out/shots/$a /out/shots/$b null: 2>&1) pixels differ"' || true
+    ;;
+  shader|shader-bad)
+    fresh "$dir"; sd="$dir/Shaders/scanlines"; mkdir -p "$sd"
+    # Two passes in RetroArch's slang format: a horizontal soften at the source's size (nearest), then scanlines at the picture's
+    # size with an aperture mask from a LUT picture, a little of the previous frame (OriginalHistory1) and the first pass read by
+    # its alias. Written for this test; no shader pack is downloaded.
+    cat > "$sd/soften.slang" <<'SLANG'
+#version 450
+layout(push_constant) uniform Push { vec4 SourceSize; vec4 OutputSize; float SOFTEN; } params;
+#pragma parameter SOFTEN "Horizontal soften" 0.25 0.0 1.0 0.05
+layout(std140, set = 0, binding = 0) uniform UBO { mat4 MVP; } global;
+#pragma name Soft
+#pragma stage vertex
+layout(location = 0) in vec4 Position;
+layout(location = 1) in vec2 TexCoord;
+layout(location = 0) out vec2 vTexCoord;
+void main() { gl_Position = global.MVP * Position; vTexCoord = TexCoord; }
+#pragma stage fragment
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
+layout(set = 0, binding = 2) uniform sampler2D Source;
+void main() {
+  vec2 dx = vec2(params.SourceSize.z, 0.0);
+  vec3 c = texture(Source, vTexCoord).rgb;
+  vec3 l = texture(Source, vTexCoord - dx).rgb;
+  vec3 r = texture(Source, vTexCoord + dx).rgb;
+  FragColor = vec4(mix(c, (l + c + r) / 3.0, params.SOFTEN), 1.0);
+}
+SLANG
+    cat > "$sd/scanlines.slang" <<'SLANG'
+#version 450
+layout(push_constant) uniform Push {
+  vec4 SourceSize; vec4 OutputSize; vec4 MaskTexSize; uint FrameCount;
+  float SCANLINE_STRENGTH; float MASK_STRENGTH; float PERSISTENCE; float LINES;
+} params;
+#pragma parameter SCANLINE_STRENGTH "Scanline strength" 0.4 0.0 1.0 0.05
+#pragma parameter MASK_STRENGTH "Mask strength" 0.3 0.0 1.0 0.05
+#pragma parameter PERSISTENCE "Phosphor persistence" 0.0 0.0 0.9 0.05
+#pragma parameter LINES "Scanlines" 480.0 120.0 1080.0 1.0
+layout(std140, set = 0, binding = 0) uniform UBO { mat4 MVP; } global;
+#pragma stage vertex
+layout(location = 0) in vec4 Position;
+layout(location = 1) in vec2 TexCoord;
+layout(location = 0) out vec2 vTexCoord;
+void main() { gl_Position = global.MVP * Position; vTexCoord = TexCoord; }
+#pragma stage fragment
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
+layout(set = 0, binding = 2) uniform sampler2D Soft;
+layout(set = 0, binding = 3) uniform sampler2D OriginalHistory1;
+layout(set = 0, binding = 4) uniform sampler2D MaskTex;
+layout(set = 0, binding = 5) uniform sampler2D PassFeedback1;
+void main() {
+  vec3 c = texture(Soft, vTexCoord).rgb;
+  c = max(c, texture(OriginalHistory1, vTexCoord).rgb * params.PERSISTENCE);
+  c = max(c, texture(PassFeedback1, vTexCoord).rgb * 0.1);
+  float line = fract(vTexCoord.y * params.LINES);
+  float beam = 1.0 - params.SCANLINE_STRENGTH * pow(abs(line - 0.5) * 2.0, 2.0);
+  vec3 mask = mix(vec3(1.0), texture(MaskTex, gl_FragCoord.xy * params.MaskTexSize.zw).rgb, params.MASK_STRENGTH);
+  FragColor = vec4(min(c * beam * mask * 1.2, vec3(1.0)), 1.0);
+}
+SLANG
+    cat > "$sd/scanlines.slangp" <<'PRESET'
+shaders = 2
+shader0 = soften.slang
+filter_linear0 = false
+scale_type0 = source
+scale0 = 1.0
+float_framebuffer0 = true
+shader1 = scanlines.slang
+filter_linear1 = true
+scale_type1 = viewport
+textures = "MaskTex"
+MaskTex = mask.png
+MaskTex_linear = false
+MaskTex_wrap_mode = repeat
+SCANLINE_STRENGTH = 0.7
+MASK_STRENGTH = 0.35
+PERSISTENCE = 0.25
+LINES = 240.0
+PRESET
+    timeout 300 docker run --rm --name "${MU_DOCKER_NAME:-mnx-gfx}-mask-$$" --network none -v "$sd:/out" "${MU_GFX_IMAGE:-mu-arm-gfx}" \
+      convert -size 1x1 xc:'#ff5050' xc:'#50ff50' xc:'#5050ff' +append /out/mask.png
+    if [ "$c" = shader ]; then
+      printf '%s\n' "shaderpreset scanlines/scanlines.slangp" > "$dir/settings.ini"
+      run "$dir" 1300 ""
+      echo "== shader"; grep -hE "^shaders:" "$dir/console.log" | head -6
+      base="$root/shader-off"; fresh "$base"; : > "$base/settings.ini"; run "$base" 1300 ""
+      for d in "$dir" "$base"; do echo "$(basename "$d"): $(grep -h 'render thread:   of that, aurora_end_frame' "$d/console.log" | sed 's/.*: \([0-9]* frames\)/\1/' | cut -c1-120)"; done
+    else
+      # A preset that names a shader which is not there, then (second run) one whose shader does not compile.
+      printf '%s\n' "shaders = 1" "shader0 = missing.slang" > "$sd/missing.slangp"
+      sed 's/vec3 c = texture(Source, vTexCoord).rgb;/vec3 c = texture(Source, vTexCoord).rgbx;/' "$sd/soften.slang" > "$sd/broken.slang"
+      printf '%s\n' "shaderpreset scanlines/missing.slangp" > "$dir/settings.ini"
+      run "$dir" 500 ""
+      echo "== shader-bad (missing file)"; grep -hE "^shaders:" "$dir/console.log" | head -3
+      cp "$dir/console.log" "$dir/console-missing.log"; rm -f "$dir/shots/"*
+      printf '%s\n' "shaderpreset scanlines/broken.slang" > "$dir/settings.ini"
+      run "$dir" 500 ""
+      echo "== shader-bad (does not compile)"; grep -hE "^shaders:" "$dir/console.log" | cut -c1-300 | head -3
+    fi
     ;;
   fingerprint)
     # A mod disc's content fingerprint as melee-unlocked computes it (mod_fingerprint.cpp): the Akaneia disc of MU_MODS_DIR must be

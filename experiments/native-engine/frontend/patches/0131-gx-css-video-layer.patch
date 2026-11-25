@@ -1,0 +1,125 @@
+The character select's menu video (Melee-NX-NetPlay 0.4.9): src/video_bg.cpp's css.mp4 as a full-screen layer between the backdrop's untextured draws and the first textured draw (melee-unlocked's should_insert_fullscreen_layer); the bridge's before-draw hook emits the next draw with its whole state. After 0130.
+--- a/port/runtime/gx/gx_aurora.cpp
++++ b/port/runtime/gx/gx_aurora.cpp
+@@ -8,6 +8,7 @@
+ #include <dolphin/gx/GXExtra.h>
+ #include <dolphin/gx/GXFrameBuffer.h>
+ #include <dolphin/gx/GXTexture.h>
++#include <dolphin/gx.h>   // patches/0131: the character select's video layer
+ // Verified pinned Aurora writer, not a locally mirrored ABI. Normalized GX
+ // commands enter its real decoder, which generates WGSL and Metal pipelines.
+ #include <gx/fifo.hpp>
+@@ -32,6 +33,7 @@
+ #include <aurora/texture.hpp>
+ 
+ namespace gx {
++namespace aurora_bridge { void set_before_draw(bool (*hook)(void*, size_t), void* owner); }   // patches/0131 (gx_aurora_bridge.cpp)
+ namespace aurora_bridge { void set_matrix_overrides(const DrawMatrices* overrides); }   // patches/0106
+ namespace aurora_bridge { uint8_t look_mark(size_t draw); }   // patches/0116: the draw's look surface for its textures
+ namespace {
+@@ -195,6 +197,70 @@
+     }
+     video_texture.last_frame = counters.frames;
+     return video_texture;
++  }
++  // patches/0131: the character select's video (src/video_bg.cpp) as a full-screen layer between the backdrop's untextured draws
++  // and the first textured draw after them (upstream's should_insert_fullscreen_layer), inside the XFB copy's rectangle, without
++  // depth. The bridge's before-draw hook calls css_before for each draw; the draw after the layer is emitted with its whole state.
++  std::shared_ptr<const fe::video_bg::Frame> css_frame;
++  const Frame* css_input = nullptr;
++  const EfbCopy* css_screen = nullptr;
++  unsigned css_untextured = 0;
++  bool css_drawn = false, css_logged = false;
++  static bool css_hook(void* self, size_t command) { return static_cast<Impl*>(self)->css_before(command); }
++  bool css_before(size_t command) {
++    if (css_drawn || !css_frame || !css_input) return false;
++    const auto& d = css_input->draws[css_input->commands[command].index];
++    bool textured = false;
++    for (const auto& t : d.textures) textured |= t.used;
++    if (!textured) { ++css_untextured; return false; }
++    if (!fe::video_bg::fullscreen_layer_before(css_untextured, true)) return false;
++    css_drawn = true;
++    draw_css_layer(*css_frame, *css_screen);
++    return true;
++  }
++  void draw_css_layer(const fe::video_bg::Frame& f, const EfbCopy& screen) {
++    auto& obj = video_object(f);
++    GXLoadTexObj(&obj.texture, GX_TEXMAP0);
++    GXSetNumIndStages(0);
++    GXSetTevDirect(GX_TEVSTAGE0);
++    GXSetNumChans(0);
++    GXSetNumTexGens(1);
++    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
++    GXSetNumTevStages(1);
++    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
++    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
++    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_KONST);
++    GXSetTevKAlphaSel(GX_TEVSTAGE0, GX_TEV_KASEL_1);
++    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
++    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
++    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
++    GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
++    GXSetZCompLoc(GX_TRUE);
++    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_COPY);
++    GXSetColorUpdate(GX_TRUE);
++    GXSetAlphaUpdate(GX_FALSE);
++    GXSetFog(GX_FOG_NONE, 0.f, 1.f, 0.1f, 1.f, GXColor{0, 0, 0, 0});
++    GXSetCullMode(GX_CULL_NONE);
++    GXSetViewport(float(screen.src_x), float(screen.src_y), float(screen.src_w), float(screen.src_h), 0.f, 1.f);
++    GXSetScissor(screen.src_x, screen.src_y, screen.src_w, screen.src_h);
++    float proj[4][4]{};   // x, y in 0..1 from the top left; z = -0.5 inside the clip volume
++    proj[0][0] = 2.f; proj[0][3] = -1.f; proj[1][1] = -2.f; proj[1][3] = 1.f; proj[2][2] = -1.f; proj[2][3] = -1.f; proj[3][3] = 1.f;
++    GXSetProjection(proj, GX_ORTHOGRAPHIC);
++    float identity[3][4]{{1.f, 0.f, 0.f, 0.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
++    GXLoadPosMtxImm(identity, GX_PNMTX0);
++    GXSetCurrentMtx(GX_PNMTX0);
++    GXClearVtxDesc();
++    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
++    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
++    GXSetVtxAttrFmt(GX_VTXFMT7, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
++    GXSetVtxAttrFmt(GX_VTXFMT7, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
++    GXBegin(GX_QUADS, GX_VTXFMT7, 4);
++    GXPosition3f32(0.f, 0.f, -0.5f); GXTexCoord2f32(0.f, 0.f);
++    GXPosition3f32(1.f, 0.f, -0.5f); GXTexCoord2f32(1.f, 0.f);
++    GXPosition3f32(1.f, 1.f, -0.5f); GXTexCoord2f32(1.f, 1.f);
++    GXPosition3f32(0.f, 1.f, -0.5f); GXTexCoord2f32(0.f, 1.f);
++    GXEnd();
++    if (!css_logged) { css_logged = true; std::fprintf(stderr, "video backgrounds: the css video drawn as a full-screen layer (%ux%u)\n", f.width, f.height); }
+   }
+   TextureObject& texture(const TextureRef& t, unsigned unit, const void* copy_source, uint8_t mark = 0) {
+     // patches/0130: the stage select's learned background texture shows the video (upstream's lookup by the texture's name; here
+@@ -531,6 +597,12 @@
+         // clear using the copy-time values just loaded. Never clear before blit.
+       }
+     };
++    // patches/0131: the character select's video layer, when its slot has a frame.
++    css_frame = &fe::video_bg::fullscreen_frame ? fe::video_bg::fullscreen_frame() : nullptr;
++    css_screen = nullptr; css_untextured = 0; css_drawn = false; css_input = &input;
++    for (const auto& c : input.copies) if (c.to_xfb) css_screen = &c;
++    if (css_frame && css_screen && &fe::video_bg::fullscreen_layer_before) aurora_bridge::set_before_draw(&Impl::css_hook, this);
++    struct CssHookOff { Impl* impl; ~CssHookOff() { aurora_bridge::set_before_draw(nullptr, nullptr); impl->css_frame.reset(); impl->css_input = nullptr; } } css_hook_off{this};
+     aurora_bridge::prepare_frame(input, {options.logical_width, options.logical_height}, prepared, emit);
+     if (dump_armed && input.scene_major == dump_major && input.scene_minor == dump_minor && ++dump_seen == dump_after) {
+       dump_armed = false;
+--- a/port/runtime/gx/gx_aurora_bridge.cpp
++++ b/port/runtime/gx/gx_aurora_bridge.cpp
+@@ -17,6 +17,11 @@
+ // matrices that replace the recorded ones for one prepare_frame call on this thread (null: the recorded ones).
+ thread_local const DrawMatrices* g_matrix_overrides = nullptr;
+ void set_matrix_overrides(const DrawMatrices* overrides) { g_matrix_overrides = overrides; }
++// patches/0131: called before each draw command of one prepare_frame call on this thread (null: never). When it returns true it
++// has written work of its own to Aurora (the character select's video layer), so the draw is emitted with its whole state.
++thread_local bool (*g_before_draw)(void*, size_t) = nullptr;
++thread_local void* g_before_draw_owner = nullptr;
++void set_before_draw(bool (*hook)(void*, size_t), void* owner) { g_before_draw = hook; g_before_draw_owner = owner; }
+ namespace {
+ using Bytes = std::vector<uint8_t>;
+ inline void u16(Bytes& out, uint16_t value) {
+@@ -826,6 +831,7 @@
+       if (frame.commands[look].kind == FrameCommand::Draw) { prefetch_draw(frame.commands[look].index); break; }
+     apply_state(state, frame.draws[i], frame);   // every draw, converted or not: the deltas chain through all of them
+     dirty.add(frame.draws[i].delta);
++    if (g_before_draw && g_before_draw(g_before_draw_owner, c)) previous = nullptr;   // patches/0131: Aurora's state is not `emitted`
+     if (!previous) dirty.all = true;     // everything is emitted again: compare nothing, copy everything
+     look::Decision look_decision;
+     if (look_filter.on) {

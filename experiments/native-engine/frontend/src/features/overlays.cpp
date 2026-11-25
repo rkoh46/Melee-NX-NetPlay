@@ -26,6 +26,9 @@
 #include "mu_lcancel_flash.h"   // melee-unlocked port/runtime/abi (the fetched tree): the flash modes and TE's word 2 bits
 
 #include <algorithm>
+#include <cctype>
+#include <dirent.h>
+#include <string>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -380,6 +383,23 @@ void overlay_names(std::string out[4]) {
   std::lock_guard<std::mutex> lock(names_mutex);
   for (int i = 0; i < 4; ++i) out[i] = online() ? names[i] : std::string();
 }
+// The Borders folder's pictures and videos (upstream's border_files: PNG, JPG, BMP, WebP and MP4), sorted by name.
+static std::vector<std::string> border_files() {
+  std::vector<std::string> out;
+  const std::string folder = (options.app && !options.base_dir.empty() ? options.base_dir : options.out_dir) + "/Borders";
+  if (DIR* dir = opendir(folder.c_str())) {
+    while (const dirent* e = readdir(dir)) {
+      std::string name = e->d_name, ext;
+      const size_t dot = name.rfind('.');
+      if (name.empty() || name[0] == '.' || dot == std::string::npos) continue;
+      for (char ch : name.substr(dot + 1)) ext += char(std::tolower(static_cast<unsigned char>(ch)));
+      if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" || ext == "webp" || ext == "mp4") out.push_back(name);
+    }
+    closedir(dir);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
 
 void register_overlays() {
   add_setting(setting);
@@ -473,7 +493,16 @@ void register_overlays() {
                   [](Write w) { w("crt_curve", fmt(overlay_config().crt_curve)); }});
   add_menu_entry({"Picture", "Border art",
                   [] { const std::string b = overlay_config().border; return b.empty() ? std::string("None") : b == "grid" ? std::string("Grid") : b; },
-                  [](int) { edit([](overlay::Config& c) { c.border = c.border.empty() ? "grid" : std::string(); ++c.generation; }); }, nullptr,
+                  [](int d) {
+                    // None, Grid, then each picture or video in the Borders folder (upstream's border_files), in name order.
+                    std::vector<std::string> choices{std::string(), "grid"};
+                    for (const std::string& f : border_files()) choices.push_back(f);
+                    edit([&](overlay::Config& c) {
+                      size_t at = 0;
+                      for (size_t i = 0; i < choices.size(); ++i) if (choices[i] == c.border) at = i;
+                      c.border = choices[(at + choices.size() + (d < 0 ? -1 : 1)) % choices.size()]; ++c.generation;
+                    });
+                  }, nullptr,
                   [](Write w) { const std::string b = overlay_config().border; w("borderart", b.empty() ? "-" : b); }});
   add_menu_entry({"Picture", "  Shadow at the picture's edge", [] { return on_off(overlay_config().border_edge != 0); },
                   [](int) { edit([](overlay::Config& c) { c.border_edge = c.border_edge ? 0 : 1; ++c.generation; }); }, nullptr,

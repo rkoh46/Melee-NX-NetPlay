@@ -198,6 +198,26 @@ else()
   else()
     message(STATUS "menu video backgrounds: no FFmpeg for this variant (build.sh ffmpeg)")
   endif()
+  # RetroArch shader presets (user_shader.cpp over frontend/patches/0134): glslang compiles their slang GLSL to SPIR-V on the
+  # device, built by build.sh glslang for Linux (gfx dir glslang-linux) and the console (glslang-nx). Without it there are none.
+  if(MU_FE_VARIANT STREQUAL "switch")
+    set(_glslang "${GFX}/glslang-nx")
+  else()
+    set(_glslang "${GFX}/glslang-linux")
+  endif()
+  if(EXISTS "${_glslang}/lib/libglslang.a")
+    target_sources(mu_gx PRIVATE "${FE}/user_shader.cpp")
+    set_source_files_properties("${FE}/user_shader.cpp" PROPERTIES INCLUDE_DIRECTORIES "${_glslang}/include")
+    target_link_libraries(mu_gx PUBLIC "${_glslang}/lib/libglslang.a" "${_glslang}/lib/libSPIRV.a" "${_glslang}/lib/libMachineIndependent.a"
+      "${_glslang}/lib/libGenericCodeGen.a" "${_glslang}/lib/libglslang-default-resource-limits.a" "${_glslang}/lib/libglslang.a")
+    if(EXISTS "${_glslang}/lib/libOSDependent.a")
+      target_link_libraries(mu_gx PUBLIC "${_glslang}/lib/libOSDependent.a")
+    endif()
+    target_compile_definitions(mu_gx PRIVATE MU_FE_SHADERS=1)   # gfx_render.cpp keeps user_shader.cpp in the program
+    message(STATUS "shader presets: on (glslang)")
+  else()
+    message(STATUS "shader presets: no glslang for this variant (build.sh glslang)")
+  endif()
   # The controller setup beyond the button remap (controls_core.h, profiles and Dolphin import, its menu pages).
   target_sources(mu_gx PRIVATE "${FE}/controls.cpp" "${FE}/controls_files.cpp")
   # The mod installer's service (the app's folders, the built-in catalog, the services program's libcurl) and the

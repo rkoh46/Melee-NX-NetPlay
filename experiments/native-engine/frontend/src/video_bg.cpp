@@ -4,9 +4,9 @@
 // tree), its stage select matte (video_background_style.h), the learned target kept in sss.target. Decoding is upstream's Linux
 // path, linux_media.cpp's VideoReader (FFmpeg; devkitPro's FFmpeg on the console), on a thread of its own, paced to the video's
 // own timestamps and only while its screen is up. Render thread: gx_aurora.cpp (frontend/patches/0130) calls begin_frame and
-// the texture lookup. The character select's video (upstream draws css.mp4 as a full-screen layer after the 3D backdrop's
-// untextured draws) is not here: a quad drawn through Aurora's GX library between the frame's own draws rasterised but sampled
-// no texture in this renderer, so css.mp4 is left alone rather than covering the backdrop with black.
+// the texture lookup. The character select's video, css.mp4, has no texture to stand in for (upstream: its backdrop is a long run
+// of untextured draws), so it is drawn as upstream draws it, a full-screen layer before the first textured draw after them
+// (frontend/patches/0131, fullscreen_frame and fullscreen_layer_before); patches/0132 lets that layer's GX library calls through.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "video_bg.h"
 #include "gfx_live.h"
@@ -183,7 +183,7 @@ class Manager {
         s.has_video = stat(s.video_path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
         s.checked = Clock::now();
       }
-      if (!enabled || i == 0) s.has_video = false;   // the character select's layer: not in this renderer (see the top)
+      if (!enabled) s.has_video = false;
       if (s.has_video && !s.started) { s.started = true; s.decoder.start(s.video_path, i == 1); say("video backgrounds: found %s.mp4", s.stem); }
       s.decoder.set_active(s.has_video && i == active_);
     }
@@ -231,10 +231,10 @@ class Manager {
     std::lock_guard<std::mutex> lock(mutex_);
     Slot& s = slots_[i];
     if (!fe::gfx::live().video_backgrounds.load()) return "Off";
-    if (i == 0) return "Not on the Switch yet";
     if (!s.has_video) return std::string("No ") + s.stem + ".mp4";
     const std::string e = s.decoder.error();
     if (!e.empty()) return e;
+    if (i == 0) return s.decoder.frame() ? "Ready: full-screen video layer" : "Ready";
     if (!learning::uses_texture_target(i)) return "Ready";
     if (s.learning_failed) return "Could not learn the background";
     if (s.target.empty()) return active_ == i ? "Learning the background..." : "Visit the screen to learn it";
@@ -284,21 +284,61 @@ class Manager {
   std::mutex mutex_;
   int active_ = -1;
 };
+// Border art as a looping video (upstream's Border class: an .mp4 in the Borders folder plays in the bars beside the picture).
+// Decoded with the menu videos' decoder, no matte; it runs only while the bars are drawn (overlay_draw.cpp asks for a frame every
+// frame they show) and pauses a second after they stop asking.
+class Border {
+ public:
+  ~Border() { decoder_.reset(); }
+  std::shared_ptr<const Frame> frame(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (path != path_ || !decoder_) {
+      decoder_.reset();   // stops the old one's thread
+      path_ = path;
+      decoder_ = std::make_unique<Decoder>();
+      decoder_->start(path, false);
+      say("border art: playing %s", path.c_str());
+    }
+    asked_ = Clock::now();
+    decoder_->set_active(true);
+    return decoder_->frame();
+  }
+  std::string error() { std::lock_guard<std::mutex> lock(mutex_); return decoder_ ? decoder_->error() : std::string(); }
+  void tick() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (decoder_ && Clock::now() - asked_ > std::chrono::seconds(1)) decoder_->set_active(false);
+  }
+  void stop() { std::lock_guard<std::mutex> lock(mutex_); decoder_.reset(); path_.clear(); }
+ private:
+  std::mutex mutex_;
+  std::string path_;
+  std::unique_ptr<Decoder> decoder_;
+  Clock::time_point asked_{};
+};
+Border* g_border = nullptr;
+std::once_flag g_border_once;
+Border& border() { std::call_once(g_border_once, [] { g_border = new Border(); }); return *g_border; }
 Manager* g_manager = nullptr;
 std::once_flag g_once;
 Manager& manager() { std::call_once(g_once, [] { g_manager = new Manager(); }); return *g_manager; }
 }  // namespace
 
 void begin_frame(uint8_t major, uint8_t minor) {
+  if (g_border) g_border->tick();   // a border video nobody draws pauses
   if (!g_manager && !fe::gfx::live().video_backgrounds.load(std::memory_order_relaxed)) return;   // never on: nothing is made
   manager().begin(major, minor);
 }
 bool wants_texture_names() { return g_manager && manager().wants_names(); }
 std::shared_ptr<const Frame> lookup(const std::string& name, uint32_t width, uint32_t height) { return g_manager ? manager().lookup(name, width, height) : nullptr; }
 std::shared_ptr<const Frame> fullscreen_frame() { return g_manager ? manager().fullscreen() : nullptr; }
+bool fullscreen_layer_before(unsigned leading_untextured, bool next_textured) {
+  return learning::should_insert_fullscreen_layer(0, leading_untextured, next_textured);
+}
 std::string status(int slot) { return g_manager ? manager().status(slot) : std::string(fe::gfx::live().video_backgrounds.load() ? "Starts with the game" : "Off"); }
 void relearn(int slot) { manager().relearn(slot); }
-void shutdown() { if (g_manager) g_manager->stop(); }
+void shutdown() { if (g_manager) g_manager->stop(); if (g_border) g_border->stop(); }
+std::shared_ptr<const Frame> border_frame(const std::string& path) { return border().frame(path); }
+std::string border_error() { return g_border ? g_border->error() : std::string(); }
 bool load_picture(const std::string& path, uint32_t max_w, uint32_t max_h, uint32_t* width, uint32_t* height, std::vector<uint8_t>& rgba) {
   std::vector<uint8_t> bgra;
   if (!linux_media::load_picture(path, max_w, max_h, width, height, bgra) || bgra.size() < size_t(*width) * *height * 4) return false;
