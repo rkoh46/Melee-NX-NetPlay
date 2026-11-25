@@ -867,6 +867,28 @@ none of these has been measured on the console's GPU.
   simulator per side); `test-online-linux.sh` `MU_FILES_A/B`, `MU_SKIN_A=1`. `test-mods-linux.sh training-menu` now opens the panel's
   Training page with the Practice chord (the walk through the categories timed out).
 
+### Alternate stages, frozen Stadium, leaving a Party, UCF 0.8 replays (feat/play4)
+
+- **Alternate stages by held buttons** (`src/features/cosmetics.cpp`, wired in 0.4.6, now tried): with a mod profile whose disc
+  names a stage's alternate for a button ("GrNBa.lat" / ".rat", or "GrNBa-Name(L).dat" in a folder, melee-unlocked's
+  host/cosmetic_mods.cpp rule), L, R, Z, B, X or Y held as the stage loads (after the pick: on the pick L and R step the stage
+  skins) plays the alternate; offline only. Test: `./test-mods-linux.sh DISC alt-stage` (a copy of the player's disc with
+  Battlefield's file added as GrNBa.lat, its textures inverted, `../tools/make_alt_stage_disc.py`; L held and not held).
+- **Frozen Pokémon Stadium with Z**: the game image's own (upstream's mnstagesel.c): with the Slippi menus on, Z over Stadium on
+  the stage select flips the frozen toggle ("Frozen Pokémon Stadium"); the match never transforms and the replay records
+  isFrozenPS. Test: `./test-mods-linux.sh DISC frozen-stadium` (with and without Z; `../tools/slp_game_start.py` reads the replay).
+- **Leaving a Party**: L + R + A + Start in a Party match (Slippi 3.7.0's way, the game image and the netplay object as before):
+  the netplay object disconnects from everyone, the others see the disconnect (with three or more players they despawn the leaver,
+  message 0x88). The loopback stand-in (`../tools/mock_matchmaking.py`) now pairs Party searches (mode 4). Test:
+  `./test-online-linux.sh DISC 2400` with `MU_PADS_A=scripts/online_party_a.txt MU_PADS_B=scripts/online_party_b.txt MU_TWO_SCREENS=1`.
+- **UCF 0.8 replays**: recognised as before by the code sizes (dashback 352 bytes, shield drop 312) and now said in the log. Test
+  aids (`src/features/replays.cpp`, tests only): `MU_TEST_REPLAY_UCF=8|84` plays a replay with that UCF, `MU_TEST_RERECORD=FILE`
+  writes the playback's own events to FILE with the code list's UCF entries replaced by `MU_TEST_RERECORD_CODES`
+  (`scripts/ucf08_codes.txt`, Slippi's UCF 0.8 codes). Test: `./test-replays-linux.sh DISC ucf08` (a UCF 0.8 replay made this way,
+  played back with 0 differing records, and played with 0.84 for contrast).
+- **Test aid**: `MU_AUTO_VS_STAGE="UP RIGHT PRESS HOLD"` moves `--auto-vs`'s stage select cursor (11 12 is Pokémon Stadium, 3 1
+  Battlefield), taps PRESS and holds HOLD after the pick (hex pad bits).
+
 ## melee-unlocked's interface
 
 The app's in-game menu and its screens before the game are melee-unlocked's own (v1.0.5), as faithfully as the console

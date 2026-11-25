@@ -266,6 +266,8 @@ struct Playback {
   // The file's own post-frame records, (frame, port, follower) -> payload, for the fidelity check.
   std::map<std::tuple<int32_t, uint8_t, uint8_t>, std::vector<uint8_t>> post;
   slippi::NativeReplayStream check;               // the game's re-recording (kept only to rewind the comparison)
+  slippi::NativeReplayStream rerecord;            // tests only (MU_TEST_RERECORD): the playback written as a file of its own
+  std::vector<uint8_t> rerecord_codes;            // and its code list (empty: no re-recording)
   std::map<int32_t, slippi::NativeReplayStream::Mark> marks;
   uint64_t compared = 0, differ = 0, live_records = 0; int32_t first_differ = INT32_MIN;
   std::map<std::tuple<int32_t, uint8_t, uint8_t>, bool> seen_differ;
@@ -402,6 +404,53 @@ uint32_t replay_codes(const std::vector<uint8_t>& list, uint8_t* ps_frozen_toggl
   }
   *unknown_out = unknown;
   return codes;
+}
+
+// ---- tests only: a UCF 0.8 replay made by this program ----
+// Slippi recorded online matches with UCF 0.8 until Slippi Dolphin moved its netplay codes to 0.84 (Ishiiruka commit 4406c0c,
+// 2023-12-18), so those replays carry 0.8's dashback (352 bytes), shield drop (312), tumble and text in their code list. To make
+// one here: MU_TEST_REPLAY_UCF=8 plays a replay with UCF 0.8 whatever it carries (84: with 0.84), and MU_TEST_RERECORD=FILE writes
+// the playback's own events (the fidelity check's copy: the game simulated with that UCF) to FILE when the replay ends, its code
+// list the file's own with the UCF entries replaced by MU_TEST_RERECORD_CODES (Gecko text: frontend/scripts/ucf08_codes.txt,
+// Slippi's 0.8 codes). Playing FILE back is then a UCF 0.8 replay's playback. Unset, nothing here runs.
+std::vector<uint8_t> gecko_text_codes(const std::string& path) {
+  std::vector<uint8_t> out;
+  FILE* f = std::fopen(path.c_str(), "r");
+  if (!f) return out;
+  char line[512];
+  while (std::fgets(line, sizeof line, f)) {
+    char ca[9] = {}, cb[9] = {};
+    if (std::sscanf(line, "%8[0-9A-Fa-f] %8[0-9A-Fa-f]", ca, cb) != 2 || std::strlen(ca) != 8 || std::strlen(cb) != 8) continue;
+    const unsigned a = unsigned(std::strtoul(ca, nullptr, 16)), b = unsigned(std::strtoul(cb, nullptr, 16));
+    for (int s = 24; s >= 0; s -= 8) out.push_back(uint8_t(a >> s));
+    for (int s = 24; s >= 0; s -= 8) out.push_back(uint8_t(b >> s));
+  }
+  std::fclose(f);
+  return out;
+}
+std::vector<uint8_t> swap_ucf_codes(const std::vector<uint8_t>& list, const std::vector<uint8_t>& ucf) {
+  static const uint32_t kUcfSites[] = {0x800D65EC, 0x800C9A44, 0x8006B460, 0x8008E54C, 0x8009A0B8, 0x800998A4, 0x80093294, 0x800908F4, 0x802662D0};
+  std::vector<uint8_t> out;
+  bool put = false;
+  size_t idx = 0;
+  while (idx + 8 <= list.size() && list[idx] != 0xFF) {
+    const uint8_t type = list[idx] & 0xFE;
+    const uint32_t address = (be32(&list[idx]) & 0x01FFFFFFu) | 0x80000000u, word = be32(&list[idx + 4]);
+    size_t len = 8;
+    if (type == 0xC0 || type == 0xC2) len = 8 + size_t(word) * 8;
+    else if (type == 0x08) len = 16;
+    else if (type == 0x06) len = 8 + ((word + 7) & ~7u);
+    if (idx + len > list.size()) break;
+    if (std::find(std::begin(kUcfSites), std::end(kUcfSites), address) != std::end(kUcfSites)) {
+      if (!put) { out.insert(out.end(), ucf.begin(), ucf.end()); put = true; }
+    } else {
+      out.insert(out.end(), list.begin() + std::ptrdiff_t(idx), list.begin() + std::ptrdiff_t(idx + len));
+    }
+    idx += len;
+  }
+  if (!put) out.insert(out.end(), ucf.begin(), ucf.end());
+  out.insert(out.end(), list.begin() + std::ptrdiff_t(idx), list.end());   // the end marker
+  return out;
 }
 
 // ---- the coach (upstream host/replay_coach.*, host/replay_scan.*, compiled by replay_coach_glue.cpp) ----
@@ -541,6 +590,23 @@ bool open_replay(const std::string& given) {
   pb.start.codes = replay_codes(legacy ? legacy_list : s->geckoCodes, &pb.start.ps_frozen_toggle, &unknown);
   if (legacy) say("replay: no code list in the file (recorded before Slippi stored one): Slippi's legacy list (%zu bytes), codes %08X", legacy_list.size(),
                   pb.start.codes);
+  // As upstream's replay_codes says it: which UCF the replay's shared sites belong to.
+  if (pb.start.codes & MU_REPLAY_CODE_UCF08) say("replay: recorded with UCF 0.8 (dashback, shield drop, tumble); played with UCF 0.8");
+  else if (pb.start.codes & MU_REPLAY_CODE_UCF_OTHER) say("replay: recorded with a UCF other than 0.84 or 0.8; this replay may diverge");
+  if (const char* force = std::getenv("MU_TEST_REPLAY_UCF")) {   // tests only (above, gecko_text_codes)
+    pb.start.codes &= ~(MU_REPLAY_CODE_UCF084 | MU_REPLAY_CODE_UCF08 | MU_REPLAY_CODE_UCF_OTHER);
+    if (std::atoi(force) == 84) pb.start.codes |= MU_REPLAY_CODE_UCF084;
+    else if (std::atoi(force) == 8) pb.start.codes |= MU_REPLAY_CODE_UCF08;
+    say("replay: test: played with UCF %s whatever the file carries (codes %08X)", force, pb.start.codes);
+  }
+  if (std::getenv("MU_TEST_RERECORD")) {
+    pb.rerecord_codes = s->geckoCodes;
+    if (const char* ucf = std::getenv("MU_TEST_RERECORD_CODES")) {
+      const std::vector<uint8_t> blocks = gecko_text_codes(ucf);
+      if (blocks.empty()) say("replay: test: no codes read from %s", ucf);
+      else pb.rerecord_codes = swap_ucf_codes(pb.rerecord_codes, blocks);
+    }
+  }
   if (!pb.check.begin(pb.game_start, s->geckoCodes)) say("replay: the fidelity check cannot start: %s", pb.check.error().c_str());
   pb.first = Slippi::GAME_FIRST_FRAME;
   pb.last = pb.game->GetLatestIndex();
@@ -589,6 +655,14 @@ int32_t h_replay_stock_steal(int32_t frame, int32_t port) {
 
 void playback_event(uint8_t command, const uint8_t* payload, uint32_t size) {
   if (pb.check.active() && !pb.check.ended()) pb.check.append(command, payload, size);
+  if (!pb.rerecord_codes.empty()) {               // tests only: MU_TEST_RERECORD (gecko_text_codes, above)
+    if (command == 0x36 || !pb.rerecord.active()) {
+      const std::vector<uint8_t> start = command == 0x36 ? std::vector<uint8_t>(payload, payload + size) : pb.game_start;
+      if (!pb.rerecord.begin_slippi(start, pb.rerecord_codes, int64_t(std::time(nullptr)))) say("replay: test: cannot re-record: %s", pb.rerecord.error().c_str());
+      if (command == 0x36) return;
+    }
+    if (pb.rerecord.active() && !pb.rerecord.ended()) pb.rerecord.append(command, payload, size);
+  }
   if (command != 0x38 || size < 6) return;
   // During a takeover the game is not the recording: its frames are not compared (they come again, compared, once the
   // viewer goes back to watching from the takeover's frame).
@@ -658,6 +732,14 @@ void h_replay_finished() {
   if (pb.finished) return;
   pb.finished = true;
   report_check(pb.take_port >= 0 ? "finished (during a takeover)" : "finished");
+  if (const char* out = std::getenv("MU_TEST_RERECORD")) {   // tests only (gecko_text_codes, above)
+    const std::vector<uint8_t> file = pb.rerecord.encode();
+    FILE* f = file.empty() ? nullptr : std::fopen(out, "wb");
+    const bool ok = f && std::fwrite(file.data(), 1, file.size(), f) == file.size();
+    if (f) std::fclose(f);
+    say("replay: test: the playback's own recording %s %s (%zu bytes)%s", ok ? "written to" : "NOT written to", out, file.size(),
+        file.empty() ? (": " + pb.rerecord.error()).c_str() : "");
+  }
   snapshot_store::release("the replay ended");
   // The watch queue (replay_library.cpp): the next replay starts at the next retrace (play mode's restart), else the run ends.
   const std::string next = library_queue_next();

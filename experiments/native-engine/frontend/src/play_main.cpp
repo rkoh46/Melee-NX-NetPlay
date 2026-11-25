@@ -152,9 +152,9 @@ int32_t command_inner(uint8_t c, const uint8_t* payload, uint32_t size, uint8_t*
   if (store) { decoder_sync(); tracked = true; }
   const uint64_t t1 = now_ns();
   if (c == 0xB4 && payload && size >= 1) {
-    static const char* const mode[] = {"Ranked", "Unranked", "Direct", "Teams"};
+    static const char* const mode[] = {"Ranked", "Unranked", "Direct", "Teams", "Party"};
     searching = true;
-    say("play: online: the game asked for a match: mode %u (%s)%s", payload[0], payload[0] < 4 ? mode[payload[0]] : "?", direct ? "" : ", from its menu");
+    say("play: online: the game asked for a match: mode %u (%s)%s", payload[0], payload[0] < 5 ? mode[payload[0]] : "?", direct ? "" : ", from its menu");
   } else if (c == 0xBA && searching && !netplay_bridge::search_kept()) {
     // A search the player chose to keep while they play elsewhere (features/search.cpp, patches/net-0005) survives the game's
     // cleanups: the netplay object skips them, and the session stays a search.

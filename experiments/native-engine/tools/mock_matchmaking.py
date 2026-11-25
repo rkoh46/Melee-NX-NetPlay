@@ -94,7 +94,7 @@ if dead_first is not None:
         except Exception:
             conn.close(); return
         user = join['user']; code = user.get('connectCode')
-        mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams'}.get(join['search'].get('mode'), 'unranked')
+        mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams', 4: 'party'}.get(join['search'].get('mode'), 'unranked')
         me_entry = (user['uid'], user['displayName'], code, '127.0.0.1:%d' % join['port'])
         with lock:
             searches[code] = searches.get(code, 0) + 1; n = searches[code]
@@ -146,7 +146,7 @@ while len(clients) < 2:
     clients.append((conn, join))
     threading.Thread(target=keep_alive, args=(conn,), daemon=True).start()
 paired.set()
-mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams'}.get(clients[0][1]['search'].get('mode'), 'unranked')
+mode = {0: 'ranked', 1: 'unranked', 2: 'direct', 3: 'teams', 4: 'party'}.get(clients[0][1]['search'].get('mode'), 'unranked')
 for me, (conn, _) in enumerate(clients):
     players = []
     for k, (_, join) in enumerate(clients):

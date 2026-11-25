@@ -67,6 +67,24 @@ struct AutoVs {
   enum Phase { Off, Running, Done, Failed } phase = Off;
   uint32_t major = 0xFFFFFFFF, minor = 0, entered = 0, menu_tries = 0;
   std::atomic<bool> p1_locked{false}, p2_cpu{false};
+  // Tests: MU_AUTO_VS_STAGE="UP RIGHT PRESS HOLD" (or with underscores): on the stage select the cursor goes straight up for UP
+  // retraces (40 is Onett), then right for RIGHT retraces (negative: left), PRESS (hex pad bits; Z 10 is Slippi's frozen Stadium
+  // toggle) is tapped on the hovered stage, then A picks it and HOLD (hex; L 40 picks a stage alternate named for L) is held from
+  // right after the pick into the match's first second (on the pick itself L or R would step the stage skins).
+  struct Stage { int up = 0, right = 0, n = 0; unsigned press = 0, hold = 0; };
+  static const Stage& test_stage() {
+    static const Stage s = [] {
+      Stage r;
+      if (const char* e = std::getenv("MU_AUTO_VS_STAGE")) {   // spaces or underscores between the numbers
+        std::string text = e;
+        std::replace(text.begin(), text.end(), '_', ' ');
+        std::sscanf(text.c_str(), "%d %d %x %x", &r.up, &r.right, &r.press, &r.hold);
+        r.n = r.up + (r.right < 0 ? -r.right : r.right);
+      }
+      return r;
+    }();
+    return s;
+  }
   void finish(Phase result, const char* why) {
     phase = result;
     char line[160];
@@ -86,7 +104,10 @@ struct AutoVs {
     auto& pad = out[0];
     const auto during = [&](uint32_t from, uint32_t length) { return t >= from && t < from + length; };
     enum : uint16_t { A = 0x0100, START = 0x1000 };
-    if (major == 2 && minor == 2) { finish(Done, "the match has started"); return false; }
+    if (major == 2 && minor == 2) {
+      if (test_stage().hold && t < 60) { pad.button = uint16_t(test_stage().hold); return true; }   // the stage is planned as it loads
+      finish(Done, "the match has started"); return false;
+    }
     if (major == 2 && minor == 0) {                         // character select
       // The hand starts on the first player's HMN tag. Straight up for ten retraces is a fighter in the second
       // row (Falco with everything unlocked); the second player's N/A tag is twelve retraces to the right of
@@ -106,6 +127,17 @@ struct AutoVs {
       else if (during(438, 10)) pad.button = START;
       else if (t > 700) { finish(Failed, "the stage select did not open"); return false; }
     } else if (major == 2 && minor == 1) {                  // stage select
+      const Stage& stage = test_stage();
+      if (stage.n > 0) {                                    // tests: MU_AUTO_VS_STAGE (below)
+        const uint32_t pick = 230 + uint32_t(stage.n);
+        if (during(200, uint32_t(stage.up))) pad.stick_y = 100;
+        else if (during(200 + uint32_t(stage.up), uint32_t(stage.n - stage.up))) pad.stick_x = int8_t(stage.right < 0 ? -100 : 100);
+        else if (stage.press && during(pick - 20, 4)) pad.button = uint16_t(stage.press);
+        else if (during(pick, 4)) pad.button = A;
+        else if (t >= pick + 6) pad.button = uint16_t(stage.hold);   // held as the stage loads (on the pick itself L or R steps the stage skins)
+        if (t > 900) { finish(Failed, "the match did not start"); return false; }
+        return true;
+      }
       if (during(200, 40)) pad.stick_y = 100;                                 // up onto Onett
       else if (during(260, 10)) pad.button = A;
       else if (t > 600) { finish(Failed, "the match did not start"); return false; }

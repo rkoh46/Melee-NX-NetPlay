@@ -379,6 +379,39 @@ PY
     printf '%s\n' "practicecpu_on 1" > "$dir/settings.ini"
     run "$dir" 1200 3 "--feature-test training --feature-test practice-rows"
     ;;
+  frozen-stadium)
+    # Slippi's frozen Pokemon Stadium from the stage select (melee-unlocked's mnstagesel.c CursorOnHoverStadium, with the Slippi
+    # menus on): --auto-vs with the cursor moved onto Pokemon Stadium (MU_AUTO_VS_STAGE), once with Z tapped on it before A and
+    # once without. With Z the select shows the frozen name, the replay's game start says isFrozenPS 1 and the stage never
+    # transforms in the match; without it the stage transforms (screenshots every 5 s).
+    for z in 10 0; do
+      dir="$root/frozen-stadium-$z"; fresh "$dir"; mkdir -p "$dir/Replays"
+      printf '%s\n' "slippi_menus 1" > "$dir/settings.ini"
+      MU_RUN_ENV="-e MU_AUTO_VS_STAGE=${MU_STADIUM_PATH:-11_12}_${z}_0" run "$dir" "${MU_STADIUM_FRAMES:-7200}" 5 "--auto-vs"
+      slp="$(ls -t "$dir"/Replays/*.slp 2>/dev/null | head -1 || true)"
+      echo "Z $z: $(grep -h 'auto-vs:' "$dir/console.log" | head -1 | cut -c1-120); replay: $([ -n "$slp" ] && python3 -I "$here/../tools/slp_game_start.py" "$slp" || echo none)"
+      report "$dir"
+    done
+    continue
+    ;;
+  alt-stage)
+    # Alternate stages by held buttons (melee-unlocked's host/cosmetic_mods.cpp set_stage_button_probe; here
+    # src/features/cosmetics.cpp): a mod profile whose disc names a stage's alternate for a button. The disc is a copy of the
+    # player's own (cp -c: only the changes take space) with Battlefield's file added as GrNBa.lat, its textures inverted
+    # (../tools/make_alt_stage_disc.py). --auto-vs onto Battlefield (MU_AUTO_VS_STAGE), once with L held from the pick into the
+    # match (the alternate) and once without (the standard stage); screenshots every 5 s.
+    for hold in 40 0; do
+      dir="$root/alt-stage-$hold"; fresh "$dir"; mkdir -p "$dir/mods/altstages"
+      cp -c "$disc/GALE01.iso" "$dir/mods/altstages/altstages.iso" 2>/dev/null || cp "$disc/GALE01.iso" "$dir/mods/altstages/altstages.iso"
+      python3 -I "$here/../tools/make_alt_stage_disc.py" "$dir/mods/altstages/altstages.iso"
+      printf '%s\n' "mod_profile altstages" > "$dir/settings.ini"
+      MU_MODS_DIR="" MU_RUN_ENV="-e MU_AUTO_VS_STAGE=${MU_BF_PATH:-3_1}_0_$hold" run "$dir" 1500 5 "--auto-vs"
+      echo "L held ($hold): $(grep -h 'stage alternate\|held button picks\|bgm\] stage' "$dir/console.log" | tr '\n' ';' | cut -c1-300)"
+      rm -f "$dir/mods/altstages/altstages.iso"
+      report "$dir"
+    done
+    continue
+    ;;
   *) echo "unknown case $case" >&2; exit 2 ;;
   esac
   report "$dir"

@@ -1,0 +1,27 @@
+# Controller script for test-online-linux.sh MU_PADS_A: Slippi 3.7.0's Party, then leaving it from the match. The online menu:
+# down three rows (Unranked, Direct, Teams, Party), A. Slippi's character select: Falco, A, START searches (Party searches like
+# Unranked, no code). In the match, 10 s after it starts, L + R + A + Start held: the game's InitPause sets ODB_IS_LEAVING
+# (Slippi 3.7.0), the netplay object disconnects from everyone, the other side treats it as a disconnect. Side b: online_party_b.txt.
+@scene 01 00
+170 sy=-127
+176
+190 sy=-127
+196
+210 sy=-127
+216
+260 A
+266
+@scene 08 00
+120 sy=127
+132
+150 A
+156
+240 START
+246
+@scene 08 02
+300 sx=80
+340
+380 A
+386
+600 L R A START
+660

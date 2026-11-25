@@ -1,0 +1,26 @@
+# Controller script for test-online-linux.sh MU_PADS_B: Slippi 3.7.0's Party (see online_party_a.txt), one fighter further along
+# (Fox); in the match it walks and attacks until side a leaves.
+@scene 01 00
+170 sy=-127
+176
+190 sy=-127
+196
+210 sy=-127
+216
+260 A
+266
+@scene 08 00
+120 sy=127
+132 sx=127
+138
+150 A
+156
+240 START
+246
+@scene 08 02
+300 sx=-80
+340
+380 A
+386
+500 sx=80
+540

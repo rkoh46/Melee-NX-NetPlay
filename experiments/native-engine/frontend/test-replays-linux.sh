@@ -121,6 +121,56 @@ PY
   legacy)   fresh "$dir"; need_replay "$dir"
             python3 -I "$here/../tools/slp_strip_codes.py" "$root/replay.slp" "$dir/Replays/Game_20261124T120000.slp"
             playback "$dir" 600 "" ;;
+  ucf08)
+    # A UCF 0.8 replay, as Slippi Dolphin recorded online matches until December 2023, made by this program (no third-party
+    # replay): (1) a match recorded as the record case does, with dashbacks through partial stick positions and shield drops
+    # added; (2) that replay played with UCF 0.8 (MU_TEST_REPLAY_UCF=8) while the playback's own events are written as a new file
+    # (MU_TEST_RERECORD) whose code list carries Slippi's UCF 0.8 codes instead of 0.84's (scripts/ucf08_codes.txt); (3) the new
+    # file played back untouched: the playback must say it was recorded with UCF 0.8 and the fidelity check 0 differ; (4) the same
+    # file played with UCF 0.84 instead, which must differ (runs held just off the horizontal: 0.84's 1.0 cardinals, which 0.8 has not).
+    base="$dir/record"; fresh "$base"
+    python3 -I - "$base/script.txt" <<'PY'
+import sys
+lines = ["@scene 02 02"]
+t = 200
+lines += [f"{t} sx=127", f"{t+40}"]                         # walk towards the computer player
+t += 60
+for i in range(24):                                         # dash, then back through a partial stick position (UCF's dashback)
+    mid = (-20, -45, -70, -95)[i % 4]; side = 1 if i % 2 == 0 else -1
+    lines += [f"{t} sx={127 * side}", f"{t+2} sx={mid * side}", f"{t+3} sx={-127 * side}", f"{t+9}"]
+    t += 30
+for i in range(12):                                         # runs held just off the horizontal (0.84's 1.0 cardinals, not in 0.8)
+    side = 1 if i % 2 == 0 else -1
+    lines += [f"{t} sx={127 * side} sy={(12, -9, 15)[i % 3]}", f"{t+40}"]
+    t += 50
+for i in range(16):                                         # shield, then the stick down at different angles (shield drop)
+    x = (0, 30, -30, 55)[i % 4]
+    lines += [f"{t} R", f"{t+12} R sx={x} sy=-70", f"{t+13} R sx={x} sy=-127", f"{t+16}", f"{t+40} X", f"{t+42}"]
+    t += 70
+for i in range(12):                                         # jabs and short hops, as the record case
+    lines += [f"{t} A", f"{t+3}"]; t += 9
+for i in range(6):
+    lines += [f"{t} X", f"{t+2}", f"{t+5} A", f"{t+8}", f"{t+29} L", f"{t+31}"]; t += 60
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+    run "$base" 3000 5 "--auto-vs"
+    src="$(ls -t "$base"/Replays/*.slp 2>/dev/null | head -1 || true)"
+    [ -n "$src" ] || { echo "ucf08: the match was not recorded"; continue; }
+    echo "recorded (UCF 0.84): $(python3 -I "$here/../tools/slp_game_start.py" "$src")"
+    make="$dir/make"; fresh "$make"; cp "$src" "$make/Replays/Game_20261124T120000.slp"; cp "$here/scripts/ucf08_codes.txt" "$make/"
+    MU_ENV="MU_TEST_REPLAY_UCF=8 MU_TEST_RERECORD=/out/ucf08.slp MU_TEST_RERECORD_CODES=/out/ucf08_codes.txt" playback "$make" 2800 ""
+    grep -h "replay: test" "$make/console.log" | cut -c1-200
+    [ -f "$make/ucf08.slp" ] || { echo "ucf08: the UCF 0.8 replay was not written"; continue; }
+    cp "$make/ucf08.slp" "$root/ucf08.slp"
+    echo "made (UCF 0.8): $(python3 -I "$here/../tools/slp_game_start.py" "$root/ucf08.slp")"
+    play="$dir/play"; fresh "$play"; cp "$root/ucf08.slp" "$play/Replays/Game_20261124T120000.slp"
+    playback "$play" 2800 ""
+    echo "UCF 0.8 replay played back: $(grep -h 'recorded with UCF\|playback finished' "$play/console.log" | tr '\n' ' ' | cut -c1-300)"
+    wrong="$dir/as-084"; fresh "$wrong"; cp "$root/ucf08.slp" "$wrong/Replays/Game_20261124T120000.slp"
+    MU_ENV="MU_TEST_REPLAY_UCF=84" playback "$wrong" 2800 ""
+    echo "the same replay played with UCF 0.84: $(grep -h 'playback finished' "$wrong/console.log" | cut -c1-200)"
+    dir="$play"
+    ;;
   library)
     # The app (--app, its folder /out/app as on the SD card): two copies of the replay, the menu opened on the Replays
     # page, the stats of both, the second deleted, then Watch it on the first (the app starts the game again with it).
