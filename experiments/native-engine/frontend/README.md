@@ -798,6 +798,7 @@ shared state `src/gfx_live.h`.
 | `patches/0130-gx-video-backgrounds.patch` | gx_aurora.cpp: the scene for `src/video_bg.cpp`, the stage select's learned background texture shown as the video |
 | `src/lab.cpp`, `src/lab_shim/` | melee-unlocked's lab_view.cpp compiled from the fetched tree over small stand-ins; the game image's look snapshot; the silhouette packs' download (services program, SHA-256 checked) |
 | `src/video_bg.cpp`, `src/video_bg.h` | the menu video backgrounds over melee-unlocked's learning rules and its linux_media.cpp (FFmpeg) |
+| `src/modlooks.cpp`, `src/looks_fetch_curl.cpp`, `test-modlooks-linux.sh` | Get mod looks (ported from the macOS build): Diet Melee and Animelee built from the player's disc as mod profiles; the Diet and Crystal presets use them (mods.cpp) |
 | `src/mod_fingerprint.cpp` | a mod disc's content fingerprint as melee-unlocked computes it (the 2D-style m-ex build's recognition, mods.cpp) |
 | `test-gfx-linux.sh` | the cases below, with screenshots in `build/native-engine-gfx/run-gfx/<case>/shots` |
 
