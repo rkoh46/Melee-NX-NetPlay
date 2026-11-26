@@ -159,6 +159,8 @@ void app_configure() {
   if (!o.frames) o.frames = unsigned(std::strtoul(get("frames", "0").c_str(), nullptr, 10));
   if (const std::string v = get("menu_open", ""); !v.empty()) setenv("MELEE_MENU_OPEN", v.c_str(), 1);
   if (const std::string v = get("menu_page", ""); !v.empty()) setenv("MELEE_MENU_PAGE", v.c_str(), 1);
+  // window=WxH: the window's size off the console (the menupages case's 1920x1080 television capture).
+  if (const std::string v = get("window", ""); !v.empty()) std::sscanf(v.c_str(), "%dx%d", &o.width, &o.height);
   // feature_test=NAME[:VALUE]: the feature modules' --feature-test (verification runs; play mode takes it on the command line).
   if (const std::string v = get("feature_test", ""); !v.empty()) { o.rest.push_back("--feature-test"); o.rest.push_back(v); }
 #if MU_FE_AURORA

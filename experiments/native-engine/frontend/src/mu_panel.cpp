@@ -259,6 +259,8 @@ struct Row {
   std::vector<std::string> names;
   const char* format = "%d";
   bool enabled = true, next_start = false;
+  std::string detail;                // the long explanation: one line at the panel's foot while the row is focused
+  bool status = false;               // a row whose value is a state, not a choice (Empty / Saved): no arrows
   Action action{Act::Main};
 };
 struct Section { std::string title; std::vector<Row> rows; };
@@ -335,6 +337,109 @@ Row slider(const std::string& label, int value, int low, int high, int step, con
   Row r; r.label = label; r.kind = Kind::Slider; r.value = value; r.low = low; r.high = high; r.step = step; r.format = format; r.action = std::move(a); return r;
 }
 
+// ---- read from the couch: short labels under section headings, the long words in the row's description ----
+// Only what is shown changes: each row keeps its page, its place among the page's rows (the change goes to the same item) and
+// its saved key. A label of the app's pages that names a group ("Practice CPU: aggression") becomes a row under that group's
+// heading ("Practice CPU" > "Aggression"); a label that carries its own explanation in brackets keeps the name and moves the
+// rest into the description (drawn below the list for the focused row, never under every row).
+struct Relabel { const char* from; const char* section; const char* label; const char* detail; };
+constexpr Relabel kRelabel[] = {
+  // GAME > Training
+  {"Save states and recording on the D-pad", nullptr, "Save states on the D-pad", "Save states and input recording on the D-pad."},
+  {"Frame advance (L+R+Z, then Z)", nullptr, "Frame advance", "L+R+Z, then Z steps one frame; L+R+Z again lets it run."},
+  {"Practice menu look (Start + D-pad Up + Z)", nullptr, "Practice menu look", "The Practice menu opens with Start + D-pad Up + Z."},
+  {"Practice CPU", "Practice CPU", "Practice CPU", "Off, your own settings, or one of the built-in presets."},
+  {"Random numbers (items, turnips)", "Random numbers", "Mode", "Items, turnips and the game's other random events."},
+  {"Random numbers: seed number", "Random numbers", "Seed", "Used when random numbers are frozen or the same each start."},
+  {"Practice CPU: moving target (no attacks)", "Practice CPU", "Moving target", "Moves around and never attacks."},
+  {"Practice CPU: run shine (weight)", "Practice CPU", "Run shine", "A weight against its other choices, not a percentage."},
+  {"Practice CPU: throw wait (0: 4 to 12)", "Practice CPU", "Throw wait", "0 waits a random 4 to 12 frames."},
+  {"Practice CPU: ledge wait (most)", "Practice CPU", "Ledge wait", "The longest it waits on the ledge."},
+  {"Practice CPU: reaction", "Practice CPU", "Reaction", "Frames before it reacts to what you do."},
+  {"Practice CPU: every setting back to the defaults", "Practice CPU", "Reset to defaults", "Every Practice CPU setting back to its default."},
+  // GAME > Game, Input, Online, Replays
+  {"Automatic L-cancel (offline; Direct when both agree)", nullptr, "Automatic L-cancel", "Offline, and in Direct when both players agree."},
+  {"Input suggestions (online, next game)", nullptr, "Input suggestions", "Online, from the next game."},
+  {"Squad Strike in VS (Z adds fighters, offline)", nullptr, "Squad Strike in VS", "Offline: Z adds fighters on the character select."},
+  {"Retail game (no built-in codes)", nullptr, "Retail game", "No built-in codes."},
+  {"Play while searching (hold L+R on the select)", nullptr, "Play while searching", "Hold L+R on the character select."},
+  {"Warm-up room (Direct, Teams: hold L+R on the select)", nullptr, "Warm-up room", "Direct and Teams: hold L+R on the character select."},
+  {"Live pick previews (Melee-NX-NetPlay opponents)", nullptr, "Live pick previews", "Against Melee-NX-NetPlay opponents."},
+  {"After a Direct or Teams session: into Training", nullptr, "Training after Direct or Teams", "After a Direct or Teams session, go into Training."},
+  {"After an online session: Training's select", nullptr, "Training's select after online", "After an online session, back to Training's character select."},
+  {"Analyze this replay (while one plays)", nullptr, "Analyze this replay", "While a replay plays."},
+  {"Show it as it was played (uses the .trace file)", nullptr, "Show it as it was played", "Uses the .trace file beside the replay."},
+  {"Takeover: a try lasts", "Replay takeover", "A try lasts", nullptr},
+  {"Takeover: the other players", "Replay takeover", "The other players", nullptr},
+  // AUDIO, VIDEO, OVERLAYS, CONTROLS
+  {"Console low-pass on voices (next start)", nullptr, "Console low-pass on voices", "Applies at the next start."},
+  {"Use custom music (next start)", nullptr, "Use custom music", "Applies at the next start."},
+  {"Spectator server (next start)", nullptr, "Spectator server", "Applies at the next start."},
+  {"Lossless adapter lag test (next start only)", nullptr, "Lossless adapter lag test", "The next start only."},
+  {"Capture frames (starts 3 s after the menu closes)", nullptr, "Capture frames", "Starts 3 s after the menu closes."},
+  {"Display latency test (X + D-pad Down)", nullptr, "Display latency test", "X + D-pad Down starts it."},
+  {"Player names above fighters (online)", nullptr, "Player names above fighters", "Online only."},
+  {"Open the PhobGCC menu (PhobVision, setups, remap)", nullptr, "Open the PhobGCC menu", "PhobVision, setups and remap."},
+  {"Controller test (PhobScope, Phob Check)", nullptr, "Controller test", "PhobScope and Phob Check."},
+  {"This controller is a PhobGCC (its own firmware)", nullptr, "This controller is a PhobGCC", "Its own firmware's settings."},
+  {"Soft reset (keeps the calibration)", nullptr, "Soft reset", "Keeps the calibration."},
+};
+// A heading word that leads a label ("Practice CPU: ...") and the section its rows go under.
+constexpr struct { const char* prefix; const char* section; } kGroups[] = {{"Practice CPU: ", "Practice CPU"}, {"Lab dummy: ", "Lab dummy"}};
+// Sections the grouping makes, each kept right after the page section it came from (in this order).
+constexpr struct { const char* after; const char* sections[5]; } kSectionOrder[] = {
+  {"Training", {"Lab dummy", "Practice CPU", "Practice CPU throws", "Practice CPU slots", "Random numbers"}},
+  {"Replays", {"Replay takeover"}},
+};
+std::string capitalised(std::string s) { if (!s.empty()) s[0] = char(std::toupper(static_cast<unsigned char>(s[0]))); return s; }
+bool ends_with(const std::string& s, const char* tail) { const size_t n = std::strlen(tail); return s.size() >= n && s.compare(s.size() - n, n, tail) == 0; }
+void relabel(Row& r, std::string& section_title) {
+  for (const Relabel& x : kRelabel) {
+    if (r.label != x.from) continue;
+    if (x.section) section_title = x.section;
+    r.label = x.label;
+    if (x.detail) r.detail = x.detail;
+    return;
+  }
+  for (const auto& g : kGroups) {
+    if (r.label.rfind(g.prefix, 0) != 0) continue;
+    const std::string rest = r.label.substr(std::strlen(g.prefix));
+    section_title = g.section;
+    if (ends_with(rest, " throw")) { section_title = "Practice CPU throws"; r.detail = "How often it picks this throw against the other three."; }
+    if (rest.rfind("save to slot ", 0) == 0 || rest.rfind("load slot ", 0) == 0) {
+      section_title = "Practice CPU slots";
+      const bool save = rest[0] == 's';
+      r.status = save;
+      r.detail = save ? "Keeps the Practice CPU's current settings in this slot." : "Puts this slot's settings back on the Practice CPU.";
+    }
+    r.label = capitalised(rest);
+    return;
+  }
+}
+// One unit style for the values the app's pages show as text: "1 frame", "15 frames", "57%".
+std::string unit_text(std::string v) {
+  if (v == "1 frames") return "1 frame";
+  return v;
+}
+void order_sections(Category& c) {
+  for (const auto& o : kSectionOrder) {
+    auto at = std::find_if(c.sections.begin(), c.sections.end(), [&](const Section& s) { return s.title == o.after; });
+    if (at == c.sections.end()) continue;
+    size_t place = size_t(at - c.sections.begin()) + 1;
+    for (const char* name : o.sections) {
+      if (!name) break;
+      auto it = std::find_if(c.sections.begin(), c.sections.end(), [&](const Section& s) { return s.title == name; });
+      if (it == c.sections.end()) continue;
+      Section moved = std::move(*it);
+      const size_t from = size_t(it - c.sections.begin());
+      c.sections.erase(it);
+      if (from < place) --place;
+      c.sections.insert(c.sections.begin() + std::ptrdiff_t(place), std::move(moved));
+      ++place;
+    }
+  }
+}
+
 std::array<Category, 8> build_rows(bool in_game) {
   std::array<Category, 8> cats;
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -361,7 +466,8 @@ std::array<Category, 8> build_rows(bool in_game) {
   if (shown(host::MenuChange::OnlineDelay)) {
     std::vector<std::string> names = {"Auto (from ping)", "1 frame (lowest)"};
     for (int i = 2; i <= 9; ++i) names.push_back(std::to_string(i) + " frames");
-    Row r = choice("Online input delay (next match)", s.online_delay, names, main_act(host::MenuChange::OnlineDelay));
+    Row r = choice("Online input delay", s.online_delay, names, main_act(host::MenuChange::OnlineDelay));
+    r.detail = "From the next match.";
     section(cats[2], "Input delay").rows.push_back(r);
   }
   // CONTROLS: the controller, its remap, deadzones and rumble, then the console's stick and trigger ranges
@@ -407,10 +513,11 @@ std::array<Category, 8> build_rows(bool in_game) {
       place_row(it.label, &rc, &rt);
       Row r; r.label = it.label; r.enabled = it.enabled; r.next_start = it.next_start;
       while (!r.label.empty() && r.label[0] == ' ') r.label.erase(0, 1);   // indented sub-rows: the panel's own rhythm
+      relabel(r, rt);
       r.action = Action{Act::Extra}; r.action.a = int(p); r.action.b = int(i);
       if (it.value == "On" || it.value == "Off") { r.kind = Kind::Toggle; r.value = it.value == "On"; }
       else if (it.value.empty()) r.kind = Kind::Action;
-      else { r.kind = Kind::Stepper; r.text = it.value; }
+      else { r.kind = Kind::Stepper; r.text = unit_text(it.value); }
       if (!it.enabled) r.hint = "Locked during online play.";
       section(cats[size_t(rc)], rt).rows.push_back(r);
     }
@@ -562,6 +669,7 @@ std::array<Category, 8> build_rows(bool in_game) {
     Row r; r.kind = Kind::Info; r.label = a.label; r.text = a.why;
     section(cats[size_t(a.cat)], "Not on the Switch").rows.push_back(r);
   }
+  for (Category& c : cats) order_sections(c);
   return cats;
 }
 
@@ -600,28 +708,94 @@ void feed_imgui(const host::PadState pads[4]) {
   gx::settings_input::gamepad(ImGui::GetIO(), m);
 }
 
-// A row whose value steps left and right (a value the app's pages show as text): drawn with the panel's field label
-// and a frame like its combo, < value >. Left/Right or A steps it.
+// The few colours and sizes the couch-distance layout adds (the panel's own palette stays melee-unlocked's).
+namespace look {
+constexpr ImU32 kScrim = IM_COL32(3, 5, 12, 255);   // behind the panel, over the game: its alpha below
+constexpr float kScrimAlpha = 0.58f;
+constexpr float kArrowRest = 0.55f;                  // a stepper's arrows when its row is not focused
+constexpr float kRowHeight = 36.0f;                  // a one-line row, as tall as melee-unlocked's toggle row
+}  // namespace look
+
+// The focused row's description (Row::detail), shown below the list; whether this page has any (kept a frame, for the list's size).
+std::string g_detail, g_detail_next;
+ImVec2 g_row_rect[2];                // the control of the row drawn last (draw_row)
+ImGuiID g_context_row = 0;           // the focused row the list was last scrolled for
+ImFont* g_plain_now = nullptr;       // ImGui's own font at the panel's scale (the legacy menus), set by panel_draw
+struct PanelRect { bool shown = false; float x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
+PanelRect g_panel_rect;              // where the panel was drawn last frame, in screen pixels (render thread): the HUD keeps clear
+bool g_page_has_detail = false, g_page_has_detail_next = false;
+
+// A row whose value steps left and right (a value the app's pages show as text). When the label and the value fit side by side
+// at full size it is one line like melee-unlocked's toggle row: the label left, the value right in a box with roomy arrows, the
+// boxes of a page one column. Otherwise the panel's field label above a full-width < value > frame like its combo. Left/Right or
+// A steps it.
 int stepper(const Row& r) {
   int dir = 0;
   ImGui::PushID(r.label.c_str());
-  gx::settings_field_label(r.label.c_str());
-  const float width = ImGui::GetContentRegionAvail().x, height = ImGui::GetFrameHeight();
-  const bool pressed = gx::settings_hit_button("##stepper", ImVec2(width, height));
-  gx::settings_page::label_item(r.label.c_str());
-  const bool focused = ImGui::IsItemFocused(), hovered = ImGui::IsItemHovered();
-  const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-  ImDrawList* draw = ImGui::GetWindowDrawList();
-  draw->AddRectFilled(a, b, ImGui::GetColorU32(hovered || focused ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
+  const int form = gx::g_settings_form_style;
+  const float avail = ImGui::GetContentRegionAvail().x, font = ImGui::GetFontSize(), arrow = font * 0.32f;
+  const float gap = 12.0f, inset = form == 1 || form == 5 ? 0.0f : form >= 6 ? 4.0f : 12.0f;
+  const ImVec2 value_size = ImGui::CalcTextSize(r.text.c_str());
+  const float box_floor = std::clamp(avail * 0.40f, form >= 6 ? 120.0f : 150.0f, 250.0f);
+  const float box = std::max(box_floor, value_size.x + 2.0f * (10.0f + 1.6f * arrow + gap));
+  const bool one_line = form != 2 && inset + ImGui::CalcTextSize(r.label.c_str()).x + 2.0f * gap + box <= avail;
   const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text);
-  const float mid = (a.y + b.y) * 0.5f, s = ImGui::GetFontSize() * 0.32f;
-  draw->AddTriangleFilled(ImVec2(a.x + 10, mid), ImVec2(a.x + 10 + 1.6f * s, mid - s), ImVec2(a.x + 10 + 1.6f * s, mid + s), ink);
-  draw->AddTriangleFilled(ImVec2(b.x - 10, mid), ImVec2(b.x - 10 - 1.6f * s, mid - s), ImVec2(b.x - 10 - 1.6f * s, mid + s), ink);
-  const ImVec2 ts = ImGui::CalcTextSize(r.text.c_str());
-  const float tx = std::max(a.x + 26.0f, (a.x + b.x - ts.x) * 0.5f);
-  draw->PushClipRect(ImVec2(a.x + 24, a.y), ImVec2(b.x - 24, b.y), true);
-  draw->AddText(ImVec2(tx, mid - ts.y * 0.5f), ink, r.text.c_str());
-  draw->PopClipRect();
+  bool pressed = false, focused = false;
+  if (one_line) {
+    if (ImGui::GetCurrentWindow()->DC.IsSameLine) ImGui::NewLine();
+    const float height = form >= 6 ? ImGui::GetFrameHeight() : std::max(look::kRowHeight, ImGui::GetFrameHeight() + 4.0f);
+    const bool slanted = form == 0;
+    pressed = slanted ? gx::settings_shaped_hit_button("##stepper", ImVec2(avail, height)) : gx::settings_hit_button("##stepper", ImVec2(avail, height));
+    gx::settings_page::label_item(r.label.c_str());
+    const bool nav_frame = slanted && gx::settings_nav_frame_on_item();
+    focused = ImGui::IsItemFocused();
+    const bool hot = focused || ImGui::IsItemHovered();
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (slanted) {   // the Clean side row strip, as its toggle row draws it
+      const ImVec2 strip[] = {ImVec2(a.x + 7, a.y), ImVec2(b.x, a.y - 4), ImVec2(b.x - 4, b.y - 4), ImVec2(a.x, b.y)};
+      draw->AddConvexPolyFilled(strip, 4, IM_COL32(10, 12, 27, 205));
+      draw->AddLine(strip[0], strip[1], gx::settings_palette_tint(0, IM_COL32(215, 49, 144, 160)), 1.0f);
+      if (nav_frame) gx::settings_nav_frame(draw, strip);
+    } else if (form == 3 || form == 4) {
+      draw->AddRectFilled(a, b, form == 3 ? IM_COL32(30, 42, 58, 249) : IM_COL32(12, 28, 47, 218), 10.0f);
+    }
+    if (hot) draw->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.045f)), 5.0f);
+    const float mid = (a.y + b.y) * 0.5f;
+    draw->AddText(ImVec2(a.x + inset, mid - font * 0.5f), ink, r.label.c_str());
+    // The value's box, right-aligned: the same width on every row of a page unless a long value needs more.
+    const float right = b.x - (slanted ? 8.0f : 2.0f), vpad = form >= 6 ? 1.0f : 5.0f;
+    const ImVec2 v0(right - box, a.y + vpad), v1(right, b.y - vpad);
+    draw->AddRectFilled(v0, v1, ImGui::GetColorU32(hot ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
+    if (!r.status) {
+      const ImU32 tip = focused ? gx::settings_accent(form) : ImGui::GetColorU32(ImGuiCol_Text, look::kArrowRest);
+      draw->AddTriangleFilled(ImVec2(v0.x + 10, mid), ImVec2(v0.x + 10 + 1.6f * arrow, mid - arrow), ImVec2(v0.x + 10 + 1.6f * arrow, mid + arrow), tip);
+      draw->AddTriangleFilled(ImVec2(v1.x - 10, mid), ImVec2(v1.x - 10 - 1.6f * arrow, mid - arrow), ImVec2(v1.x - 10 - 1.6f * arrow, mid + arrow), tip);
+    }
+    draw->PushClipRect(ImVec2(v0.x + 24, v0.y), ImVec2(v1.x - 24, v1.y), true);
+    draw->AddText(ImVec2((v0.x + v1.x - value_size.x) * 0.5f, mid - value_size.y * 0.5f), ink, r.text.c_str());
+    draw->PopClipRect();
+  } else {
+    gx::settings_field_label(r.label.c_str());
+    const float width = ImGui::GetContentRegionAvail().x, height = ImGui::GetFrameHeight();
+    pressed = gx::settings_hit_button("##stepper", ImVec2(width, height));
+    gx::settings_page::label_item(r.label.c_str());
+    focused = ImGui::IsItemFocused();
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(a, b, ImGui::GetColorU32(hovered || focused ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
+    const float mid = (a.y + b.y) * 0.5f;
+    if (!r.status) {
+      const ImU32 tip = focused ? gx::settings_accent(form) : ink;
+      draw->AddTriangleFilled(ImVec2(a.x + 10, mid), ImVec2(a.x + 10 + 1.6f * arrow, mid - arrow), ImVec2(a.x + 10 + 1.6f * arrow, mid + arrow), tip);
+      draw->AddTriangleFilled(ImVec2(b.x - 10, mid), ImVec2(b.x - 10 - 1.6f * arrow, mid - arrow), ImVec2(b.x - 10 - 1.6f * arrow, mid + arrow), tip);
+    }
+    const float tx = std::max(a.x + 26.0f, (a.x + b.x - value_size.x) * 0.5f);
+    draw->PushClipRect(ImVec2(a.x + 24, a.y), ImVec2(b.x - 24, b.y), true);
+    draw->AddText(ImVec2(tx, mid - value_size.y * 0.5f), ink, r.text.c_str());
+    draw->PopClipRect();
+  }
   if (pressed) dir = 1;
   if (focused && r.enabled) {
     if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true) || ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) dir = -1;
@@ -682,8 +856,9 @@ void draw_row(const Row& r) {
       if (!row.shown) break;
       ImGui::PushID(r.label.c_str());
       const ImVec2 start = ImGui::GetCursorScreenPos();
-      gx::settings_field_label(r.label.c_str());
-      ImGui::NewLine();
+      // A label longer than the field label's band wraps at full size instead of being cut off at the band's edge.
+      if (ImGui::CalcTextSize(r.label.c_str()).x > ImGui::GetContentRegionAvail().x - 24.0f) ImGui::TextWrapped("%s", r.label.c_str());
+      else { gx::settings_field_label(r.label.c_str()); ImGui::NewLine(); }
       ImGui::TextDisabled("%s", r.text.c_str());
       const ImVec2 end = ImGui::GetCursorScreenPos();
       ImGui::SetCursorScreenPos(start);
@@ -696,7 +871,15 @@ void draw_row(const Row& r) {
     }
   }
   g_row_id = ImGui::GetItemID();
+  g_row_rect[0] = ImGui::GetItemRectMin(); g_row_rect[1] = ImGui::GetItemRectMax();
   ImGui::EndDisabled();
+  if (!r.detail.empty()) {   // the description below the list (GD Melee: its own help line) while this row has the focus
+    g_page_has_detail_next = true;
+    if (g_row_id && ImGui::GetFocusID() == g_row_id) {
+      g_detail_next = r.detail;
+      if (gx::g_settings_form_style == 2) gx::g_settings_gd_help = r.label + ": " + r.detail;
+    }
+  }
   if (!r.hint.empty()) gx::settings_hint("%s", r.hint.c_str());
   else if (r.next_start) gx::settings_hint("Applies at the next start.");
 }
@@ -917,6 +1100,7 @@ void draw_rows(int style) {
     g_state.page_navigation.begin(g_state.active_tab, style);
     gx::settings_page::observer = &g_state.page_navigation;
   }
+  g_detail_next.clear(); g_page_has_detail_next = false;
   search_row();
   if (style == 4) {   // Wide tabs: the page's icon and title at the top of its card
     static constexpr const char* wide_titles[] = {"Video", "Audio", "Game", "Controls", "Overlays", "Customize", "Gecko Codes", "Mods"};
@@ -942,6 +1126,14 @@ void draw_rows(int style) {
         const size_t key = r.label.find("###");
         if (key != std::string::npos) ImGui::PushID(r.label.c_str() + key + 3); else ImGui::PushID(int(&r - s.rows.data()));
         ImGui::PushID(s.title.c_str()); draw_row(r); ImGui::PopID(); ImGui::PopID();
+        // A row that takes the focus keeps a row and a half of the list visible beyond it, so the next rows show while scrolling.
+        if (g_row_id && ImGui::GetFocusID() == g_row_id && g_context_row != g_row_id && !gx::g_search && gx::g_settings_form_style != 2) {
+          g_context_row = g_row_id;
+          const ImGuiWindow* list = ImGui::GetCurrentWindow();
+          const float margin = look::kRowHeight * 1.5f, top = list->InnerRect.Min.y + margin, bottom = list->InnerRect.Max.y - margin;
+          if (bottom > top && g_row_rect[1].y > bottom) ImGui::SetScrollY(std::min(list->ScrollMax.y, list->Scroll.y + (g_row_rect[1].y - bottom)));
+          else if (bottom > top && g_row_rect[0].y < top) ImGui::SetScrollY(std::max(0.0f, list->Scroll.y - (top - g_row_rect[0].y)));
+        }
         if (g_focus_first && g_row_id && (style != 0 || g_state.clean_detail_frames >= 14.0f)) {
           ImGui::SetFocusID(g_row_id, ImGui::GetCurrentWindow());
           ImGui::SetNavCursorVisible(true);
@@ -952,6 +1144,7 @@ void draw_rows(int style) {
     }
   }
   gx::settings_pages_end();
+  g_detail = g_detail_next; g_page_has_detail = g_page_has_detail_next;
   gx::settings_page::observer = nullptr;
   if (g_state.open) if (const char* focus = g_state.page_navigation.changed_focus()) host::log("settings: focus %s", focus);
 }
@@ -1069,6 +1262,9 @@ void draw_page(int style, const Appearance& look) {
   const float gd_list_height = std::floor((kGdHintTop - kGdHintGap - kGdListTop + kGdRowSpacing) / kGdRowPitch) * kGdRowPitch - kGdRowSpacing;
   ImVec2 content_size = gd ? ImVec2(532.0f * gd_scale, gd_list_height * gd_scale) : ImVec2(0, -48);
   if (clean) content_size.y = -84.0f;
+  // Room below the list for the focused row's description (two lines at most), on pages that have one.
+  const float detail_h = !gd && g_page_has_detail ? ImGui::GetTextLineHeight() * 2.0f + 12.0f : 0.0f;
+  if (!gd) content_size.y -= detail_h;
   if (style == 3) {
     const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
     const float nav_width = std::min(320.0f, std::max(248.0f, (ws.x - 52.0f) * 0.31f));
@@ -1088,7 +1284,14 @@ void draw_page(int style, const Appearance& look) {
   ImGui::PopStyleVar(3);
   if (child_colours) ImGui::PopStyleColor(child_colours);
   ImGui::EndDisabled();
-  ImGui::SetCursorPos(ImVec2(content_origin.x, content_origin.y + child_size.y));
+  if (detail_h > 0.0f && !g_detail.empty()) {   // secondary text, wrapped inside the list's width
+    const float x = content_origin.x + (classic ? 4.0f : 12.0f);
+    ImGui::SetCursorPos(ImVec2(x, content_origin.y + child_size.y + 6.0f));
+    ImGui::PushTextWrapPos(content_origin.x + child_size.x - 12.0f);
+    ImGui::TextDisabled("%s", g_detail.c_str());
+    ImGui::PopTextWrapPos();
+  }
+  ImGui::SetCursorPos(ImVec2(content_origin.x, content_origin.y + child_size.y + detail_h));
   ImGui::PopStyleVar();    // the page entrance's alpha
   gx::settings_page_footer(g_state, style);
   if (!has_home(style)) g_state.home_focus_reset = false;
@@ -1153,7 +1356,7 @@ void draw_panel(int w, int h) {
   const gx::SettingsAppearanceScope appearance_scope(style);
   const bool classic = style == 6, old_menu = style == 7;
   int classic_colours = 0, classic_vars = 0;
-  ImFont* plain = ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];   // ImGui's own (the legacy menus' fixed font)
+  ImFont* plain = g_plain_now ? g_plain_now : ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];   // ImGui's own (the legacy menus' fixed font)
   if (classic) {
     // The compact v0.6.6 screen (settings_frame's appearance 6): black canvas, navy controls, purple selected tab. Its Lucida
     // Console is a Windows font: ImGui's own fixed font here.
@@ -1183,7 +1386,7 @@ void draw_panel(int w, int h) {
     ImGui::Begin("PC settings###legacy_old_settings", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                                                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
   } else {
-    const float width = style == 0 ? std::min(560.0f, std::max(390.0f, display.x * 0.38f)) : style == 1 ? std::min(1040.0f, display.x - 24.0f) :
+    const float width = style == 0 ? std::min(620.0f, std::max(440.0f, display.x * 0.46f)) : style == 1 ? std::min(1040.0f, display.x - 24.0f) :
                         style == 2 ? std::min(display.x - 12.0f, (display.y - 12.0f) * 4.0f / 3.0f) : style == 3 ? display.x - 24.0f :
                         style == 4 ? std::min(960.0f, display.x - 24.0f) : style == 6 ? std::min(980.0f, display.x - 40.0f) : std::min(860.0f, display.x - 24.0f);
     const float pw = std::max(300.0f, std::min(width, display.x - 12.0f));
@@ -1334,6 +1537,23 @@ void draw_reminder() {
 // ---- fonts and artwork ----
 ImFont* g_heading = nullptr;
 ImFont* g_body = nullptr;
+// The panel is laid out in melee-unlocked's own pixels on a canvas kPanelCanvas tall, then drawn scaled to the screen (UiSpace
+// below): 1.125x on a 720p screen, 1.6875x on a 1080p television. Its fonts are rasterised once for each of those so the text is
+// sharp at its real size (a ->Scale of 1/f gives the layout melee-unlocked's sizes); the home screen keeps g_heading and g_body.
+constexpr float kPanelCanvas = 640.0f;
+struct PanelFonts { float factor; ImFont* heading; ImFont* body; ImFont* plain; };
+PanelFonts g_panel_fonts[] = {{720.0f / kPanelCanvas, nullptr, nullptr, nullptr}, {1080.0f / kPanelCanvas, nullptr, nullptr, nullptr},
+#ifndef __SWITCH__
+                               // a window on a Retina display: two pixels a point
+                               {1440.0f / kPanelCanvas, nullptr, nullptr, nullptr}, {2160.0f / kPanelCanvas, nullptr, nullptr, nullptr},
+#endif
+};
+// The fonts rasterised nearest to the panel's size in real pixels (its scale times the display's pixels per point).
+const PanelFonts& panel_fonts(float pixels) {
+  const PanelFonts* best = &g_panel_fonts[0];
+  for (const PanelFonts& f : g_panel_fonts) if (std::abs(f.factor - pixels) < std::abs(best->factor - pixels)) best = &f;
+  return *best;
+}
 // A Windows BMP as melee-unlocked ships its launcher art: 24-bit bottom-up, or 32-bit premultiplied top-down cutouts.
 mu_ui::Art decode_bmp(const uint8_t* b, const uint8_t* e) {
   mu_ui::Art art;
@@ -1459,6 +1679,20 @@ void fonts_init() {
   merge_cjk(16.0f);
   gx::g_settings_heading_font = g_heading;
   gx::g_settings_body_font = g_body;
+#if IMGUI_VERSION_NUM < 19200   // ImGui 1.92's fonts bake each size when it is drawn (UiSpace sets the density): nothing to add
+  for (PanelFonts& f : g_panel_fonts) {
+    ImFontConfig c = config;
+    std::snprintf(c.Name, sizeof c.Name, "Source Sans 3 Black %.0f", 28.0f * f.factor);
+    f.heading = io.Fonts->AddFontFromMemoryTTF(const_cast<uint8_t*>(mu_ui_font_black), int(mu_ui_font_black_end - mu_ui_font_black), 28.0f * f.factor, &c);
+    std::snprintf(c.Name, sizeof c.Name, "Source Sans 3 Bold %.0f", 16.0f * f.factor);
+    f.body = io.Fonts->AddFontFromMemoryTTF(const_cast<uint8_t*>(mu_ui_font_bold), int(mu_ui_font_bold_end - mu_ui_font_bold), 16.0f * f.factor, &c);
+    ImFontConfig d;
+    d.SizePixels = std::round(13.0f * f.factor);   // ImGui's own font for the legacy menus, at its real size
+    f.plain = io.Fonts->AddFontDefault(&d);
+    for (ImFont* font : {f.heading, f.body}) if (font) font->Scale = 1.0f / f.factor;
+    if (f.plain) f.plain->Scale = 13.0f / d.SizePixels;
+  }
+#endif
   aurora_imgui_host_gamepad(true);          // patches/0115: the panel's gamepad keys come from the app's controllers only
   io.ConfigInputTrickleEventQueue = true;   // settings_input::configure: press and release pairs kept between frames
   say("ui: melee-unlocked's fonts loaded (Source Sans 3 Black and Bold)");
@@ -1467,6 +1701,85 @@ ImFont* heading_font() { return g_heading; }
 ImFont* body_font() { return g_body; }
 const Art& bailey() { static Art a; static int gen = -1; if (gen != g_ui_generation) { gen = g_ui_generation; a = decode_bmp(mu_ui_bailey, mu_ui_bailey_end); } return a; }
 const Art& mark() { static Art a; static int gen = -1; if (gen != g_ui_generation) { gen = g_ui_generation; a = decode_bmp(mu_ui_mark, mu_ui_mark_end); } return a; }
+
+// The panel's canvas: melee-unlocked's layout in its own pixels on a screen kPanelCanvas tall (as wide as the screen's shape),
+// then every vertex and clip rectangle the panel drew scaled up to the real screen. So a 720p handheld and a 1080p television
+// show the same panel at the same share of the screen, with the text from fonts rasterised for that size.
+class UiSpace {
+ public:
+  explicit UiSpace(float scale) : scale_(scale) {
+    ImGuiContext& g = *GImGui;
+    real_ = g.IO.DisplaySize;
+    for (ImGuiWindow* w : g.Windows) if (w->LastFrameActive == g.FrameCount) before_.push_back(w);
+    fg_from_ = ImGui::GetForegroundDrawList()->VtxBuffer.Size;
+    viewport_ = static_cast<ImGuiViewportP*>(ImGui::GetMainViewport());
+    saved_[0] = viewport_->Pos; saved_[1] = viewport_->Size; saved_[2] = viewport_->WorkPos; saved_[3] = viewport_->WorkSize;
+    if (scale_ == 1.0f) return;
+    const ImVec2 canvas(real_.x / scale_, real_.y / scale_);
+    g.IO.DisplaySize = canvas;
+    viewport_->Pos = viewport_->WorkPos = ImVec2(0, 0);
+    viewport_->Size = viewport_->WorkSize = canvas;
+#if IMGUI_VERSION_NUM >= 19200
+    // ImGui's dynamic fonts: glyphs baked at the size they are finally shown at.
+    density_ = ImGui::GetFontRasterizerDensity();
+    ImGui::SetFontRasterizerDensity(density_ * scale_);
+#endif
+    // A pointer (the Mac): its position on the canvas, and the window under it found again there.
+    ImGuiIO& io = g.IO;
+    mouse_ = !(io.ConfigFlags & ImGuiConfigFlags_NoMouse) && ImGui::IsMousePosValid(&io.MousePos);
+    if (mouse_) {
+      mouse_saved_[0] = io.MousePos; mouse_saved_[1] = io.MousePosPrev; mouse_saved_[2] = io.MouseDelta;
+      for (int i = 0; i < 5; ++i) clicked_saved_[i] = io.MouseClickedPos[i];
+      hovered_saved_[0] = g.HoveredWindow; hovered_saved_[1] = g.HoveredWindowUnderMovingWindow;
+      const auto down = [&](ImVec2& v) { if (ImGui::IsMousePosValid(&v)) { v.x /= scale_; v.y /= scale_; } };
+      down(io.MousePos); down(io.MousePosPrev); io.MouseDelta.x /= scale_; io.MouseDelta.y /= scale_;
+      for (ImVec2& v : io.MouseClickedPos) down(v);
+      ImGui::FindHoveredWindowEx(io.MousePos, false, &g.HoveredWindow, &g.HoveredWindowUnderMovingWindow);
+    }
+  }
+  ~UiSpace() {
+    ImGuiContext& g = *GImGui;
+    g.IO.DisplaySize = real_;
+#if IMGUI_VERSION_NUM >= 19200
+    if (density_ > 0.0f) ImGui::SetFontRasterizerDensity(density_);
+#endif
+    if (mouse_) {
+      g.IO.MousePos = mouse_saved_[0]; g.IO.MousePosPrev = mouse_saved_[1]; g.IO.MouseDelta = mouse_saved_[2];
+      for (int i = 0; i < 5; ++i) g.IO.MouseClickedPos[i] = clicked_saved_[i];
+      // The pointer over one of the panel's windows (found on the canvas) stays that window for the rest of the frame: the panel
+      // is drawn over everything else, and the frame's end (a click focusing a window or closing a popup) asks ImGui again.
+      ImGuiWindow* over = g.HoveredWindow;
+      const bool panel_window = over && over->LastFrameActive == g.FrameCount && std::find(before_.begin(), before_.end(), over) == before_.end();
+      if (!panel_window) { g.HoveredWindow = hovered_saved_[0]; g.HoveredWindowUnderMovingWindow = hovered_saved_[1]; }
+    }
+    viewport_->Pos = saved_[0]; viewport_->Size = saved_[1]; viewport_->WorkPos = saved_[2]; viewport_->WorkSize = saved_[3];
+    g_panel_rect.shown = false;
+    for (ImGuiWindow* w : g.Windows) {
+      if (w->LastFrameActive != g.FrameCount || std::find(before_.begin(), before_.end(), w) != before_.end()) continue;
+      if (scale_ != 1.0f) {
+        for (ImDrawVert& v : w->DrawList->VtxBuffer) { v.pos.x *= scale_; v.pos.y *= scale_; }
+        for (ImDrawCmd& c : w->DrawList->CmdBuffer) { c.ClipRect.x *= scale_; c.ClipRect.y *= scale_; c.ClipRect.z *= scale_; c.ClipRect.w *= scale_; }
+      }
+      if (w->ParentWindow == nullptr && !(w->Flags & ImGuiWindowFlags_Popup) && !w->Hidden && (std::strncmp(w->Name, "PC settings", 11) == 0)) {
+        g_panel_rect = {true, w->Pos.x * scale_, w->Pos.y * scale_, (w->Pos.x + w->Size.x) * scale_, (w->Pos.y + w->Size.y) * scale_};
+      }
+    }
+    if (scale_ != 1.0f) {   // what the panel drew over everything (the Clean side title shards)
+      ImDrawList* fg = ImGui::GetForegroundDrawList();
+      for (int i = fg_from_; i < fg->VtxBuffer.Size; ++i) { fg->VtxBuffer[i].pos.x *= scale_; fg->VtxBuffer[i].pos.y *= scale_; }
+    }
+  }
+ private:
+  float scale_;
+  ImVec2 real_, saved_[4];
+  ImGuiViewportP* viewport_ = nullptr;
+  std::vector<ImGuiWindow*> before_;
+  int fg_from_ = 0;
+  float density_ = 0.0f;
+  bool mouse_ = false;
+  ImVec2 mouse_saved_[3], clicked_saved_[5];
+  ImGuiWindow* hovered_saved_[2] = {nullptr, nullptr};
+};
 
 void panel_feed(const host::PadState pads[4]) {
   if (ImGui::GetCurrentContext()) feed_imgui(pads);
@@ -1503,13 +1816,39 @@ void panel_draw(int window_w, int window_h) {
     }
   }
   if (!open && g_state.panel_slide_x <= -720.0f && !g_ui_open && g_state.panel_anim_initialized) return;
-  // melee-unlocked's style and fonts for the panel only; ImGui's own default for everything drawn after it.
-  const ImGuiStyle saved = ImGui::GetStyle();
-  gx::mu_settings_style();
-  if (g_body) ImGui::PushFont(g_body);
-  draw_panel(window_w, window_h);
-  if (g_body) ImGui::PopFont();
-  ImGui::GetStyle() = saved;
+  // The game dimmed behind the panel (a scrim over the picture, under the HUD), with the panel's slide.
+  const ImVec2 screen = io.DisplaySize;
+  if (const float shown_part = std::clamp(1.0f + g_state.panel_slide_x / 720.0f, 0.0f, 1.0f); shown_part > 0.0f) {
+    // A window of its own, opened before the panel's (which takes the focus, so it stays on top): over every other window,
+    // the game's picture where that is a window too, and under the HUD, which is drawn over everything.
+    const ImU32 scrim = (look::kScrim & 0x00FFFFFFu) | (ImU32(look::kScrimAlpha * shown_part * 255.0f) << 24);
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(screen, ImGuiCond_Always);
+    ImGui::Begin("##mu_scrim", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(0, 0), screen, scrim);
+    ImGui::End();
+  }
+  // The panel's scale and the fonts rasterised nearest to it.
+  const float scale = std::max(0.5f, screen.y / kPanelCanvas);
+  const PanelFonts& fonts = panel_fonts(scale * std::max(1.0f, io.DisplayFramebufferScale.y));
+  ImFont* body = fonts.body ? fonts.body : g_body;
+  ImFont* const home_heading = gx::g_settings_heading_font, * const home_body = gx::g_settings_body_font;
+  if (fonts.heading) gx::g_settings_heading_font = fonts.heading;
+  if (fonts.body) gx::g_settings_body_font = fonts.body;
+  g_plain_now = fonts.plain;
+  gx::g_frame_ui_scale.store(scale, std::memory_order_relaxed);
+  {
+    const UiSpace space(scale);
+    // melee-unlocked's style and fonts for the panel only; ImGui's own default for everything drawn after it.
+    const ImGuiStyle saved = ImGui::GetStyle();
+    gx::mu_settings_style();
+    if (body) ImGui::PushFont(body);
+    draw_panel(window_w, window_h);
+    if (body) ImGui::PopFont();
+    ImGui::GetStyle() = saved;
+  }
+  gx::g_settings_heading_font = home_heading; gx::g_settings_body_font = home_body;
 }
 
 void panel_service(bool in_game) {
@@ -1784,9 +2123,21 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool) {
   std::string hud = line;
   if (const int ping = online_ping_ms(); ping >= 0) { hud += "   ping "; hud += std::to_string(ping); hud += " ms"; }
   if (extra) { const std::string e = extra(); if (!e.empty()) { hud += "   "; hud += e; } }
-  const float h = std::min(unit * 0.7f, 20.0f), pad = h * 0.4f, w = h * 0.55f * float(hud.size()) + pad * 2;
-  out.shapes.push_back({pad, pad, pad + w, pad + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-  out.texts.push_back({pad + pad, pad + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, hud, float(ww) - 4 * pad});
+  const float h = std::min(unit * 0.7f, 20.0f), pad = h * 0.4f;
+  float w = h * 0.55f * float(hud.size()) + pad * 2, top = pad, max_w = float(ww) - 4 * pad;
+  // While the settings panel is up the line moves to the bottom left, clear of the panel and its title; when less than half of
+  // it fits beside the panel there, it waits until the panel closes.
+  if (fe::g_panel_rect.shown && fe::g_open.load()) {
+    top = float(wh) - pad - (h + pad * 1.5f);
+    const fe::PanelRect& p = fe::g_panel_rect;
+    if (top + h + pad * 1.5f > p.y0 && top < p.y1 && pad + w > p.x0 - pad) {
+      const float room = p.x0 - 2.0f * pad;
+      if (room < w * 0.5f) return;
+      w = room; max_w = w - 2 * pad;
+    }
+  }
+  out.shapes.push_back({pad, top, pad + w, top + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+  out.texts.push_back({pad + pad, top + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, hud, max_w});
 }
 }  // namespace host
 

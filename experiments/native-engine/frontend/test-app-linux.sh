@@ -10,6 +10,7 @@
 #   boot     no arguments, a made-up user.json: the home screen, A (PLAY): the game boots into its menus (Slippi's Online Play page)
 #   home     the home screen's pages (Play, Multiplayer Lobby, Replay Viewer, Mods), the panel from its Settings page, PLAY
 #   panel    the panel in the game: each of its eight categories (screenshots)
+#   menupages  every category scrolled to its end and the Training section, screenshots; MU_TEST_SCREEN=1920x1080 for a television
 #   menu     the panel (L + R + Start): AUDIO Volume 100 -> 70, Music volume 100 -> 80, OVERLAYS Performance HUD on, the Practice
 #            chord opens GAME on Training: "Inputs and frame advantage" on (saved as lab_overlay 1); a second start reads them back
 #   handover the panel with the D-pad, closed with B held for 12 retraces, then A in the game: the closing B never reaches the game
@@ -91,8 +92,8 @@ mock_args=""; [ -z "${MU_DEAD_FIRST:-}" ] || mock_args="--dead-first $MU_DEAD_FI
 run() {
   local dir=$1 body=$2
   timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-app}-$case-$$-$RANDOM" --network none -e BIN="$bin" -e SAN_ENV="$san_env" -e MOCK_ARGS="$mock_args" -e LP_NUM_THREADS -v "$disc:/iso:ro" -v "$work/out:/b:ro" -v "$here/../tools:/t:ro" -v "$dir:/out" \
-    -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
-      Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/out/xvfb.log 2>&1 &
+    -e SDL_AUDIODRIVER=dummy -e XDG_RUNTIME_DIR=/tmp -e TEST_SCREEN="${MU_TEST_SCREEN:-1280x720}" "${MU_GFX_IMAGE:-mu-arm-gfx}" bash -c '
+      Xvfb :99 -screen 0 ${TEST_SCREEN}x24 -nolisten tcp >/out/xvfb.log 2>&1 &
       export DISPLAY=:99
       [ -z "$SAN_ENV" ] || export "$SAN_ENV"
       for i in $(seq 100); do xwd -root -silent >/dev/null 2>&1 && break; sleep 0.1; done
@@ -201,7 +202,7 @@ for case in "$@"; do
       grep -a "phob test: menu pad" "$sub/console.log" | awk '{print $NF}' | uniq | tr '\n' ' '; echo "(screens visited)"
     }
     mkdir -p "$dir"
-    phob_run nav 0 "" "Open the PhobGCC menu (PhobVision, setups, remap)" "60000 128 128 128 128 0 0" \
+    phob_run nav 0 "" "Open the PhobGCC menu" "60000 128 128 128 128 0 0" \
       'tap DD; tap A; sleep 0.5; shot settings-on; for i in 1 2 3 4 5; do tap DD; done; tap A; sleep 0.8; shot setups
        tap DD; tap DD; tap A; sleep 0.8; shot setup-saved; tap B; sleep 0.5; tap DU; tap DU; tap A; sleep 0.5; tap A; sleep 2; shot inputview
        tap B; sleep 0.4; tap B; sleep 0.4; tap B; sleep 2; shot back-to-panel; tap START; sleep 1'
@@ -214,26 +215,26 @@ for case in "$@"; do
 4 110 128 128 128 0 0
 5 92 128 128 128 0 0
 6 118 128 128 128 0 0"; done
-    phob_run scope 27 "input:0" "Open the PhobGCC menu (PhobVision, setups, remap)" "4000 128 128 128 128 0 0$flicks
+    phob_run scope 27 "input:0" "Open the PhobGCC menu" "4000 128 128 128 128 0 0$flicks
 2000 128 128 128 128 0 0" \
       'sleep 12; shot snapback; tap B; sleep 0.4; tap B; sleep 0.4; for i in 1 2 3 4 5; do tap DD; done; tap A; sleep 1.5; shot phobcheck; tap START'
     circle=""; for a in 0 30 60 90 120 150 180 210 240 270 300 330 360; do x=$(python3 -c "import math;print(int(128+100*math.cos(math.radians($a))))"); y=$(python3 -c "import math;print(int(128+100*math.sin(math.radians($a))))"); circle="$circle
 40 $x $y 128 128 0 0"; done
-    phob_run stickmap 26 "map:2" "Open the PhobGCC menu (PhobVision, setups, remap)" "6000 128 128 128 128 0 0$circle$circle$circle
+    phob_run stickmap 26 "map:2" "Open the PhobGCC menu" "6000 128 128 128 128 0 0$circle$circle$circle
 8000 128 128 128 128 0 0$circle$circle$circle$circle
 3000 128 128 128 128 0 0" \
       'tap START; sleep 4; shot stickmap; tap B; sleep 0.4; for i in 1 2 3 4 5 6; do tap DD; done; tap A; sleep 4; shot gate; tap START'
     presses=""; for i in $(seq 70); do presses="$presses
 60 128 128 128 128 0 0 A
 140 128 128 128 128 0 0"; done
-    phob_run reaction 29 "" "Open the PhobGCC menu (PhobVision, setups, remap)" "3000 128 128 128 128 0 0$presses" \
+    phob_run reaction 29 "" "Open the PhobGCC menu" "3000 128 128 128 128 0 0$presses" \
       'tap START; sleep 11; shot reaction; tap B; sleep 0.5; tap START'
-    phob_run remap 18 "remap:0" "Open the PhobGCC menu (PhobVision, setups, remap)" "3000 128 128 128 128 0 0
+    phob_run remap 18 "remap:0" "Open the PhobGCC menu" "3000 128 128 128 128 0 0
 120 128 128 128 128 0 0 B
 30000 128 128 128 128 0 0" \
       'sleep 5; shot remap; tap START'
     echo "port1.ini after the remap: $(grep -i 'remap' "$dir/remap/melee-nx-netplay/PhobGCC/port1.ini" 2>/dev/null | tr '\n' ' ')"
-    phob_run coord 35 "zoom:2" "Controller test (PhobScope, Phob Check)" "3000 128 128 128 128 0 0
+    phob_run coord 35 "zoom:2" "Controller test" "3000 128 128 128 128 0 0
 2500 200 185 128 128 0 0
 30000 128 128 128 128 0 0" \
       'sleep 2; shot coord; sleep 1.5; tap B; sleep 0.5; shot scope-top; tap START'
@@ -375,6 +376,36 @@ for case in "$@"; do
         tap DU; tap A; sleep 1; shot home-play-focus; tap A; }
       wait_log /out/console.log "play: options" 60 && sleep 12 && shot game
       wait $app'
+    ;;
+  menupages)
+    # Every category of the settings panel scrolled to its end, for reading at television size: L + R + Start, then on each
+    # category A, a screenshot every six rows (D-pad down) until the focus stops moving, B; then the Practice chord's Training
+    # section. MU_TEST_SCREEN=1920x1080 runs it on a 1920x1080 screen with a window that size (launcher.ini window=); the shots go to
+    # run-app/menupages-<screen>/shots/<category>-NN.png.
+    screen="${MU_TEST_SCREEN:-1280x720}"; dir="$root/menupages-$screen"
+    make_app "$dir" 1 90000 - home=0 "window=$screen"
+    MU_TEST_LIMIT=${MU_TEST_LIMIT:-2400} run "$dir" 'export MELEE_PAD_FILE=/out/pad.txt; pad ""
+      lastfocus() { grep -a "settings: focus" /out/console.log | tail -1; }
+      cd /out && (/b/$BIN > /out/console.log 2>&1; echo "exit code $?" >> /out/console.log) &
+      app=$!
+      wait_log /out/console.log "online menu: row 1" 180 && sleep 3
+      pad "L R START"; sleep 1.2; pad ""; sleep 2; shot categories
+      for page in video audio game controls overlays customize gecko mods; do
+        tap A; sleep 2; shot "$page-00"; n=0; same=0; last=""
+        while [ $n -lt 400 ] && [ $same -lt 3 ]; do
+          tap DD 0.12 0.35; n=$((n+1)); now="$(lastfocus)"
+          if [ "$now" = "$last" ]; then same=$((same+1)); else same=0; fi; last="$now"
+          [ $((n % 6)) = 0 ] && { sleep 0.5; shot "$(printf "%s-%02d" $page $((n / 6)))"; }
+        done
+        sleep 0.5; shot "$page-end"; echo "$page: $n rows" >> /out/harness.log
+        tap B; sleep 1; tap DD
+      done
+      tap START; sleep 1.5
+      pad "START DU Z"; sleep 0.3; pad ""; sleep 2
+      for i in $(seq 200); do [ "$(lastfocus)" = "settings: focus Go to Training (offline)" ] && break; tap DD 0.12 0.3; done
+      sleep 0.5; shot training-00
+      for i in 1 2 3 4 5 6 7 8 9; do for k in 1 2 3 4 5 6; do tap DD 0.12 0.3; done; sleep 0.5; shot "training-0$i"; done
+      tap START; sleep 1; kill $app 2>/dev/null; wait $app'
     ;;
   panel)
     # melee-unlocked's settings panel in the game, driven by the test pad file only: L + R + Start on the main menu, each of its

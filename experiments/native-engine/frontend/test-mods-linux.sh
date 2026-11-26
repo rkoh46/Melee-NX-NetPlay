@@ -118,13 +118,15 @@ for case in "$@"; do
         # the walk through the categories from VIDEO depended on where the panel had its focus and timed out when it was not there.
         pad "START DU Z"; sleep 0.3; pad ""; sleep 1.5
         # The panel opens on GAME with its focus at the category'"'"'s top; the Training rows sit far below (more with mod profiles).
+        # Its rows: Practice CPU > Practice CPU (Off or a preset), Practice CPU slots > Save to slot 1 / Load slot 1, then Random
+        # numbers > Mode and Seed (the "Random numbers" rows), each found by the label the panel shows.
         for i in $(seq 420); do [ "$(grep -a "settings: focus" /out/console.log | tail -1)" = "settings: focus Practice CPU" ] && break; pad DD; sleep 0.08; pad ""; sleep 0.25; done
         tap DR
-        focus "Random numbers (items, turnips)"; tap DR
-        focus "Random numbers: seed number"; tap DR; tap DR; tap DR
-        focus "Practice CPU: save to slot 1"; tap A
+        focus "Mode"; tap DR
+        focus "Seed"; tap DR; tap DR; tap DR
+        focus "Save to slot 1" DU; tap A
         focus "Practice CPU" DU; tap DL
-        focus "Practice CPU: load slot 1"; tap A
+        focus "Load slot 1"; tap A
         tap B; tap START
         wait $pid; echo "exit code $?" >> /out/console.log' || echo "test-mods-linux: container ended with $?"
     echo "settings.ini lines set:"; grep -vE "^#|^$" "$dir/melee-nx-netplay/settings.ini" || true

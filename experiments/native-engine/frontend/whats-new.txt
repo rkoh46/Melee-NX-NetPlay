@@ -1,5 +1,6 @@
 # What's new: the home screen shows these lines when a new version starts for the first time (src/mu_home.cpp).
 # One line each, newest first; lines starting with # are left out.
+Settings: easier to read on a TV: bigger text at 1080p, the game dimmed behind the panel, one-line value rows, Training's options grouped (Practice CPU, Lab dummy, slots, throws).
 Controls: a USB keyboard works as a controller (melee-unlocked's layout, every key rebindable) and for typing searches and codes.
 Stages: hold L, R, Z, B, X or Y as a stage loads for a mod disc's alternate stage; Z on Pokemon Stadium freezes it.
 Online: leave a Party match with L + R + A + Start. Replays: UCF 0.8 replays (Slippi before 2024) play back as recorded.

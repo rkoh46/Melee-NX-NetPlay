@@ -1005,6 +1005,18 @@ NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's n
   keyboard's, the styles above). `menu_open_extra(title)` opens the category holding that page, and the focus walks down to
   it as a player's D-pad would. Practice menu: a "Practice menu" row on GAME > Training when features/proai.cpp is linked.
   Log lines: `settings: opened on ...`, `settings: <CATEGORY>`, `settings: focus <row>` (the tests follow these).
+- **Read from the couch** (`src/mu_panel.cpp`, every style; the Mac port has the same code): the panel is laid out in
+  melee-unlocked's own pixels on a canvas 640 high and drawn scaled to the screen (`UiSpace`: 1.125x at 720p, 1.6875x at 1080p,
+  every vertex and clip rectangle), with Source Sans 3 rasterised for each of those sizes, so body text is 18 px handheld and
+  27 px on a television instead of 16 px at both; Clean side is wider (46 % of the screen, 440 to 620 canvas pixels); a dark
+  scrim (58 %) dims the game behind the panel, under the HUD, which moves to the bottom left while the panel is up. A value
+  row the app's pages step is one line, label left and `< value >` right in a box of one width per page, whenever both fit at
+  full size (else the label above the field, as before); the focused row's arrows take the accent. Long labels of the app's
+  pages are shortened and their explanation is the focused row's description, one or two lines under the list; labels that
+  name a group become rows under that group's heading (GAME > Training: Training, Lab dummy, Practice CPU, Practice CPU
+  throws, Practice CPU slots, Random numbers; GAME > Replays: Replay takeover). Only what is shown changes: each row keeps
+  its page item, order and keys. The focused row keeps a row and a half visible below and above it. `test-app-linux.sh
+  menupages` (and `MU_TEST_SCREEN=1920x1080`) captures every category scrolled to its end.
 - **Before the game** (`src/mu_home.cpp`): the launcher's rail (mark, Play, Settings, Multiplayer Lobby, Replay Viewer, Mods, Bailey) and content
   column at its 720 x 480 layout scaled to the screen (1.5 at 720p, 2.25 at 1080p). Play: the disc, GAME BUILD (Source Port or
   Vanilla), PLAY, the version line with the build computer's update ("Update and restart": download, check, swap, then the app
