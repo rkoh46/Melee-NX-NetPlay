@@ -851,7 +851,13 @@ none of these has been measured on the console's GPU.
   MU_USER_B=scripts/users/direct-b MU_FILES_A=scripts/gecko_online_a MU_FILES_B=scripts/gecko_online_b
   MU_INI_A=scripts/gecko_online_a.ini MU_INI_B=scripts/gecko_online_b.ini MU_ENV_B="MU_TEST_GECKO_ACCEPT=all MELEE_NET_LAG_MS=40
   MELEE_NET_JITTER_MS=10" MU_ENV_A="MELEE_NET_LAG_MS=40 MELEE_NET_JITTER_MS=10"`. Fixed with it: the player's own codes never
-  ran, because they were read before the game image (and its writer) was loaded.
+  ran, because they were read before the game image (and its writer) was loaded. Fixed after it (`../patches/net-0015`, the Mac
+  port's mac-0003): the session started at the first poll that read as connected, before the other build's message had come, so
+  a side whose opponent finished connecting later never offered its codes; it now waits for that message, at most 3 s. Test:
+  `MU_GECKO_RACE=on|off ./test-online-linux.sh DISC` (40 ms lag, side b connecting 1 s late with the test aid
+  `MELEE_NET_TEST_SLOW_CONNECT_MS=1000`; on: 1 code agreed on both sides, off: nothing exchanged; IDENTICAL; the last line says
+  PASS or FAIL). The Mac's other fix in that change (a side with no code of its own never bound the agreed writer) does not apply
+  here: `load_codes` binds it at the game's table call whatever is switched on.
 - **PC Settings in Melee's Options menu** (`features/pcsettings.cpp`): a line names Z while the Options menu is open, and Z there
   opens the settings panel (`pcsettings_row 0` turns it off). Test: `./test-app-linux.sh DISC pcsettings`.
 - **Lab dummy** (`features/training.cpp`): `lab_di 0..3` (none, in, out, random), `lab_react 0..3` (nothing, jump, shield, spot
@@ -1013,7 +1019,7 @@ NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's n
   Search, Folder... and Open replay... (an SD card browser), Compress all (.slpz), the session trace graph. Mods: each card's skin
   count and Choose skins; the catalog refreshed from upstream's raw URL at each start (`MU_NO_CATALOG_REFRESH=1` skips it).
   Test aids: `MELEE_TRACE_SLIPPI_CMDS=1` (play mode logs each menu command), `MELEE_NET_LAG_MS`, `MELEE_NET_JITTER_MS`,
-  `MELEE_NET_LOSS_PCT` (patches/net-0012). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
+  `MELEE_NET_LOSS_PCT` (patches/net-0012), `MELEE_NET_TEST_SLOW_CONNECT_MS` (patches/net-0015). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 

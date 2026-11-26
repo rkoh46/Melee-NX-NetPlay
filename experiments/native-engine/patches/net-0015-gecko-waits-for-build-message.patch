@@ -1,0 +1,107 @@
+Gecko codes online wait for the other build's message (patches/net-0015, on net-0014; the Mac port's mac-0003): the session started
+at the first poll that read as connected, before the other side's build message (sent with the connection) had arrived, so with
+40 ms of lag, or a peer that finished connecting later, a side that had turned codes on started without consent and never offered
+them. It now waits for every other player's build message, at most 3 s (Slippi Dolphin and melee-unlocked send none: no consent,
+as before). The rules and messages are unchanged: the wire format is net-0014's. MELEE_NET_TEST_SLOW_CONNECT_MS=N (tests only)
+finishes this side's connection N ms late, which lands the other side in that window every time. Applied by ../net_sources.sh
+after net-0014.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/hle/slippi_net.h
++++ b/port/runtime/hle/slippi_net.h
+@@ -237,6 +237,7 @@
+   // SendNxGecko queues one message to that peer; PopNxGecko hands the game thread the next one received. ResendSelections
+   // sends this side's selection again behind a fresh lock (the codes were agreed after it locked in).
+   bool GeckoPeer() const;
++  bool RemoteBuildsReceived() const;   // patches/net-0015: every other player's build message has arrived
+   bool SendNxGecko(const std::vector<uint8_t>& message);
+   bool PopNxGecko(std::vector<uint8_t>& out);
+   void ResendSelections();
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -768,6 +768,15 @@
+     fallback_due[i] = true;
+   }
+   bool fallback_logged = false;
++  // patches/net-0015, tests only: MELEE_NET_TEST_SLOW_CONNECT_MS=N keeps this side connecting N ms (up to half a second more)
++  // after its peers have answered: ENet is still serviced, so the other side reads as connected, but this side's build message
++  // goes out late, as from a console that finished connecting later. Unset, nothing changes.
++  static const uint64_t test_slow_connect_ms = [] {
++    const char* s = std::getenv("MELEE_NET_TEST_SLOW_CONNECT_MS");
++    const long v = s ? std::atol(s) : 0;
++    return v > 0 && v <= 10000 ? (uint64_t)v : 0;
++  }();
++  uint64_t test_slow_since = 0;
+ 
+   while (status_.load(std::memory_order_acquire) == ConnectStatus::INITIATED) {
+     ENetEvent ev;
+@@ -834,6 +843,10 @@
+     }
+     bool all = true;
+     for (int i = 0; i < remote_player_count_; ++i) if (!connections[i]) all = false;
++    if (all && test_slow_connect_ms) {   // patches/net-0015 (tests only)
++      if (!test_slow_since) { test_slow_since = time_ms(); host::log("slippi: test aid: the connection finishes %llu ms late", (unsigned long long)test_slow_connect_ms); }
++      if (time_ms() - test_slow_since < test_slow_connect_ms) continue;
++    }
+     if (all) {
+       client_->intercept = intercept_callback;
+       host::log("slippi: online connection successful");
+@@ -1148,6 +1161,13 @@
+   for (int port = 0; port < 4; ++port) if (port != player_idx_ && remote_nx_[port].received) return remote_nx_[port].gecko;
+   return false;
+ }
++// patches/net-0015: every other player's build message has arrived.
++bool NetplayClient::RemoteBuildsReceived() const {
++  std::lock_guard<std::mutex> lk(nx_mutex_);
++  int seen = 0;
++  for (int port = 0; port < 4; ++port) if (port != player_idx_ && remote_nx_[port].received) ++seen;
++  return remote_player_count_ > 0 && seen >= remote_player_count_;
++}
+ bool NetplayClient::SendNxGecko(const std::vector<uint8_t>& message) {
+   if (!GeckoPeer() || message.empty()) return false;
+   auto p = std::make_unique<Packet>();
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -93,6 +93,7 @@
+ Config g_config;
+ bool g_initialized = false;
+ bool g_gecko_connected = false;   // patches/net-0014: this connection's Gecko session was started
++std::chrono::steady_clock::time_point g_gecko_wait_since;   // patches/net-0015: when this connection began waiting for the other build's message
+ // Local two-instance peering is a test harness: never report those games or fetch ranks for them.
+ static bool reporting_enabled() { return !Matchmaking::local_peer.enabled; }
+ bool g_offline = true;
+@@ -392,6 +393,7 @@
+ void cleanup_connection() {
+   host::log("slippi: connection cleanup%s", g_search_kept ? " (the kept search ends)" : "");
+   if (g_gecko_connected) { g_gecko_connected = false; if (mu_net_gecko_disconnected) mu_net_gecko_disconnected(); }   // patches/net-0014
++  g_gecko_wait_since = {};   // patches/net-0015
+   g_search_kept = false;     // patches/net-0005
+   g_pick_sent = false;
+   suggest::stop("connection cleanup");
+@@ -908,11 +910,23 @@
+     // take Gecko messages (each player turned it on); then every poll its messages go both ways and a fresh lock follows an
+     // agreement (the selection is sent again behind it).
+     if (connected && mu_net_gecko_connected) {
++      // patches/net-0015: the other build's message comes with the connection but can arrive a poll or more after the
++      // connection reads as connected (40 ms of lag, or the other side finishing its connection later: the session then started
++      // without it, so a side that had turned codes on never offered them). The session waits for it, at most 3 s (Slippi
++      // Dolphin and melee-unlocked never send one: no consent then, as before).
+       if (!g_gecko_connected) {
+-        g_gecko_connected = true;
+-        const bool consent = g_last_search.mode == Matchmaking::DIRECT && g_matchmaking->RemotePlayerCount() == 1 && g_netplay->GeckoPeer();
+-        mu_net_gecko_connected(consent ? 1 : 0);
++        const auto now = std::chrono::steady_clock::now();
++        if (g_gecko_wait_since == std::chrono::steady_clock::time_point{}) g_gecko_wait_since = now;
++        const bool known = g_netplay->RemoteBuildsReceived();
++        if (known || now - g_gecko_wait_since > std::chrono::seconds(3)) {
++          g_gecko_connected = true;
++          if (!known) host::log("slippi: no build message from the other side after 3 s: Gecko codes online stay off (patches/net-0015)");
++          const bool consent = g_last_search.mode == Matchmaking::DIRECT && g_matchmaking->RemotePlayerCount() == 1 && g_netplay->GeckoPeer();
++          mu_net_gecko_connected(consent ? 1 : 0);
++        }
+       }
++    }
++    if (connected && mu_net_gecko_connected && g_gecko_connected) {
+       std::vector<uint8_t> message;
+       while (g_netplay->PopNxGecko(message)) if (mu_net_gecko_receive) mu_net_gecko_receive(message.data(), message.size());
+       uint8_t out[8192];

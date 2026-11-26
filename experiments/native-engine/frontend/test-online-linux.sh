@@ -27,6 +27,11 @@
 #   MU_VARIANT=null        the program without a graphics device (no picture, no controllers: pass MU_ARGS_A and MU_ARGS_B
 #                          "--online unranked"; the match is played by generated inputs). ThreadSanitizer runs use it: the
 #                          sanitizer's runtime can hang inside Mesa's software driver
+#   MU_GECKO_RACE=on|off   Gecko codes agreed online when the other build's message arrives late (../patches/net-0015): a Direct
+#                          1v1 with 40 ms of lag on both sides, side b (no code of its own, MU_TEST_GECKO_ACCEPT=all) finishing its
+#                          connection 1 s late (MELEE_NET_TEST_SLOW_CONNECT_MS=1000), side a offering "Giant P1 (VS)". on: both
+#                          players turned codes online on, expected 1 code agreed on both sides; off: neither did, expected nothing
+#                          exchanged. The last line says PASS or FAIL (the match scene's states must also be IDENTICAL)
 # Output: build/native-engine-gfx/run-online/{a,b}/ (console.log, picture.log, digest-net-confirmed.csv), mock.txt and shots/.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -35,6 +40,20 @@ repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; frames="${2:-4200}"; shift $(( $# > 2 ? 2 : $# ))
 work="$repo/build/native-engine-gfx"; run="$work/run-online"
 rm -rf "$run"; mkdir -p "$run/a" "$run/b" "$run/shots"
+case "${MU_GECKO_RACE:-}" in
+  "") ;;
+  on|off)
+    MU_PADS_A="$here/scripts/online_direct_a.txt" MU_PADS_B="$here/scripts/online_direct_b.txt"
+    MU_USER_A="$here/scripts/users/direct-a" MU_USER_B="$here/scripts/users/direct-b"
+    MU_FILES_A="$here/scripts/gecko_online_a" MU_FILES_B="$here/scripts/gecko_online_b"
+    if [ "$MU_GECKO_RACE" = on ]; then MU_INI_A="$here/scripts/gecko_online_a.ini" MU_INI_B="$here/scripts/gecko_online_b.ini"
+    else
+      grep -v '^gecko_online ' "$here/scripts/gecko_online_a.ini" > "$work/gecko-race-off-a.ini"; MU_INI_A="$work/gecko-race-off-a.ini"
+      grep -v '^gecko_online ' "$here/scripts/gecko_online_b.ini" > "$work/gecko-race-off-b.ini"; MU_INI_B="$work/gecko-race-off-b.ini"
+    fi
+    MU_ENV_A="MELEE_NET_LAG_MS=40" MU_ENV_B="MU_TEST_GECKO_ACCEPT=all MELEE_NET_LAG_MS=40 MELEE_NET_TEST_SLOW_CONNECT_MS=1000" ;;
+  *) echo "MU_GECKO_RACE must be on or off" >&2; exit 2 ;;
+esac
 # The menu script as committed for side a; side b moves its hand one icon further (Fox). Then, for both, lines keyed
 # on the retrace count, which the script uses on every screen it has no block for: in the match each side walks,
 # jumps and attacks on its own rhythm.
@@ -105,7 +124,7 @@ timeout "${MU_TEST_LIMIT:-900}" docker run --rm --name "${MU_DOCKER_NAME:-mnx-te
 # last match frame still in its state and a menu RNG that the two sides do not share, which would read as "different".
 if [ -f "$run/b/digest-net-confirmed.csv" ]; then
   for side in a b; do awk -F, '$2==8 && $3==2' "$run/$side/digest-net-confirmed.csv" > "$run/$side/digest-net-match.csv"; done
-  python3 -I "$here/../tools/compare_net_digests.py" "$run/a/digest-net-match.csv" "$run/b/digest-net-match.csv" | sed 's/^/confirmed states in the match scene: /'
+  python3 -I "$here/../tools/compare_net_digests.py" "$run/a/digest-net-match.csv" "$run/b/digest-net-match.csv" | sed 's/^/confirmed states in the match scene: /' | tee "$run/net-compare.txt"
 fi
 for side in a b; do
   [ -z "${MU_SANITIZE:-}" ] || echo "sanitizer reports $side: $(ls "$run/$side"/san.* 2>/dev/null | wc -l | tr -d ' ') files$(cat "$run/$side"/san.* 2>/dev/null | grep -cE '^(WARNING: ThreadSanitizer|==[0-9]+==ERROR: AddressSanitizer)' | sed 's/^/, reports: /')"
@@ -116,3 +135,20 @@ for side in a b; do
   echo "== $side"
   grep -E "^net|^play:|^online|^gecko|Gecko|skins off online|cosmetics: .*(online|standard)|slippi: (match id|opponent found|connected|online connection|matchmaking|logged in)|DIVERGED|desync|Desync|cannot|panic|STOPPED|picture: [0-9]+ frames finished" "$run/$side/console.log" | grep -v "net: slow frame\|^\[net\] slippi: \(netplay\|ping\)" | tail -40 | cut -c1-260
 done
+# MU_GECKO_RACE: the verdict. on: "1 codes agreed" and "runs 1 agreed codes" on both sides; off: no Gecko message either way and
+# no code run; both: the match scene IDENTICAL and no desync message from the game.
+if [ -n "${MU_GECKO_RACE:-}" ]; then
+  ok=1
+  for side in a b; do
+    log="$run/$side/console.log"
+    if [ "$MU_GECKO_RACE" = on ]; then
+      grep -q "gecko online: 1 codes agreed" "$log" 2>/dev/null && grep -q "gecko: this online match runs 1 agreed codes" "$log" || ok=0
+    else
+      grep -qE "gecko online: (offering|the opponent offers|[0-9]+ codes agreed)" "$log" 2>/dev/null && ok=0
+      grep -q "gecko: this online match runs 0 agreed codes" "$log" 2>/dev/null || ok=0
+    fi
+    grep -q " 0 desync messages from the game" "$log" 2>/dev/null || ok=0
+  done
+  grep -q "IDENTICAL state on both sides" "$run/net-compare.txt" 2>/dev/null || ok=0
+  echo "gecko race ($MU_GECKO_RACE): $([ $ok = 1 ] && echo PASS || echo FAIL)"
+fi
