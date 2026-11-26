@@ -9,6 +9,8 @@ Side b's netplay thread was held MS ms at online frame N (MELEE_NET_TEST_THREAD_
     events, 0x41), and the game report came before the match ended;
   - side b logged its late input with the test stall named as the step that held it, and side a logged the silence from
     the opponent with its own thread free (so the delay is put on the network or the other side);
+  - side a, which sends no socket wake-ups (MELEE_NET_TEST_NO_WAKE, as on the console), has no late input at all, the
+    opponent's silence included;
   - no other late input (20 ms or more from the game's queue to the socket) and no other silence of 100 ms or more
     after the match's first 300 frames (first-time loads pause a software-rendered test game there);
   - no tick waiting for the opponent's inputs from 30 frames before to 150 frames after each transformation event;
@@ -82,6 +84,9 @@ for side, s in sides.items():
         if not any(ms >= stall_ms * 0.8 and near_stall(f) and step.startswith('test stall') for ms, f, step in late):
             fail(f'b: no late input of about {stall_ms} ms naming the test stall near online frame {stall_frame}')
     else:
+        # Side a sends no wake-ups (MELEE_NET_TEST_NO_WAKE, as on the console): its inputs must still leave on time while
+        # the opponent is silent (patches/net-0017's 2 ms cap on the netplay thread's wait).
+        if late: fail(f'a: {len(late)} late inputs without wake-ups, the worst {max(x[0] for x in late):.1f} ms at online frame {max(late)[1]}')
         if not any(ms >= stall_ms * 0.6 and near_stall(f1) and what.startswith('was free (the network') for ms, f0, f1, what in quiet):
             fail(f'a: no silence of about {stall_ms} ms from the stalled opponent with this side\'s thread free near online frame {stall_frame}')
     others = [x for x in late if not near_stall(x[1]) and x[1] >= START] + [x for x in quiet if not near_stall(x[2]) and x[1] >= START]

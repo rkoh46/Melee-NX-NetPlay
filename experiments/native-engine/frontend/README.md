@@ -1021,7 +1021,7 @@ NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's n
   Test aids: `MELEE_TRACE_SLIPPI_CMDS=1` (play mode logs each menu command), `MELEE_NET_LAG_MS`, `MELEE_NET_JITTER_MS`,
   `MELEE_NET_LOSS_PCT` (patches/net-0012), `MELEE_NET_TEST_SLOW_CONNECT_MS` (patches/net-0015), `MELEE_NET_TEST_THREAD_STALL=FRAME:MS` (patches/net-0016). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
 
-### Online stalls: this side or the network (patches/net-0016)
+### Online stalls: this side or the network (patches/net-0016, net-0017)
 
 A 2026-11-26 Unranked game on Pokemon Stadium (console on a satellite connection, the opponent on Slippi Dolphin) halted
 twice waiting for the opponent's inputs: 16 ticks at online frame 1986 and 4 + 12 ticks at 4221 and 4233, each time with
@@ -1054,8 +1054,23 @@ online frame 1500 by `MELEE_NET_TEST_THREAD_STALL=1500:300`): two transformation
 at 5894..6500), 0 waits from 30 frames before to 150 after every event on both sides, worst queue-to-socket 2.2 ms and longest
 netplay step 5.2 ms there, ping 94..97 ms; whole match queue to socket p50 0.1 ms, p99 0.9 ms; side b `our input left
 304.9 ms ... test stall`, side a `nothing from the opponent for 311 ms ... was free (the network or the opponent's side)`;
-network.csv (151 rows) written after the last online frame; settled states IDENTICAL; `stadium: PASS`. Linux does not
-reproduce the halts: the next console session's log names the side.
+network.csv (151 rows) written after the last online frame; settled states IDENTICAL; `stadium: PASS`.
+
+The console's own network.csv from those games then showed our side's share. In every halt, one enet_host_service call lasted
+as long as the opponent's silence (401 ms against a 426 ms gap in the row of online frame 2019, 227/229 ms at 4233; earlier
+games 351/355, 282/295, 186/186) while our queued inputs piled up behind it (queue_max 25, 13, 20, 16, 10). The game queues an
+input and the waker thread sends a datagram to the netplay thread's own socket to end its wait; on the console that wake-up
+did not end it, so our inputs left only with the opponent's next packet, the opponent ran out of ours as well, and each halt
+lasted about twice as long as the network's gap. The SD card write was not in that time: the netplay thread wrote the row
+after the service call, and service_ms_max_us times enet_host_service alone (its wait, ENet's sends and receives). net-0017
+caps that wait at 2 ms in a match (250 ms outside one), so what the game queued leaves within 2 ms with or without a
+wake-up, and counts the wake-ups (network.csv `wakes_sent`, `wakes_seen`, `wake_send_max_us`; the late-input line says how
+many were sent and reached the wait meanwhile; a line at the game's end gives the totals; the network.csv write logs its
+time, on its own thread after the match). A wait longer than the cap shows as a held-up `enet_host_service` step: a blocking
+socket call. `MU_STADIUM=1` now runs side a with `MELEE_NET_TEST_NO_WAKE=1` (no wake-ups, as on the console): PASS, side a's
+inputs queue to socket p50 0.6 ms, p99 3.5 ms, worst 8.2 ms, no late input through side b's 300 ms stall, 0 waits around
+both transformations. The same run with the old wait (`MU_ENV_A=MELEE_NET_SERVICE_MS=250`) has the console's signature:
+side a `our input left 240.7 ms ... longest step meanwhile: enet_host_service` during the opponent's silence, FAIL.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 

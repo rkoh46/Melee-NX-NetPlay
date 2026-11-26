@@ -34,7 +34,8 @@
 #                          exchanged. The last line says PASS or FAIL (the match scene's states must also be IDENTICAL)
 #   MU_STADIUM=1           Pokemon Stadium (the stand-in's --stages 3) with 45 ms of lag each way, long enough for two
 #                          transformations (default 8400 retraces); side b's netplay thread is held 300 ms once at online
-#                          frame 1500 (MELEE_NET_TEST_THREAD_STALL, ../patches/net-0016). ../tools/stadium_stall_check.py
+#                          frame 1500 (MELEE_NET_TEST_THREAD_STALL, ../patches/net-0016); side a sends no socket wake-ups
+#                          (MELEE_NET_TEST_NO_WAKE, as on the console: ../patches/net-0017). ../tools/stadium_stall_check.py
 #                          says PASS or FAIL: no late input, silence or wait around the transformations, the held thread
 #                          named on side b and the silence put on the other side by side a, network.csv written after the game
 # Output: build/native-engine-gfx/run-online/{a,b}/ (console.log, picture.log, digest-net-confirmed.csv), mock.txt and shots/.
@@ -48,7 +49,7 @@ rm -rf "$run"; mkdir -p "$run/a" "$run/b" "$run/shots"
 if [ "${MU_STADIUM:-0}" = 1 ]; then
   [ "$frames" != 4200 ] || frames=9600
   MU_MOCK_ARGS="${MU_MOCK_ARGS:-} --stages 3"
-  MU_ENV_A="${MU_ENV_A:-} MELEE_NET_LAG_MS=45" MU_ENV_B="${MU_ENV_B:-} MELEE_NET_LAG_MS=45 MELEE_NET_TEST_THREAD_STALL=1500:300"
+  MU_ENV_A="${MU_ENV_A:-} MELEE_NET_LAG_MS=45 MELEE_NET_TEST_NO_WAKE=1" MU_ENV_B="${MU_ENV_B:-} MELEE_NET_LAG_MS=45 MELEE_NET_TEST_THREAD_STALL=1500:300"
   printf 'slippi_menus 1\nsession_trace 2\n' > "$work/stadium.ini"
   MU_INI_A="${MU_INI_A:-$work/stadium.ini}" MU_INI_B="${MU_INI_B:-$work/stadium.ini}"
   # The controller scripts play (no generated inputs) and only jump in place and crouch, so no one is knocked out
