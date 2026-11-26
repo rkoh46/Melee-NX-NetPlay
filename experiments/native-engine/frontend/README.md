@@ -1019,7 +1019,43 @@ NRO's icon. whats-new.txt (this repository's) becomes the home screen's What's n
   Search, Folder... and Open replay... (an SD card browser), Compress all (.slpz), the session trace graph. Mods: each card's skin
   count and Choose skins; the catalog refreshed from upstream's raw URL at each start (`MU_NO_CATALOG_REFRESH=1` skips it).
   Test aids: `MELEE_TRACE_SLIPPI_CMDS=1` (play mode logs each menu command), `MELEE_NET_LAG_MS`, `MELEE_NET_JITTER_MS`,
-  `MELEE_NET_LOSS_PCT` (patches/net-0012), `MELEE_NET_TEST_SLOW_CONNECT_MS` (patches/net-0015). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
+  `MELEE_NET_LOSS_PCT` (patches/net-0012), `MELEE_NET_TEST_SLOW_CONNECT_MS` (patches/net-0015), `MELEE_NET_TEST_THREAD_STALL=FRAME:MS` (patches/net-0016). test-app-linux.sh cases `styles`, `launcher`, `replaylib`, `crashreport`, `egg`.
+
+### Online stalls: this side or the network (patches/net-0016)
+
+A 2026-11-26 Unranked game on Pokemon Stadium (console on a satellite connection, the opponent on Slippi Dolphin) halted
+twice waiting for the opponent's inputs: 16 ticks at online frame 1986 and 4 + 12 ticks at 4221 and 4233, each time with
+the ping jumping (89 to 422 ms, 103 to 265 and 315 ms) while the console's own frames stayed at about 4 ms of work. Lined up
+with the replay's transformation events (online frame = replay frame + 124): the second halt fell 11 to 23 frames into the
+Rock form's rise (replay frames 4086..4207); the first fell in no transformation at all (the first one starts at 3601); every
+other phase of the three transformations in the game (the second Rock rise included) had no wait and no ping rise. The
+session trace's ping rises instead sit on a 15-second grid: 41.9, 56.9, 11.9, 41.6 and 26.9 s past the minute by the
+console's clock, the :12/:27/:42/:57 schedule on which the satellite network moves each dish to another satellite (5 of the
+12 such moments in the game show a rise of 120 ms or more, 1 of 11 control moments 7.5 s later, and that one is the halt
+at 1986). Nothing of ours runs on that clock, and the netplay thread has no disc, GPU or shader work on its path; the
+Stadium's transformation file is read on the simulation thread (a synchronous read at the countdown's end, or its first
+frame with Slippi's preload code), not in either halt: replay frame 3601 at the latest for the Rock form.
+
+One write from the netplay thread did exist: net_diag appended and flushed a network.csv row every second during a match,
+which on the console is an SD card write from the thread that sends our inputs. net-0016 keeps the rows in memory and writes
+them after the game report (a thread of its own; at program end if the match never ended) and times every step of the
+netplay thread's loop. In the log of a console session:
+- `slippi: netplay thread: our input left N ms after the game queued it (online frame F); longest step meanwhile: STEP` for
+  an input 20 ms or more on its way to the socket;
+- `slippi: netplay thread: nothing from the opponent for N ms (online frames F0 to F1); this side's thread was free (the
+  network or the opponent's side) ... | was held up: STEP ...; our game's longest pause between inputs M ms` for 100 ms
+  or more without a packet (a pause of our own game is named too: the opponent then waits for us);
+- at the game's end, `slippi: netplay thread: N sends, queue to socket p50 / p99 / worst ...`. network.csv gains the
+  columns `send_delay_max_us`, `thread_step_max_us`, `thread_step_max` (an older file is kept as network-old.csv).
+
+`MU_STADIUM=1 ./test-online-linux.sh DISC` (Pokemon Stadium through the stand-in's `--stages 3`, 45 ms of lag each way, the
+controller scripts jumping and crouching so no one is knocked out, 9600 retraces; side b's netplay thread held 300 ms at
+online frame 1500 by `MELEE_NET_TEST_THREAD_STALL=1500:300`): two transformations (Grass at replay frames 3677..4284, Normal
+at 5894..6500), 0 waits from 30 frames before to 150 after every event on both sides, worst queue-to-socket 2.2 ms and longest
+netplay step 5.2 ms there, ping 94..97 ms; whole match queue to socket p50 0.1 ms, p99 0.9 ms; side b `our input left
+304.9 ms ... test stall`, side a `nothing from the opponent for 311 ms ... was free (the network or the opponent's side)`;
+network.csv (151 rows) written after the last online frame; settled states IDENTICAL; `stadium: PASS`. Linux does not
+reproduce the halts: the next console session's log names the side.
 
 ## The app: Melee-NX-NetPlay 0.4.2
 

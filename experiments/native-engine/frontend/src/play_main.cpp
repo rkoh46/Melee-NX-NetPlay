@@ -524,9 +524,9 @@ int play_main() {
     if (&fe::features::online_replay_for_report) net_host::set_replay_path_hook(fe::features::online_replay_for_report);   // Slippi's replay upload
     if (const int code = net_host::start(net, net_say)) { say("play: netplay could not start (%d)", code); screens_stop(); log_close(); return code; }
     net_on = true;
-    // Tests (input suggestions): MU_NET_CONTROLLERS=1 lets the controllers, or the controller script, play a direct match
-    // instead of the game's generated test inputs (the netplay host asks for those in a direct run).
-    if (direct && std::getenv("MU_NET_CONTROLLERS") && std::getenv("MELEE_ONLINE_TEST_INPUTS")) {
+    // Tests (input suggestions, test-online-linux.sh MU_STADIUM): MU_NET_CONTROLLERS=1 lets the controllers, or the controller
+    // script, play the match instead of the game's generated test inputs (the netplay host asks for those when given a seed).
+    if (std::getenv("MU_NET_CONTROLLERS") && std::getenv("MELEE_ONLINE_TEST_INPUTS")) {
       unsetenv("MELEE_ONLINE_TEST_INPUTS");
       say("play: netplay test: the controllers play the match, not the generated inputs (MU_NET_CONTROLLERS)");
     }

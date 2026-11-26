@@ -32,6 +32,11 @@
 #                          connection 1 s late (MELEE_NET_TEST_SLOW_CONNECT_MS=1000), side a offering "Giant P1 (VS)". on: both
 #                          players turned codes online on, expected 1 code agreed on both sides; off: neither did, expected nothing
 #                          exchanged. The last line says PASS or FAIL (the match scene's states must also be IDENTICAL)
+#   MU_STADIUM=1           Pokemon Stadium (the stand-in's --stages 3) with 45 ms of lag each way, long enough for two
+#                          transformations (default 8400 retraces); side b's netplay thread is held 300 ms once at online
+#                          frame 1500 (MELEE_NET_TEST_THREAD_STALL, ../patches/net-0016). ../tools/stadium_stall_check.py
+#                          says PASS or FAIL: no late input, silence or wait around the transformations, the held thread
+#                          named on side b and the silence put on the other side by side a, network.csv written after the game
 # Output: build/native-engine-gfx/run-online/{a,b}/ (console.log, picture.log, digest-net-confirmed.csv), mock.txt and shots/.
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -40,6 +45,16 @@ repo="$(cd "$here/../../.." && pwd -P)"
 disc="${1:?folder with GALE01.iso}"; frames="${2:-4200}"; shift $(( $# > 2 ? 2 : $# ))
 work="$repo/build/native-engine-gfx"; run="$work/run-online"
 rm -rf "$run"; mkdir -p "$run/a" "$run/b" "$run/shots"
+if [ "${MU_STADIUM:-0}" = 1 ]; then
+  [ "$frames" != 4200 ] || frames=9600
+  MU_MOCK_ARGS="${MU_MOCK_ARGS:-} --stages 3"
+  MU_ENV_A="${MU_ENV_A:-} MELEE_NET_LAG_MS=45" MU_ENV_B="${MU_ENV_B:-} MELEE_NET_LAG_MS=45 MELEE_NET_TEST_THREAD_STALL=1500:300"
+  printf 'slippi_menus 1\nsession_trace 2\n' > "$work/stadium.ini"
+  MU_INI_A="${MU_INI_A:-$work/stadium.ini}" MU_INI_B="${MU_INI_B:-$work/stadium.ini}"
+  # The controller scripts play (no generated inputs) and only jump in place and crouch, so no one is knocked out
+  # before the second transformation (the inputs still change every few frames, so rollbacks happen).
+  MU_ENV_A="$MU_ENV_A MU_NET_CONTROLLERS=1" MU_ENV_B="$MU_ENV_B MU_NET_CONTROLLERS=1"
+fi
 case "${MU_GECKO_RACE:-}" in
   "") ;;
   on|off)
@@ -57,7 +72,7 @@ esac
 # The menu script as committed for side a; side b moves its hand one icon further (Fox). Then, for both, lines keyed
 # on the retrace count, which the script uses on every screen it has no block for: in the match each side walks,
 # jumps and attacks on its own rhythm.
-python3 -I - "$here/scripts/online_unranked.txt" "$run" "${MU_PADS_A:-}" "${MU_PADS_B:-}" "${MU_REARM:-0}" <<'PY'
+python3 -I - "$here/scripts/online_unranked.txt" "$run" "${MU_PADS_A:-}" "${MU_PADS_B:-}" "${MU_REARM:-0}" "${MU_STADIUM:-0}" <<'PY'
 import sys
 menu = open(sys.argv[1]).read()
 for side, period, stick, given in (("a", 47, 80, sys.argv[3]), ("b", 61, -80, sys.argv[4])):
@@ -66,7 +81,8 @@ for side, period, stick, given in (("a", 47, 80, sys.argv[3]), ("b", 61, -80, sy
     head, gates = text.split("@scene", 1)
     lines = []
     for t in range(600, 30000, period):
-        lines += [f"{t} sx={stick}", f"{t + period // 3} A sx={stick}", f"{t + period // 3 + 4} sx={-stick}", f"{t + 2 * period // 3} X", f"{t + 2 * period // 3 + 4}"]
+        if sys.argv[6] == "1": lines += [f"{t} X", f"{t + 4}", f"{t + period // 2} sy=-80", f"{t + period // 2 + 10}"]
+        else: lines += [f"{t} sx={stick}", f"{t + period // 3} A sx={stick}", f"{t + period // 3 + 4} sx={-stick}", f"{t + 2 * period // 3} X", f"{t + 2 * period // 3 + 4}"]
     rearm = "@rearm\n" if sys.argv[5] == "1" else ""      # (a shell $(...) would drop the newline)
     open(f"{sys.argv[2]}/{side}/pads.txt", "w").write(head + rearm + "\n".join(lines) + "\n@scene" + gates)
 PY
@@ -151,4 +167,18 @@ if [ -n "${MU_GECKO_RACE:-}" ]; then
   done
   grep -q "IDENTICAL state on both sides" "$run/net-compare.txt" 2>/dev/null || ok=0
   echo "gecko race ($MU_GECKO_RACE): $([ $ok = 1 ] && echo PASS || echo FAIL)"
+fi
+# MU_STADIUM: the verdict (../tools/stadium_stall_check.py), and the match scene's states IDENTICAL on both sides.
+if [ "${MU_STADIUM:-0}" = 1 ]; then
+  ok=1
+  python3 -I "$here/../tools/stadium_stall_check.py" "$run" --stall-frame 1500 --stall-ms 300 | tee "$run/stadium-check.txt" | cut -c1-300 || ok=0
+  # The run ends in the middle of the match, where the newest frames can still be predictions: compared up to 120 frames
+  # before the last frame both sides reached.
+  if [ -f "$run/b/digest-net-match.csv" ]; then
+    last=$(for side in a b; do awk -F, '$4 > m {m = $4} END {print m + 0}' "$run/$side/digest-net-match.csv"; done | sort -n | head -1)
+    for side in a b; do awk -F, -v end=$((last - 120)) '$4 <= end' "$run/$side/digest-net-match.csv" > "$run/$side/digest-net-settled.csv"; done
+    python3 -I "$here/../tools/compare_net_digests.py" "$run/a/digest-net-settled.csv" "$run/b/digest-net-settled.csv" | sed 's/^/settled states in the match scene: /' | tee "$run/net-compare-settled.txt"
+  fi
+  grep -q "IDENTICAL state on both sides" "$run/net-compare-settled.txt" 2>/dev/null || ok=0
+  echo "stadium: $([ $ok = 1 ] && echo PASS || echo FAIL)"
 fi

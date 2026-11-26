@@ -19,13 +19,15 @@ usage: mock_matchmaking.py [PORT]   (default 8765)
                       falling back to the public one (patches/net-0006).
          --chat       each player carries sixteen custom quick-chat lines in the ticket (chatMessages), "P1 line 1".."P2 line 16".
          --ranks      each player carries Slippi 3.7.0 rank values (rank: rating, updateCount, placements, mmr); the second
-                      player is a bot account (isBot), as the game records them in the replay."""
+                      player is a bot account (isBot), as the game records them in the replay.
+         --stages A,B the match's stage list (default 2,3,8,28,31,32); --stages 3 plays Pokemon Stadium."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import base64, hashlib, json, socket, struct, sys
 
 port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 8765
 dead_lan, with_chat, with_ranks = '--dead-lan' in sys.argv, '--chat' in sys.argv, '--ranks' in sys.argv
 dead_first = int(sys.argv[sys.argv.index('--dead-first') + 1]) if '--dead-first' in sys.argv else None
+stages = [int(s) for s in sys.argv[sys.argv.index('--stages') + 1].split(',')] if '--stages' in sys.argv else [2, 3, 8, 28, 31, 32]
 server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(('127.0.0.1', port)); server.listen(4)
 
@@ -77,7 +79,7 @@ def match_message(mode, me, entries, host_index):
     players = [extras({'uid': uid, 'displayName': name, 'connectCode': code, 'port': k + 1, 'isLocalPlayer': k == me,
                        'ipAddress': address, 'ipAddressLan': address}, k) for k, (uid, name, code, address) in enumerate(entries)]
     return json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == host_index, 'players': players,
-                       'stages': [2, 3, 8, 28, 31, 32]})
+                       'stages': stages})
 
 def drain_and_close(conn):
     try: read_text(conn)
@@ -155,9 +157,10 @@ for me, (conn, _) in enumerate(clients):
                                'port': k + 1, 'isLocalPlayer': k == me, 'ipAddress': address, 'ipAddressLan': address}, k))
     with send_lock:
         send(conn, json.dumps({'type': 'match', 'matchId': 'mode.%s-mock' % mode, 'isHost': me == 0, 'players': players,
-                               'stages': [2, 3, 8, 28, 31, 32]}))
-print('mock: matched two players in mode %s%s%s%s' % (mode, ' (LAN addresses that never answer)' if dead_lan else '',
-      ', custom chat lines' if with_chat else '', ', ranks and a bot flag' if with_ranks else ''), flush=True)
+                               'stages': stages}))
+print('mock: matched two players in mode %s%s%s%s%s' % (mode, ' (LAN addresses that never answer)' if dead_lan else '',
+      ', custom chat lines' if with_chat else '', ', ranks and a bot flag' if with_ranks else '',
+      ', stages %s' % ','.join(map(str, stages)) if '--stages' in sys.argv else ''), flush=True)
 for conn, _ in clients:
     try: read_text(conn)
     except Exception: pass

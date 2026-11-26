@@ -1,0 +1,478 @@
+The netplay thread no longer writes to the SD card in a match, and it times its own loop (patches/net-0016).
+- net_diag kept network.csv open from the first online frame and the netplay thread (the one that sends our inputs and
+  handles the opponent's) wrote and flushed a row every second: on the console, a write to the SD card from that thread
+  in every match. The rows are now kept in memory and written when the game is reported (or the connection is cleaned
+  up), on a thread of their own; the game thread no longer opens the file at the first online frame either. The file gets
+  three more columns (the worst queue-to-socket time of our inputs, the longest held-up step of the netplay thread and its
+  name); a file with the old header is kept as network-old.csv.
+- Each step of the netplay thread's loop is timed. An input that reaches the socket 20 ms or more after the game queued it
+  is logged with the longest step meanwhile ("slippi: netplay thread: our input left ..."), and 100 ms or more without a
+  packet from the opponent is logged with whether this side's thread was free at the time (then the delay was on the
+  network or the opponent's side) or held up, and by what. A summary line at the game's end: queue to socket p50, p99,
+  worst, late sends, silences.
+- MELEE_NET_TEST_THREAD_STALL=FRAME:MS (tests only) holds the netplay thread MS ms once at online frame FRAME.
+Applied by ../net_sources.sh after net-0015.
+SPDX-License-Identifier: GPL-2.0-or-later
+
+--- a/port/runtime/hle/slippi_net.cpp
++++ b/port/runtime/hle/slippi_net.cpp
+@@ -384,6 +384,7 @@
+ }
+ 
+ void NetplayClient::OnData(Packet& packet, ENetPeer* peer) {
++  net_diag::on_opponent_packet(time_us());   // patches/net-0016 (counts in a match only)
+   uint8_t mid = 0;
+   if (!(packet >> mid)) { host::log("slippi: empty netplay packet"); return; }
+   switch (mid) {
+@@ -704,6 +705,7 @@
+ void NetplayClient::SendAsync(std::unique_ptr<Packet> packet) {
+   if (status_.load(std::memory_order_acquire) == ConnectStatus::DISCONNECTED) return;
+   { std::lock_guard<std::mutex> lk(async_mutex_); async_queue_.push_back(std::move(packet)); }
++  net_diag::on_queued(time_us());   // patches/net-0016: the clock of the input's way to the socket
+   WakeNetplayThread();
+ }
+ 
+@@ -878,13 +880,35 @@
+   uint64_t test_jitter_state = 0x9E3779B97F4A7C15ull ^ (uint64_t)time_ms();
+   struct TestHeld { uint64_t due; std::vector<uint8_t> data; ENetPeer* peer; };
+   std::deque<TestHeld> test_held;
++  // patches/net-0016, tests only: MELEE_NET_TEST_THREAD_STALL=FRAME:MS holds this thread MS ms once, at the first loop pass
++  // of a match at or after online frame FRAME, as a blocking call on this thread would. Unset, nothing changes.
++  static const std::pair<int32_t, uint64_t> test_stall = [] {
++    const char* s = std::getenv("MELEE_NET_TEST_THREAD_STALL");
++    const char* colon = s ? std::strchr(s, ':') : nullptr;
++    const long frame = colon ? std::atol(s) : 0, ms = colon ? std::atol(colon + 1) : 0;
++    if (colon && frame > 0 && ms > 0 && ms <= 10000) { host::log("slippi: MELEE_NET_TEST_THREAD_STALL: the netplay thread stops %ld ms at online frame %ld (testing)", ms, frame); return std::make_pair((int32_t)frame, (uint64_t)ms); }
++    return std::make_pair((int32_t)0, (uint64_t)0);
++  }();
++  bool test_stalled = false;
++  // patches/net-0016: each step of this loop is timed (net_diag::on_step), so a late input or a silence from the opponent
++  // is logged with what this thread was doing. What Send() hands to ENet goes out in the next enet_host_service call.
++  bool handed_to_enet = false;
+   while (do_loop_.load()) {
+     if (status_.load(std::memory_order_acquire) == ConnectStatus::DISCONNECTED) break;
+-    while (!test_held.empty() && test_held.front().due <= time_ms()) {
+-      Packet rpac(test_held.front().data.data(), test_held.front().data.size());
+-      OnData(rpac, test_held.front().peer);
+-      test_held.pop_front();
++    uint64_t step_t0 = time_us();
++    if (!test_held.empty()) {
++      while (!test_held.empty() && test_held.front().due <= time_ms()) {
++        Packet rpac(test_held.front().data.data(), test_held.front().data.size());
++        OnData(rpac, test_held.front().peer);
++        test_held.pop_front();
++      }
++      const uint64_t t = time_us(); net_diag::on_step("handling held packets (test lag)", step_t0, t); step_t0 = t;
+     }
++    if (test_stall.second && !test_stalled && net_diag::active() && slippi::online::current_online_frame() >= test_stall.first) {
++      test_stalled = true;
++      std::this_thread::sleep_for(std::chrono::milliseconds(test_stall.second));
++      const uint64_t t = time_us(); net_diag::on_step("test stall (MELEE_NET_TEST_THREAD_STALL)", step_t0, t); step_t0 = t;
++    }
+     const bool waiting_on_player_drop = ProcessPlayerDrops();
+     for (auto& conn : active_connections_) {
+       for (auto& peer : conn.second) {
+@@ -895,19 +919,27 @@
+     }
+     ENetEvent ev;
+     const uint64_t service_t0 = time_us();
++    net_diag::on_step("player drop check", step_t0, service_t0);
++    if (handed_to_enet) { net_diag::on_drained(service_t0); handed_to_enet = false; }
+     // Every player can be halted waiting on a dropped player, in which case no packet arrives to wake this thread.
+-    int net = enet_host_service(client_, &ev, !test_held.empty() ? 1 : waiting_on_player_drop ? 10 : 250);
+-    net_diag::on_service(time_us() - service_t0);
++    const int service_timeout_ms = !test_held.empty() ? 1 : waiting_on_player_drop ? 10 : 250;
++    int net = enet_host_service(client_, &ev, service_timeout_ms);
++    step_t0 = time_us();
++    net_diag::on_service(step_t0 - service_t0);
++    net_diag::on_step("enet_host_service", service_t0, step_t0, (uint64_t)service_timeout_ms * 1000);
+     UpdateConnectRoundTrip();
+     for (;;) {
+       std::unique_ptr<Packet> p;
+       { std::lock_guard<std::mutex> lk(async_mutex_); if (async_queue_.empty()) break; p = std::move(async_queue_.front()); async_queue_.pop_front(); }
+       Send(*p);
++      handed_to_enet = true;
+       size_t depth;
+       { std::lock_guard<std::mutex> lk(async_mutex_); depth = async_queue_.size(); }   // the game thread appends to it
+       net_diag::on_queue_depth(depth);
+     }
+-    net_diag::maybe_sample(time_us());
++    { const uint64_t t = time_us(); net_diag::on_step("handing our packets to ENet", step_t0, t); step_t0 = t; }
++    net_diag::maybe_sample(step_t0);
++    { const uint64_t t = time_us(); net_diag::on_step("network diagnostics row", step_t0, t); step_t0 = t; }
+     {   // every 5 s: is each peer's reliable channel being acknowledged? (issue 9: the connection in use times out at 30 s)
+       const uint64_t now_ms = time_ms();
+       if (now_ms - last_health_ms_ >= 5000) {
+@@ -921,6 +953,7 @@
+                     p->earliestTimeout ? client_->serviceTime - p->earliestTimeout : 0, enet_list_size(&p->outgoingReliableCommands),
+                     p->lastReceiveTime ? client_->serviceTime - p->lastReceiveTime : 0, in_use ? " (in use)" : "");
+         }
++        const uint64_t t = time_us(); net_diag::on_step("peer health log", step_t0, t); step_t0 = t;
+       }
+     }
+     if (net <= 0) continue;
+@@ -938,6 +971,7 @@
+         Packet rpac(ev.packet->data, ev.packet->dataLength);
+         OnData(rpac, ev.peer);
+         enet_packet_destroy(ev.packet);
++        net_diag::on_step("handling a received packet", step_t0, time_us());
+         break;
+       }
+       case ENET_EVENT_TYPE_DISCONNECT: {
+--- a/port/runtime/hle/slippi_net_diag.cpp
++++ b/port/runtime/hle/slippi_net_diag.cpp
+@@ -1,17 +1,19 @@
+ // See slippi_net_diag.h. All hooks are atomics so the network thread (which
+ // produces and samples) and the simulation thread (which submits inputs and
+-// rolls back) never block each other; the file write happens on the network
+-// thread alone.
++// rolls back) never block each other. Rows are kept in memory and written to the
++// file between matches, on a thread of their own (patches/net-0016).
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "slippi_net_diag.h"
+ #include "host.h"
+ #include "slippi_online.h"
+ 
++#include <algorithm>
+ #include <chrono>
+ #include <cstdio>
+ #include <cstring>
+ #include <mutex>
+ #include <string>
++#include <thread>
+ 
+ namespace net_diag {
+ namespace {
+@@ -33,20 +35,23 @@
+ Counter g_pads_sent, g_pads_recv, g_input_frames_recv, g_acks, g_acks_latency_us, g_rollbacks, g_service_us;
+ Counter g_rollbacks_interval;
+ Maximum g_send_gap_us, g_recv_gap_us, g_ack_latency_us, g_queue_depth, g_service_us_max;
++Maximum g_send_delay_max_us, g_step_max_us;   // patches/net-0016, per row
++Maximum g_input_gap_since_opponent;            // patches/net-0016: our game's longest pause between inputs since the opponent's last packet
+ std::atomic<uint64_t> g_last_sent_us{0}, g_last_recv_us{0}, g_last_sample_us{0};
+ std::atomic<bool> g_active{false};
+ 
+ const char* kHeader =
+     "unix_us,event,online_frame,retrace,rollbacks,rollbacks_1s,ping_ms,ping_ms_max_1s,ping_ms_avg,"
+     "pads_sent,send_gap_max_us,pads_recv,recv_gap_max_us,recv_age_us,acks,ack_latency_sum_us,queue_max,"
+-    "service_ms_1s,service_ms_max_us\n";
++    "service_ms_1s,service_ms_max_us,send_delay_max_us,thread_step_max_us,thread_step_max\n";
+ 
+-std::string g_path;
+-FILE* g_file = nullptr;
+-// The netplay thread writes sample rows while the game thread opens and closes the file at a game's start and end
+-// (cleanup_connection closes it while the old client's netplay thread may still be sampling): g_file only under
+-// this lock. The game's retrace count and the ping are taken on the game thread and handed over as atomics.
+-std::mutex g_file_mutex;
++// The rows of the current match, written to g_path between matches (patches/net-0016). Only under this lock:
++// the netplay thread appends sample rows, the game thread starts and ends matches.
++std::mutex g_rows_mutex;
++std::string g_path, g_rows;
++uint64_t g_rows_dropped = 0;
++constexpr size_t kMostRows = 1u << 20;     // about two hours of one-second rows
++std::mutex g_write_mutex;                  // one writer of the file at a time
+ std::atomic<uint32_t> g_retrace{0};
+ std::atomic<int> g_ping_ms{-1};
+ void note_game_thread() {
+@@ -59,14 +64,87 @@
+              std::chrono::system_clock::now().time_since_epoch())
+       .count();
+ }
++uint64_t now_steady_us() {   // slippi_net's time_us clock
++  return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++}
+ 
+-void row(const char* event, uint64_t us) {
+-  std::lock_guard<std::mutex> lk(g_file_mutex);
+-  if (!g_file) return;
++// ---- the netplay thread's own timing (patches/net-0016) ----
++// The queue clock is set by whichever thread queues first and cleared by the netplay thread when it hands the
++// queue to ENet. The rest belongs to the netplay thread; the lock only covers a second client's thread that can
++// still be finishing while the next one starts.
++std::atomic<uint64_t> g_queued_us{0};
++std::mutex g_thread_mutex;
++struct Worst { const char* name = nullptr; uint64_t us = 0; void offer(const char* n, uint64_t v) { if (v > us) { us = v; name = n; } } };
++Worst g_send_worst;          // longest step overlapping the wait of the input that is queued now
++Worst g_gap_worst;           // longest held-up step since the opponent's last packet
++Worst g_row_worst;           // longest held-up step in this row's second
++Worst g_match_worst;         // longest held-up step in the match
++uint64_t g_last_opponent_us = 0;
++int32_t g_last_opponent_frame = 0;
++constexpr uint64_t kLateSendUs = 20000, kSilenceUs = 100000;
++constexpr int kMostLines = 30;
++constexpr int kBuckets = 500;             // 0.1 ms each; the last one holds everything from 50 ms
++uint32_t g_delay_hist[kBuckets + 1];
++uint64_t g_sends = 0, g_late_sends = 0, g_silences = 0, g_silences_held = 0, g_worst_delay_us = 0;
++int32_t g_worst_delay_frame = 0;
++int g_late_lines = 0, g_silence_lines = 0;
++void reset_thread_timing() {
++  std::lock_guard<std::mutex> lk(g_thread_mutex);
++  g_send_worst = g_gap_worst = g_row_worst = g_match_worst = Worst();
++  g_last_opponent_us = 0; g_last_opponent_frame = 0;
++  std::memset(g_delay_hist, 0, sizeof g_delay_hist);
++  g_sends = g_late_sends = g_silences = g_silences_held = g_worst_delay_us = 0; g_worst_delay_frame = 0;
++  g_late_lines = g_silence_lines = 0;
++}
++double percentile_ms(double p) {   // g_thread_mutex held
++  if (!g_sends) return 0;
++  const uint64_t want = (uint64_t)(p * (double)(g_sends - 1)) + 1;
++  uint64_t seen = 0;
++  for (int i = 0; i <= kBuckets; ++i) { seen += g_delay_hist[i]; if (seen >= want) return (i + 0.5) / 10.0; }
++  return kBuckets / 10.0;
++}
++void summary() {
++  std::lock_guard<std::mutex> lk(g_thread_mutex);
++  if (!g_sends) return;
++  host::log("slippi: netplay thread: %llu sends, queue to socket p50 %.1f ms p99 %.1f ms worst %.1f ms (online frame %d); %llu sends 20 ms late or more; "
++            "%llu silences from the opponent of 100 ms or more (%llu while this side's thread or game was held up); longest held-up step %s %.1f ms",
++            (unsigned long long)g_sends, percentile_ms(0.5), percentile_ms(0.99), g_worst_delay_us / 1000.0, g_worst_delay_frame,
++            (unsigned long long)g_late_sends, (unsigned long long)g_silences, (unsigned long long)g_silences_held,
++            g_match_worst.name ? g_match_worst.name : "none", g_match_worst.us / 1000.0);
++}
++
++void write_file(const std::string& path, const std::string& rows) {
++  std::lock_guard<std::mutex> lk(g_write_mutex);
++  // A file with another header (an older build's columns) is kept beside the new one.
++  if (FILE* in = std::fopen(path.c_str(), "r")) {
++    char first[512] = {};
++    const bool read = std::fgets(first, sizeof first, in) != nullptr;
++    std::fclose(in);
++    if (read && std::strcmp(first, kHeader) != 0) {
++      const std::string old = path.substr(0, path.size() - 4) + "-old.csv";
++      std::remove(old.c_str());
++      std::rename(path.c_str(), old.c_str());
++    }
++  }
++  FILE* out = std::fopen(path.c_str(), "a");
++  if (!out) { host::log("slippi: cannot write %s; network diagnostics of this game are lost", path.c_str()); return; }
++  std::fseek(out, 0, SEEK_END);
++  if (std::ftell(out) == 0) std::fputs(kHeader, out);
++  const bool ok = std::fwrite(rows.data(), 1, rows.size(), out) == rows.size();
++  const bool closed = std::fclose(out) == 0;
++  size_t lines = 0;
++  for (char c : rows) lines += c == '\n';
++  host::log("slippi: network diagnostics: %zu rows %s %s", lines, ok && closed ? "written to" : "COULD NOT BE WRITTEN to", path.c_str());
++}
++
++void row(const char* event, uint64_t steady_us) {
+   const uint64_t acks = g_acks.load(), ack_us = g_acks_latency_us.load();
+   const uint64_t recv_us = g_last_recv_us.load();
+-  std::fprintf(g_file, "%llu,%s,%d,%u,%llu,%llu,%d,%llu,%.1f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.2f,%llu\n",
+-               (unsigned long long)us, event,
++  const char* step_name;
++  { std::lock_guard<std::mutex> lk(g_thread_mutex); step_name = g_row_worst.name; g_row_worst = Worst(); }
++  char line[512];
++  const int n = std::snprintf(line, sizeof line, "%llu,%s,%d,%u,%llu,%llu,%d,%llu,%.1f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.2f,%llu,%llu,%llu,%s\n",
++               (unsigned long long)now_unix_us(), event,
+                slippi::online::current_online_frame(), (unsigned)g_retrace.load(std::memory_order_relaxed),
+                (unsigned long long)g_rollbacks.load(), (unsigned long long)g_rollbacks_interval.value.exchange(0),
+                g_ping_ms.load(std::memory_order_relaxed),
+@@ -74,47 +152,62 @@
+                acks ? (double)ack_us / (double)acks / 1000.0 : 0.0,
+                (unsigned long long)g_pads_sent.load(), (unsigned long long)g_send_gap_us.drain(),
+                (unsigned long long)g_pads_recv.load(), (unsigned long long)g_recv_gap_us.drain(),
+-               (unsigned long long)(recv_us && recv_us < us ? us - recv_us : 0),
++               (unsigned long long)(recv_us && recv_us < steady_us ? steady_us - recv_us : 0),
+                (unsigned long long)acks, (unsigned long long)g_acks_latency_us.load(),
+                (unsigned long long)g_queue_depth.drain(),
+-               (double)g_service_us.value.exchange(0) / 1000.0, (unsigned long long)g_service_us_max.drain());
+-  std::fflush(g_file);
++               (double)g_service_us.value.exchange(0) / 1000.0, (unsigned long long)g_service_us_max.drain(),
++               (unsigned long long)g_send_delay_max_us.drain(), (unsigned long long)g_step_max_us.drain(), step_name ? step_name : "");
++  if (n <= 0) return;
++  std::lock_guard<std::mutex> lk(g_rows_mutex);
++  if (g_path.empty()) return;
++  if (g_rows.size() + (size_t)n > kMostRows) { ++g_rows_dropped; return; }
++  g_rows.append(line, (size_t)std::min(n, (int)sizeof line - 1));
+ }
++
++// Takes the rows kept so far and writes them: on a thread of its own, or here when the program is ending.
++void flush_rows(bool here) {
++  std::string path, rows;
++  uint64_t dropped;
++  {
++    std::lock_guard<std::mutex> lk(g_rows_mutex);
++    if (g_path.empty() || g_rows.empty()) return;
++    path = g_path; rows.swap(g_rows); dropped = g_rows_dropped; g_rows_dropped = 0;
++  }
++  if (dropped) host::log("slippi: network diagnostics: %llu rows did not fit in memory", (unsigned long long)dropped);
++  if (here) { write_file(path, rows); return; }
++  std::thread([path = std::move(path), rows = std::move(rows)] { write_file(path, rows); }).detach();
++}
+ }  // namespace
+ 
++bool active() { return g_active.load(std::memory_order_relaxed); }
++
+ void match_started(const char* cache_dir) {
+   note_game_thread();
+   {
+-  std::lock_guard<std::mutex> lk(g_file_mutex);
+-  if (!g_file) {
++    std::lock_guard<std::mutex> lk(g_rows_mutex);
+     g_path = std::string(cache_dir) + "/network.csv";
+-    g_file = std::fopen(g_path.c_str(), "a");
+-    if (g_file) {
+-      std::setvbuf(g_file, nullptr, _IOFBF, 1u << 16);
+-      std::fseek(g_file, 0, SEEK_END);
+-      if (std::ftell(g_file) == 0) std::fputs(kHeader, g_file);
+-    } else {
+-      host::log("slippi: cannot open %s; network diagnostics disabled", g_path.c_str());
+-    }
+   }
+-  }
++  reset_thread_timing();
++  g_queued_us.store(0, std::memory_order_relaxed);
+   g_active.store(true, std::memory_order_release);
+-  row("game_start", now_unix_us());
++  row("game_start", now_steady_us());
+ }
+ 
+ void match_ended(const char* why) {
+   if (!g_active.exchange(false, std::memory_order_acq_rel)) return;
+   note_game_thread();
+-  row(why, now_unix_us());
+-  std::lock_guard<std::mutex> lk(g_file_mutex);
+-  if (g_file) { std::fclose(g_file); g_file = nullptr; }
++  row(why, now_steady_us());
++  summary();
++  flush_rows(std::strcmp(why, "shutdown") == 0);
+ }
+ 
++void write_rows(const char*) { flush_rows(false); }
++
+ void on_pad_sent(uint64_t us) {   // game thread
+   if (!g_active.load(std::memory_order_relaxed)) return;
+   note_game_thread();
+   const uint64_t last = g_last_sent_us.exchange(us, std::memory_order_relaxed);
+-  if (last) g_send_gap_us.offer(us - last);
++  if (last) { g_send_gap_us.offer(us - last); g_input_gap_since_opponent.offer(us - last); }
+   ++g_pads_sent;
+ }
+ 
+@@ -144,6 +237,64 @@
+ }
+ 
+ void on_queue_depth(size_t packets) { g_queue_depth.offer((uint64_t)packets); }
++
++void on_queued(uint64_t us) {
++  uint64_t none = 0;
++  g_queued_us.compare_exchange_strong(none, us, std::memory_order_relaxed);
++}
++
++void on_step(const char* name, uint64_t begin_us, uint64_t end_us, uint64_t allowed_us) {
++  if (!g_active.load(std::memory_order_relaxed) || end_us < begin_us) return;
++  const uint64_t took = end_us - begin_us, held = took > allowed_us ? took - allowed_us : 0;
++  const uint64_t queued = g_queued_us.load(std::memory_order_relaxed);
++  std::lock_guard<std::mutex> lk(g_thread_mutex);
++  // While an input waits, every step counts in full (the wake-up should have cut a service wait short).
++  if (queued && end_us > queued) g_send_worst.offer(name, end_us - (begin_us > queued ? begin_us : queued));
++  g_gap_worst.offer(name, held); g_row_worst.offer(name, held); g_match_worst.offer(name, held);
++  g_step_max_us.offer(held);
++}
++
++void on_drained(uint64_t us) {
++  const uint64_t queued = g_queued_us.exchange(0, std::memory_order_relaxed);
++  if (!queued || !g_active.load(std::memory_order_relaxed) || us < queued) return;
++  const uint64_t delay = us - queued;
++  g_send_delay_max_us.offer(delay);
++  const int32_t frame = slippi::online::current_online_frame();
++  std::lock_guard<std::mutex> lk(g_thread_mutex);
++  ++g_sends;
++  ++g_delay_hist[delay / 100 < (uint64_t)kBuckets ? delay / 100 : kBuckets];
++  if (delay > g_worst_delay_us) { g_worst_delay_us = delay; g_worst_delay_frame = frame; }
++  if (delay >= kLateSendUs) {
++    ++g_late_sends;
++    if (g_late_lines++ < kMostLines)
++      host::log("slippi: netplay thread: our input left %.1f ms after the game queued it (online frame %d); longest step meanwhile: %s %.1f ms",
++                delay / 1000.0, frame, g_send_worst.name ? g_send_worst.name : "none", g_send_worst.us / 1000.0);
++  }
++  g_send_worst = Worst();
++}
++
++void on_opponent_packet(uint64_t us) {
++  if (!g_active.load(std::memory_order_relaxed)) return;
++  const int32_t frame = slippi::online::current_online_frame();
++  // A pause of our own game (no new inputs from it) also silences the opponent once it has run ahead as far as it may.
++  const uint64_t input_gap = g_input_gap_since_opponent.drain();
++  std::lock_guard<std::mutex> lk(g_thread_mutex);
++  if (g_last_opponent_us && us > g_last_opponent_us && us - g_last_opponent_us >= kSilenceUs) {
++    const uint64_t gap = us - g_last_opponent_us;
++    const bool held = g_gap_worst.us >= kLateSendUs, paused = input_gap >= kSilenceUs;
++    ++g_silences;
++    if (held || paused) ++g_silences_held;
++    if (g_silence_lines++ < kMostLines)
++      host::log("slippi: netplay thread: nothing from the opponent for %.0f ms (online frames %d to %d); this side's thread %s %s %.1f ms; "
++                "our game's longest pause between inputs %.0f ms%s",
++                gap / 1000.0, g_last_opponent_frame, frame,
++                held ? "was held up:" : paused ? "was free, longest step" : "was free (the network or the opponent's side), longest step",
++                g_gap_worst.name ? g_gap_worst.name : "none", g_gap_worst.us / 1000.0, input_gap / 1000.0,
++                paused ? " (this side's game paused: the opponent waited for us)" : "");
++  }
++  g_last_opponent_us = us; g_last_opponent_frame = frame;
++  g_gap_worst = Worst();
++}
+ 
+ void maybe_sample(uint64_t us) {
+   if (!g_active.load(std::memory_order_relaxed)) return;
+--- a/port/runtime/hle/slippi_net_diag.h
++++ b/port/runtime/hle/slippi_net_diag.h
+@@ -1,12 +1,19 @@
+ // One-second network diagnostics: counters for input production, packet flow,
+-// acknowledgement latency, send-queue residence and ENet service time, appended
+-// as CSV rows to <cache-dir>/network.csv during online matches. The point is to
++// acknowledgement latency, send-queue residence and ENet service time, kept as
++// CSV rows for <cache-dir>/network.csv during online matches. The point is to
+ // turn "the match stuttered" into a row that says whether the pause was before
+ // or after the network path. Payloads, addresses and account data never reach
+ // the file.
++// patches/net-0016: the rows are held in memory and written when the game is
++// reported or the connection is cleaned up (game thread, between matches): the
++// netplay thread wrote and flushed one every second, and on a console that is a
++// write to the SD card from the thread that sends our inputs. It also times the
++// netplay thread's own loop, so a late input or a silence from the opponent is
++// logged with what this side's thread was doing at the time.
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #pragma once
+ #include <atomic>
++#include <cstddef>
+ #include <cstdint>
+ 
+ namespace net_diag {
+@@ -14,6 +21,9 @@
+ // teardown or report. `cache_dir` is the run's explicit output directory.
+ void match_started(const char* cache_dir);
+ void match_ended(const char* why);
++// The rows kept so far go to the file now (game thread, outside a match: the game report).
++void write_rows(const char* why);
++bool active();
+ 
+ // Producer hooks; cheap and wait-free. `us` timestamps come from the caller's
+ // clock (slippi_net's time_us).
+@@ -23,6 +33,17 @@
+ void on_rollback();
+ void on_service(uint64_t duration_us);    // time spent inside enet_host_service
+ void on_queue_depth(size_t packets);      // async send queue length at drain time
++
++// patches/net-0016: the netplay thread's own timing.
++// Any thread: a packet was put on the netplay thread's send queue (the first of a run starts the clock).
++void on_queued(uint64_t us);
++// Netplay thread: one step of its loop took [begin, end]. `allowed_us`: the part that is a wait by design
++// (enet_host_service's timeout), which does not count as the thread being held up while nothing arrives.
++void on_step(const char* name, uint64_t begin_us, uint64_t end_us, uint64_t allowed_us = 0);
++// Netplay thread: the send queue was handed to ENet (sent to the socket in the same loop pass).
++void on_drained(uint64_t us);
++// Netplay thread: a match packet from the opponent was handled.
++void on_opponent_packet(uint64_t us);
+ 
+ // Called from the network thread's service loop at least a few times a second:
+ // drains interval maxima into a CSV row once per 1 s window.
+--- a/port/runtime/hle/slippi_online.cpp
++++ b/port/runtime/hle/slippi_online.cpp
+@@ -1152,6 +1152,7 @@
+ 
+ void handle_report_game(const uint8_t* p) {
+   suggest::stop("game over");
++  net_diag::match_ended("report");   // patches/net-0016: the game is over; its network rows go to the file now
+   // ReportGameQuery (packed, big-endian fields): mode, frameLength, gameIndex, tiebreakIndex, winnerIdx, gameEndMethod, lrasInitiator, syncedTimer, players[4], gameInfoBlock[312]
+   uint8_t mode = p[0];
+   uint32_t frames = be32(p + 1), game_index = be32(p + 5), tiebreak = be32(p + 9);
